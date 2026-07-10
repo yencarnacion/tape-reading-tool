@@ -60,6 +60,14 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	log.Printf("starting mode=%s http_addr=%s default_symbol=%s", mode, cfg.App.Addr, cfg.Tape.DefaultSymbol)
+	if mode == "live" {
+		log.Printf(
+			"IBKR config host=%s port=%d client_id=%d contract=%s/%s/%s primary_exchange=%q market_data_type=%d",
+			cfg.IBKR.Host, cfg.IBKR.Port, cfg.IBKR.ClientID, cfg.IBKR.SecurityType,
+			cfg.IBKR.Exchange, cfg.IBKR.Currency, cfg.IBKR.PrimaryExchange, cfg.IBKR.MarketDataType,
+		)
+	}
 	go source.Run(ctx)
 
 	fmt.Printf("%s %s: http://localhost%s\n", cfg.App.Name, mode, displayAddr(cfg.App.Addr))

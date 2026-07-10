@@ -79,6 +79,26 @@ An alternate config or listen address can be supplied from the CLI:
 ./go.sh live -config config.yaml -addr :8098
 ```
 
+## Live diagnostics
+
+`./go.sh live` prints bounded diagnostics to the terminal. The important stages are:
+
+- `IBKR TCP probe succeeded`: the configured host and port are reachable.
+- `IBKR API handshake complete`: TWS/Gateway accepted the client ID and protocol handshake.
+- `next_valid_id ... API session is ready`: the API session completed startup.
+- `IBKR subscription request`: quote and `AllLast` requests were sent for the symbol.
+- `IBKR first quote` and `IBKR first trade`: market data is reaching the application.
+- `IBKR heartbeat`: every five seconds, reports connection state, bid/ask, cumulative quote/trade callbacks, last-event times, and the latest IBKR status message.
+
+The last stage printed identifies the failure boundary. Common examples:
+
+- `TCP probe failed ... connection refused`: wrong host/port, API socket disabled, or Gateway not listening yet.
+- Stops after `API handshake starting`: trusted-IP, API-version, or duplicate-client-ID problem.
+- Handshake succeeds but an `IBKR error` follows the subscription: contract definition or market-data entitlement problem.
+- Quotes increase but trades remain zero: the top-of-book subscription works, but tick-by-tick trade data is unavailable or not entitled.
+
+Gateway farm-status messages are printed as `IBKR notice`; request and entitlement failures are printed as `IBKR error`. Individual prints are not logged, so diagnostics remain usable during a fast market.
+
 ## Controls
 
 - Enter a ticker and press `Enter` or `GO`. The input selects its full contents on focus for quick replacement.

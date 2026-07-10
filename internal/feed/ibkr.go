@@ -25,6 +25,9 @@ type IBKR struct {
 	nextReqID  int64
 	usage      uint64
 	client     *ibapi.EClient
+
+	statsMu sync.Mutex
+	stats   map[string]*streamStats
 }
 
 type subscription struct {
@@ -32,6 +35,13 @@ type subscription struct {
 	tradeID int64
 	quoteID int64
 	used    uint64
+}
+
+type streamStats struct {
+	trades      uint64
+	quotes      uint64
+	lastTradeAt time.Time
+	lastQuoteAt time.Time
 }
 
 type ibWrapper struct {
@@ -43,6 +53,7 @@ func NewIBKR(cfg config.IBKRConfig, store *tape.Store) *IBKR {
 	return &IBKR{
 		cfg: cfg, store: store, commands: make(chan string, 32),
 		reqSymbols: make(map[int64]string), subs: make(map[string]*subscription), nextReqID: 1000,
+		stats: make(map[string]*streamStats),
 	}
 }
 
@@ -70,49 +81,71 @@ func (f *IBKR) Run(ctx context.Context) {
 	reconnect, _ := time.ParseDuration(f.cfg.ReconnectInterval)
 	connectTimeout, _ := time.ParseDuration(f.cfg.ConnectTimeout)
 	ibapi.SetLogLevel(2) // warnings and errors only
+	attempt := 0
 
 	for ctx.Err() == nil {
+		attempt++
+		log.Printf("IBKR connection attempt=%d target=%s:%d client_id=%d", attempt, f.cfg.Host, f.cfg.Port, f.cfg.ClientID)
 		f.store.SetStatus(tape.FeedStatus{Mode: "live", State: "connecting", Message: fmt.Sprintf("%s:%d", f.cfg.Host, f.cfg.Port)})
+		probeStarted := time.Now()
 		if err := probe(ctx, f.cfg.Host, f.cfg.Port, connectTimeout); err != nil {
+			log.Printf("IBKR TCP probe failed after=%s error=%v; retrying_in=%s", time.Since(probeStarted).Round(time.Millisecond), err, reconnect)
 			f.store.SetStatus(tape.FeedStatus{Mode: "live", State: "waiting", Message: err.Error()})
 			if !sleepContext(ctx, reconnect) {
 				return
 			}
 			continue
 		}
+		log.Printf("IBKR TCP probe succeeded after=%s", time.Since(probeStarted).Round(time.Millisecond))
 
 		wrapper := &ibWrapper{feed: f}
 		client := ibapi.NewEClient(wrapper)
+		handshakeStarted := time.Now()
+		log.Printf("IBKR API handshake starting; if this line stalls, check API socket version, trusted IPs, and client ID conflicts")
 		if err := client.Connect(f.cfg.Host, f.cfg.Port, f.cfg.ClientID); err != nil {
+			log.Printf("IBKR API handshake failed after=%s error=%v; retrying_in=%s", time.Since(handshakeStarted).Round(time.Millisecond), err, reconnect)
 			f.store.SetStatus(tape.FeedStatus{Mode: "live", State: "waiting", Message: err.Error()})
 			if !sleepContext(ctx, reconnect) {
 				return
 			}
 			continue
 		}
+		log.Printf(
+			"IBKR API handshake complete after=%s server_version=%d connection_time=%q",
+			time.Since(handshakeStarted).Round(time.Millisecond), client.ServerVersion(), client.TWSConnectionTime(),
+		)
 		f.setClient(client)
 		f.resetSubscriptions()
+		log.Printf("IBKR requesting market_data_type=%d", f.cfg.MarketDataType)
 		client.ReqMarketDataType(f.cfg.MarketDataType)
 		f.ensureSubscription(f.store.Active())
 		f.store.SetStatus(tape.FeedStatus{Mode: "live", State: "live", Connected: true})
 
 		check := time.NewTicker(500 * time.Millisecond)
+		diagnostics := time.NewTicker(5 * time.Second)
 		connected := true
 		for connected {
 			select {
 			case <-ctx.Done():
 				check.Stop()
+				diagnostics.Stop()
+				log.Printf("IBKR shutdown requested; disconnecting")
 				_ = client.Disconnect()
 				f.setClient(nil)
 				f.store.SetStatus(tape.FeedStatus{Mode: "live", State: "stopped"})
 				return
 			case symbol := <-f.commands:
+				log.Printf("IBKR ticker switch requested symbol=%s", symbol)
 				f.ensureSubscription(symbol)
 			case <-check.C:
 				connected = client.IsConnected()
+			case <-diagnostics.C:
+				f.logDiagnostics(client)
 			}
 		}
 		check.Stop()
+		diagnostics.Stop()
+		log.Printf("IBKR client reports disconnected; reconnecting_in=%s", reconnect)
 		_ = client.Disconnect()
 		f.setClient(nil)
 		f.store.SetStatus(tape.FeedStatus{Mode: "live", State: "reconnecting", Message: "IBKR connection closed"})
@@ -133,6 +166,9 @@ func (f *IBKR) resetSubscriptions() {
 	f.reqSymbols = make(map[int64]string)
 	f.subs = make(map[string]*subscription)
 	f.mu.Unlock()
+	f.statsMu.Lock()
+	f.stats = make(map[string]*streamStats)
+	f.statsMu.Unlock()
 }
 
 func (f *IBKR) ensureSubscription(symbol string) {
@@ -146,10 +182,12 @@ func (f *IBKR) ensureSubscription(symbol string) {
 	if existing := f.subs[symbol]; existing != nil {
 		existing.used = f.usage
 		f.mu.Unlock()
+		log.Printf("IBKR reusing cached subscription symbol=%s trade_req=%d quote_req=%d", symbol, existing.tradeID, existing.quoteID)
 		return
 	}
 	if client == nil || !client.IsConnected() {
 		f.mu.Unlock()
+		log.Printf("IBKR cannot subscribe symbol=%s: client is not connected", symbol)
 		return
 	}
 	f.nextReqID += 2
@@ -177,6 +215,7 @@ func (f *IBKR) ensureSubscription(symbol string) {
 	f.mu.Unlock()
 
 	if evicted != nil {
+		log.Printf("IBKR evicting cached subscription symbol=%s trade_req=%d quote_req=%d", evicted.symbol, evicted.tradeID, evicted.quoteID)
 		client.CancelTickByTickData(evicted.tradeID)
 		client.CancelMktData(evicted.quoteID)
 	}
@@ -184,9 +223,12 @@ func (f *IBKR) ensureSubscription(symbol string) {
 		Symbol: symbol, SecType: f.cfg.SecurityType, Exchange: f.cfg.Exchange,
 		PrimaryExchange: f.cfg.PrimaryExchange, Currency: f.cfg.Currency,
 	}
+	log.Printf(
+		"IBKR subscription request symbol=%s sec_type=%s exchange=%s primary_exchange=%q currency=%s quote_req=%d all_last_req=%d",
+		symbol, contract.SecType, contract.Exchange, contract.PrimaryExchange, contract.Currency, sub.quoteID, sub.tradeID,
+	)
 	client.ReqMktData(sub.quoteID, contract, "", false, false, nil)
 	client.ReqTickByTickData(sub.tradeID, contract, "AllLast", 0, false)
-	log.Printf("IBKR subscribed %s (trade=%d quote=%d)", symbol, sub.tradeID, sub.quoteID)
 }
 
 func (f *IBKR) symbolFor(reqID int64) string {
@@ -200,7 +242,12 @@ func (w *ibWrapper) TickByTickAllLast(reqID int64, tickType int64, unixTime int6
 	if symbol == "" {
 		return
 	}
-	w.feed.store.AddTrade(symbol, time.Unix(unixTime, 0), time.Now(), price, size.Float())
+	now := time.Now()
+	first := w.feed.recordTrade(symbol, now)
+	w.feed.store.AddTrade(symbol, time.Unix(unixTime, 0), now, price, size.Float())
+	if first {
+		log.Printf("IBKR first trade symbol=%s req=%d price=%g size=%s exchange=%q tick_type=%d", symbol, reqID, price, size.String(), exchange, tickType)
+	}
 }
 
 func (w *ibWrapper) TickPrice(reqID ibapi.TickerID, tickType ibapi.TickType, price float64, attrib ibapi.TickAttrib) {
@@ -213,6 +260,11 @@ func (w *ibWrapper) TickPrice(reqID ibapi.TickerID, tickType ibapi.TickType, pri
 		w.feed.store.UpdateQuote(symbol, price, 0, -1, -1)
 	case ibapi.ASK, ibapi.DELAYED_ASK:
 		w.feed.store.UpdateQuote(symbol, 0, price, -1, -1)
+	default:
+		return
+	}
+	if w.feed.recordQuote(symbol, time.Now()) {
+		log.Printf("IBKR first quote symbol=%s req=%d field=%s price=%g", symbol, reqID, ibapi.TickName(tickType), price)
 	}
 }
 
@@ -230,10 +282,12 @@ func (w *ibWrapper) TickSize(reqID ibapi.TickerID, tickType ibapi.TickType, size
 }
 
 func (w *ibWrapper) Error(reqID ibapi.TickerID, errTime, errCode int64, errString, advancedOrderRejectJSON string) {
-	if errCode == 2104 || errCode == 2106 || errCode == 2158 {
+	symbol := w.feed.symbolFor(reqID)
+	if isIBKRNotice(errCode) {
+		log.Printf("IBKR notice req=%d symbol=%s code=%d message=%q", reqID, symbol, errCode, errString)
 		return
 	}
-	log.Printf("IBKR error req=%d code=%d: %s", reqID, errCode, errString)
+	log.Printf("IBKR error req=%d symbol=%s code=%d message=%q", reqID, symbol, errCode, errString)
 	current := w.feed.store.Status()
 	current.Message = fmt.Sprintf("IBKR %d: %s", errCode, errString)
 	if errCode == 1100 || errCode == 1300 {
@@ -246,7 +300,71 @@ func (w *ibWrapper) Error(reqID ibapi.TickerID, errTime, errCode int64, errStrin
 }
 
 func (w *ibWrapper) ConnectionClosed() {
+	log.Printf("IBKR callback connection_closed")
 	w.feed.store.SetStatus(tape.FeedStatus{Mode: "live", State: "reconnecting", Message: "IBKR connection closed"})
+}
+
+func (w *ibWrapper) ConnectAck() {
+	log.Printf("IBKR callback connect_ack")
+}
+
+func (w *ibWrapper) NextValidID(orderID int64) {
+	log.Printf("IBKR callback next_valid_id=%d; API session is ready", orderID)
+}
+
+func (w *ibWrapper) MarketDataType(reqID ibapi.TickerID, marketDataType int64) {
+	log.Printf("IBKR callback market_data_type req=%d symbol=%s type=%d", reqID, w.feed.symbolFor(reqID), marketDataType)
+}
+
+func (f *IBKR) recordTrade(symbol string, at time.Time) bool {
+	f.statsMu.Lock()
+	defer f.statsMu.Unlock()
+	stats := f.statsForLocked(symbol)
+	stats.trades++
+	stats.lastTradeAt = at
+	return stats.trades == 1
+}
+
+func (f *IBKR) recordQuote(symbol string, at time.Time) bool {
+	f.statsMu.Lock()
+	defer f.statsMu.Unlock()
+	stats := f.statsForLocked(symbol)
+	stats.quotes++
+	stats.lastQuoteAt = at
+	return stats.quotes == 1
+}
+
+func (f *IBKR) statsForLocked(symbol string) *streamStats {
+	stats := f.stats[symbol]
+	if stats == nil {
+		stats = &streamStats{}
+		f.stats[symbol] = stats
+	}
+	return stats
+}
+
+func (f *IBKR) logDiagnostics(client *ibapi.EClient) {
+	symbol := f.store.Active()
+	snapshot := f.store.Snapshot(symbol, 1)
+	f.statsMu.Lock()
+	stats := *f.statsForLocked(symbol)
+	f.statsMu.Unlock()
+	log.Printf(
+		"IBKR heartbeat connected=%v symbol=%s bid=%g ask=%g trades=%d quotes=%d last_trade=%s last_quote=%s state=%s message=%q",
+		client.IsConnected(), symbol, snapshot.Quote.Bid, snapshot.Quote.Ask, stats.trades, stats.quotes,
+		formatDiagnosticTime(stats.lastTradeAt), formatDiagnosticTime(stats.lastQuoteAt), snapshot.Status.State, snapshot.Status.Message,
+	)
+}
+
+func formatDiagnosticTime(value time.Time) string {
+	if value.IsZero() {
+		return "never"
+	}
+	return value.Format("15:04:05.000")
+}
+
+func isIBKRNotice(code int64) bool {
+	return code >= 2100 && code <= 2199
 }
 
 func probe(ctx context.Context, host string, port int, timeout time.Duration) error {
