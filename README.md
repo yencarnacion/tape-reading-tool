@@ -2,6 +2,8 @@
 
 A compact, real-time IBKR tape reader for split-second scalping. It renders tick bars, trade volume, volume delta, and a narrow color-coded time-and-sales stream. Every received print is also sent to a low-latency browser audio mixer.
 
+![Tape Reading Tool showing live tick bars, volume delta, and time and sales](docs/assets/tape-reading-tool.gif)
+
 ## What it does
 
 - Connects to TWS or IB Gateway through the socket API.
