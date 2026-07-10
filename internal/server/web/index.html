@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>Tape Reading Tool</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="app" id="app">
+    <header class="topbar">
+      <div class="ticker-group">
+        <button class="icon-button" id="historyBack" type="button" aria-label="Previous ticker" title="Previous ticker">&lt;</button>
+        <button class="icon-button" id="historyForward" type="button" aria-label="Next ticker" title="Next ticker">&gt;</button>
+        <form id="tickerForm" class="ticker-form" autocomplete="off">
+          <input id="tickerInput" name="symbol" maxlength="16" value="AAPL" aria-label="Ticker" spellcheck="false">
+          <button type="submit" class="go-button">GO</button>
+        </form>
+        <select id="historySelect" class="history-select" aria-label="Recent tickers" title="Recent tickers"></select>
+      </div>
+      <div class="toolbar">
+        <select id="tickSelect" aria-label="Ticks per bar" title="Ticks per bar">
+          <option value="1">1T</option>
+          <option value="10">10T</option>
+          <option value="100">100T</option>
+          <option value="1000">1000T</option>
+          <option value="custom">CUSTOM</option>
+        </select>
+        <button id="soundButton" class="sound-button" type="button">SOUND START</button>
+        <button id="controlsButton" type="button">CONTROLS</button>
+        <span id="connectionState" class="connection-state"><i></i><span>STARTING</span></span>
+      </div>
+    </header>
+
+    <section class="metrics" aria-label="Tape metrics">
+      <div class="metric price-metric"><span>LAST</span><strong id="lastPrice">--</strong></div>
+      <div class="metric positive"><span>MAX DELTA</span><strong id="maxDelta">0</strong></div>
+      <div class="metric negative"><span>MIN DELTA</span><strong id="minDelta">0</strong></div>
+      <div class="metric rate"><span>TAPE</span><strong id="tapeRate">0/s</strong></div>
+    </section>
+
+    <section id="workspace" class="workspace">
+      <section id="chartPanel" class="chart-panel" aria-label="Tick chart with volume and volume delta">
+        <canvas id="chartCanvas"></canvas>
+        <div id="chartEmpty" class="chart-empty">WAITING FOR PRINTS</div>
+      </section>
+      <aside id="tapePanel" class="tape-panel" aria-label="Time and sales">
+        <header class="tape-header">
+          <span>PRICE</span><span id="sizeHeading">SIZE</span>
+        </header>
+        <div id="tapeRows" class="tape-rows"></div>
+      </aside>
+    </section>
+
+    <footer class="statusbar">
+      <span id="quoteText">BID -- / ASK --</span>
+      <span id="streamText">0 PRINTS</span>
+      <span id="clockText">--:--:-- ET</span>
+    </footer>
+  </main>
+
+  <dialog id="controlsDialog" class="controls-dialog">
+    <form method="dialog" class="dialog-heading">
+      <strong>CONTROLS</strong>
+      <button class="icon-button" value="cancel" aria-label="Close controls" title="Close">X</button>
+    </form>
+    <div class="control-sections">
+      <section>
+        <h2>DISPLAY</h2>
+        <label class="field-row"><span>Ticks / bar</span><input id="customTicks" type="number" min="1" max="100000" step="1"></label>
+        <label class="field-row"><span>Visible bars</span><input id="visibleBars" type="number" min="20" max="4000" step="10"></label>
+        <label class="field-row"><span>Tape rows</span><input id="tapeRowCount" type="number" min="10" max="300" step="5"></label>
+        <label class="switch-row"><span>Chart</span><input id="showChart" type="checkbox"><i></i></label>
+        <label class="switch-row"><span>Time &amp; sales</span><input id="showTape" type="checkbox"><i></i></label>
+        <label class="switch-row"><span>Trade size</span><input id="showSize" type="checkbox"><i></i></label>
+      </section>
+      <section>
+        <h2>SOUND MIXER</h2>
+        <label class="range-row"><span>Master <output id="masterValue"></output></span><input id="masterVolume" type="range" min="0" max="1" step="0.01"></label>
+        <label class="range-row"><span>Buy pitch <output id="buyPitchValue"></output></span><input id="buyPitch" type="range" min="300" max="1800" step="10"></label>
+        <label class="range-row"><span>Sell pitch <output id="sellPitchValue"></output></span><input id="sellPitch" type="range" min="100" max="900" step="10"></label>
+        <label class="range-row"><span>Duration <output id="durationValue"></output></span><input id="soundDuration" type="range" min="10" max="140" step="1"></label>
+        <label class="field-row"><span>Large size</span><input id="largeSize" type="number" min="1" max="10000000" step="100"></label>
+        <label class="range-row"><span>Large boost <output id="largeBoostValue"></output></span><input id="largeBoost" type="range" min="1" max="4" step="0.1"></label>
+        <label class="field-row"><span>Max voices</span><input id="maxVoices" type="number" min="8" max="512" step="8"></label>
+      </section>
+    </div>
+    <form method="dialog" class="dialog-actions">
+      <button id="resetControls" type="button">RESET</button>
+      <button value="done" class="primary-button">DONE</button>
+    </form>
+  </dialog>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

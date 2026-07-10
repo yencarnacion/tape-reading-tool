@@ -1,0 +1,19 @@
+for the purpose of this conversation use your expert daytrading, and interactive brokers python client and golang and webdev knowledge.  write a golang program that connects to the ibkr api and produces a web 1 tick chart with a volume pane below the tick chart and a volume delta pane below the volume pane similar in style to the image in 1-second-tradingview-volume-delta chart in this folder.   The working code at https://github.com/yencarnacion/ticksonic-original might help, take a look at it.  also have it have sound similar to ticksonic.  i should be able to easily tell from the sound a buy from a sell and get a sense of the speed of the tape from the sound and get a sense when bigger orders happen.  i want sounds in real time not filtered.  use a mixer and account for performance for when under extremely heavy load as a 1t chart can bring specially during the 0930am open. also show the time and sales to the right of the chart with just price and optional size.  in time and sales color as follows: hit bid red, below bid magenta, between bid and ask white, at ask green above ask yellow.  what i care for from the time and sales is to get a visual sense of the speed of the tape from it quickly scrolling by from top to bottom. the time and sales does not have to take much room.  i just want to get a sense of speed and direction from it flying by. i should be able to optionaly hide the time and sales or the tick chart in the ui.
+
+make sounds and number of ticks configurable via ui.  have the option to select via dropdown from 1t, 10t, 100t, 1000t, and custom but default to 1t. sounds should be easily mutable.
+
+i should be able to tell at a glance the max positive and min negative volume delta in readable test form
+
+the chart should look good and be useable when used using 20% to 33% of a 1080 resolution.  fit as many ticks as practical so i can get a sense of the tape with this tool. i want a dark mode by default.
+
+take a look at https://github.com/yencarnacion/0945-playbook for how i like things done.  i like a .env file, a config.yaml file, a go.sh file for starting the program from the cli and being able to stop ip via ctrl-c, a configurable port that defaults in this case to 8097, 
+
+keep in mind that i will use this mainly as a tape reading tool as a split second scalper.
+
+name the program tape-reading-tool.
+
+make it so i can make changes quickly as i will be time strapped when using this.
+
+dont use small fonts on numbers such as min max volume.  the screen will be at a considerable distance.
+
+i should be able to extremely quickly change stock tickers.  keep a history so i can quickly go back to already visited tickers,

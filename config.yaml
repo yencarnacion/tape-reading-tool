@@ -1,0 +1,43 @@
+app:
+  name: tape-reading-tool
+  addr: ":8097"
+  timezone: America/New_York
+
+ibkr:
+  host: 127.0.0.1
+  port: 7497
+  client_id: 97
+  exchange: SMART
+  primary_exchange: ""
+  currency: USD
+  security_type: STK
+  market_data_type: 1
+  reconnect_interval: 2s
+  connect_timeout: 3s
+  subscription_cache: 3
+
+tape:
+  default_symbol: AAPL
+  ring_size: 50000
+  snapshot_trades: 12000
+  websocket_batch: 16ms
+  websocket_max_batch: 4096
+  history_size: 8
+
+display:
+  tick_size: 1
+  visible_bars: 360
+  tape_rows: 90
+  show_size: true
+  show_chart: true
+  show_tape: true
+
+audio:
+  enabled: true
+  master_volume: 0.24
+  buy_pitch_hz: 920
+  sell_pitch_hz: 330
+  duration_ms: 42
+  large_size: 1000
+  large_boost: 1.8
+  max_voices: 192

@@ -1,0 +1,5 @@
+.env
+tape-reading-tool
+data/
+*.log
+
