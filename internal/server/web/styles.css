@@ -71,12 +71,12 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .metric { min-width: 0; display: flex; flex-direction: column; justify-content: center; padding: 4px 9px; border-right: 1px solid var(--line-soft); }
 .metric:last-child { border-right: 0; }
 .metric span { overflow: hidden; color: var(--muted); font-size: 9px; line-height: 12px; font-weight: 750; white-space: nowrap; }
-.metric strong { overflow: hidden; font: 750 19px/24px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
+.metric strong { overflow: hidden; font: 750 24px/29px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
 .metric.positive strong { color: var(--green); }
 .metric.negative strong { color: var(--red); }
 .metric.rate strong { color: var(--cyan); }
 
-.workspace { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) clamp(110px, 23vw, 162px); background: var(--bg); }
+.workspace { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) clamp(124px, 23vw, 174px); background: var(--bg); }
 .workspace.tape-hidden { grid-template-columns: minmax(0, 1fr); }
 .workspace.chart-hidden { grid-template-columns: minmax(0, 1fr); }
 .workspace.both-hidden { display: block; background: var(--surface); }
@@ -88,11 +88,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .chart-empty.hidden { display: none; }
 
 .tape-panel { min-width: 0; overflow: hidden; border-left: 1px solid var(--line); background: #0d1014; }
-.tape-header { height: 27px; display: grid; grid-template-columns: 1fr 54px; align-items: center; padding: 0 6px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 9px; font-weight: 800; }
-.tape-header span:last-child { text-align: right; }
-.tape-rows { height: calc(100% - 27px); overflow: hidden; font: 700 13px/18px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.tape-row { height: 18px; display: grid; grid-template-columns: 1fr 54px; align-items: center; padding: 0 6px; border-bottom: 1px solid rgba(42, 48, 56, .22); white-space: nowrap; }
-.tape-row span:last-child { overflow: hidden; text-align: right; color: currentColor; opacity: .82; }
+.tape-header { height: 29px; display: grid; grid-template-columns: 62px minmax(0, 1fr); column-gap: 4px; align-items: center; padding: 0 6px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; font-weight: 800; }
+.tape-header span:last-child { text-align: left; }
+.tape-rows { height: calc(100% - 29px); overflow: hidden; font: 700 16px/22px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.tape-row { height: 22px; display: grid; grid-template-columns: 62px minmax(0, 1fr); column-gap: 4px; align-items: center; padding: 0 6px; border-bottom: 1px solid rgba(42, 48, 56, .22); white-space: nowrap; }
+.tape-row span:last-child { overflow: hidden; text-align: left; color: currentColor; opacity: .82; }
 .tape-row.below { color: var(--magenta); }
 .tape-row.bid { color: var(--red); }
 .tape-row.mid { color: var(--text); }
@@ -137,8 +137,8 @@ input[type="range"] { width: 100%; height: 5px; padding: 0; accent-color: var(--
   .toolbar button { padding: 0 8px; }
   .connection-state { min-width: 67px; }
   .metric { padding: 4px 6px; }
-  .metric strong { font-size: 17px; }
-  .workspace { grid-template-columns: minmax(0, 1fr) 112px; }
+  .metric strong { font-size: 22px; }
+  .workspace { grid-template-columns: minmax(0, 1fr) 124px; }
 }
 
 @media (max-width: 430px) {
@@ -146,11 +146,12 @@ input[type="range"] { width: 100%; height: 5px; padding: 0; accent-color: var(--
   .toolbar select { padding: 0 4px; }
   .connection-state { min-width: 62px; font-size: 9px; }
   .metrics { grid-template-columns: 1.05fr 1fr 1fr .72fr; }
-  .metric strong { font-size: 16px; }
+  .metric strong { font-size: 20px; }
   .metric span { font-size: 8px; }
-  .workspace { grid-template-columns: minmax(0, 1fr) 106px; }
+  .workspace { grid-template-columns: minmax(0, 1fr) 120px; }
   .tape-header, .tape-row { padding-left: 4px; padding-right: 4px; }
-  .tape-rows { font-size: 12px; }
+  .tape-header, .tape-rows { font-size: 15px; }
+  .tape-header, .tape-row { grid-template-columns: 58px minmax(0, 1fr); column-gap: 3px; }
   .control-sections { grid-template-columns: 1fr; }
   .control-sections section + section { border-left: 0; border-top: 1px solid var(--line); }
 }

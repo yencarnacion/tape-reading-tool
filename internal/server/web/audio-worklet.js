@@ -5,6 +5,7 @@ class TapeMixerProcessor extends AudioWorkletProcessor {
       buyPitchHz: 920,
       sellPitchHz: 330,
       durationMS: 42,
+      minimumGain: 0.65,
       largeSize: 1000,
       largeBoost: 1.8,
       maxVoices: 192
@@ -54,7 +55,8 @@ class TapeMixerProcessor extends AudioWorkletProcessor {
     voice.age = 0;
     voice.length = Math.max(64, Math.round(this.config.durationMS * (large ? 1.45 : 1) * sampleRate / 1000));
     voice.frequency = event.side > 0 ? this.config.buyPitchHz : event.side < 0 ? this.config.sellPitchHz : 610;
-    voice.amplitude = Math.min(1.5, (0.18 + weight * 0.45) * (large ? this.config.largeBoost : 1));
+    const minimum = Math.max(0.1, Math.min(1.5, this.config.minimumGain));
+    voice.amplitude = Math.min(2.2, (minimum + weight * 0.55) * (large ? this.config.largeBoost : 1));
     voice.side = event.side;
     voice.large = large;
   }
@@ -93,7 +95,7 @@ class TapeMixerProcessor extends AudioWorkletProcessor {
           wave = Math.sin(voice.phase) * (1 - progress);
         }
         if (voice.large) wave += 0.3 * Math.sin(voice.phase * 0.5);
-        const value = wave * envelope * voice.amplitude * 0.11;
+        const value = wave * envelope * voice.amplitude * 0.16;
         l += value * (voice.side > 0 ? 0.72 : 1);
         r += value * (voice.side < 0 ? 0.72 : 1);
         voice.age++;

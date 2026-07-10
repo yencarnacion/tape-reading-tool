@@ -15,7 +15,8 @@
     dialog: $('controlsDialog'), resetControls: $('resetControls'),
     customTicks: $('customTicks'), visibleBars: $('visibleBars'), tapeRowCount: $('tapeRowCount'),
     showChart: $('showChart'), showTape: $('showTape'), showSize: $('showSize'),
-    masterVolume: $('masterVolume'), masterValue: $('masterValue'), buyPitch: $('buyPitch'), buyPitchValue: $('buyPitchValue'),
+    masterVolume: $('masterVolume'), masterValue: $('masterValue'), minimumGain: $('minimumGain'), minimumGainValue: $('minimumGainValue'),
+    buyPitch: $('buyPitch'), buyPitchValue: $('buyPitchValue'),
     sellPitch: $('sellPitch'), sellPitchValue: $('sellPitchValue'), soundDuration: $('soundDuration'), durationValue: $('durationValue'),
     largeSize: $('largeSize'), largeBoost: $('largeBoost'), largeBoostValue: $('largeBoostValue'), maxVoices: $('maxVoices')
   };
@@ -77,6 +78,7 @@
         buyPitchHz: config.buyPitchHz,
         sellPitchHz: config.sellPitchHz,
         durationMS: config.durationMS,
+        minimumGain: config.minimumGain,
         largeSize: config.largeSize,
         largeBoost: config.largeBoost,
         maxVoices: config.maxVoices
@@ -111,7 +113,8 @@
       showTape: display.show_tape !== false,
       audio: {
         enabled: audioConfig.enabled !== false,
-        masterVolume: Number(audioConfig.master_volume) || 0.24,
+        masterVolume: Number(audioConfig.master_volume) || 0.45,
+        minimumGain: Number(audioConfig.minimum_gain) || 0.65,
         buyPitchHz: Number(audioConfig.buy_pitch_hz) || 920,
         sellPitchHz: Number(audioConfig.sell_pitch_hz) || 330,
         durationMS: Number(audioConfig.duration_ms) || 42,
@@ -129,6 +132,13 @@
     result.customTicks = clampInt(result.customTicks, 1, 100000, result.tickSize);
     result.visibleBars = clampInt(result.visibleBars, 20, 4000, defaults.visibleBars);
     result.tapeRows = clampInt(result.tapeRows, 10, 300, defaults.tapeRows);
+    result.audio.masterVolume = clampNumber(result.audio.masterVolume, 0, 2, defaults.audio.masterVolume);
+    result.audio.minimumGain = clampNumber(result.audio.minimumGain, 0.1, 1.5, defaults.audio.minimumGain);
+    result.audio.buyPitchHz = clampNumber(result.audio.buyPitchHz, 300, 1800, defaults.audio.buyPitchHz);
+    result.audio.sellPitchHz = clampNumber(result.audio.sellPitchHz, 100, 900, defaults.audio.sellPitchHz);
+    result.audio.durationMS = clampNumber(result.audio.durationMS, 10, 140, defaults.audio.durationMS);
+    result.audio.largeSize = clampNumber(result.audio.largeSize, 1, 100000, defaults.audio.largeSize);
+    result.audio.largeBoost = clampNumber(result.audio.largeBoost, 1, 4, defaults.audio.largeBoost);
     result.audio.maxVoices = clampInt(result.audio.maxVoices, 8, 512, defaults.audio.maxVoices);
     return result;
   }
@@ -144,6 +154,11 @@
 
   function clampInt(value, minimum, maximum, fallback) {
     const number = Math.round(Number(value));
+    return Number.isFinite(number) ? Math.max(minimum, Math.min(maximum, number)) : fallback;
+  }
+
+  function clampNumber(value, minimum, maximum, fallback) {
+    const number = Number(value);
     return Number.isFinite(number) ? Math.max(minimum, Math.min(maximum, number)) : fallback;
   }
 
@@ -557,6 +572,7 @@
     elements.showTape.checked = settings.showTape;
     elements.showSize.checked = settings.showSize;
     elements.masterVolume.value = settings.audio.masterVolume;
+    elements.minimumGain.value = settings.audio.minimumGain;
     elements.buyPitch.value = settings.audio.buyPitchHz;
     elements.sellPitch.value = settings.audio.sellPitchHz;
     elements.soundDuration.value = settings.audio.durationMS;
@@ -570,6 +586,7 @@
   function updateControlOutputs() {
     if (!state.settings) return;
     elements.masterValue.textContent = `${Math.round(state.settings.audio.masterVolume * 100)}%`;
+    elements.minimumGainValue.textContent = `${Math.round(state.settings.audio.minimumGain * 100)}%`;
     elements.buyPitchValue.textContent = `${state.settings.audio.buyPitchHz} Hz`;
     elements.sellPitchValue.textContent = `${state.settings.audio.sellPitchHz} Hz`;
     elements.durationValue.textContent = `${state.settings.audio.durationMS} ms`;
@@ -662,7 +679,8 @@
       element.addEventListener('change', () => { state.settings[key] = element.checked; commitSettings(false); });
     }
     const audioBindings = [
-      [elements.masterVolume, 'masterVolume', Number], [elements.buyPitch, 'buyPitchHz', Number],
+      [elements.masterVolume, 'masterVolume', Number], [elements.minimumGain, 'minimumGain', Number],
+      [elements.buyPitch, 'buyPitchHz', Number],
       [elements.sellPitch, 'sellPitchHz', Number], [elements.soundDuration, 'durationMS', Number],
       [elements.largeSize, 'largeSize', Number], [elements.largeBoost, 'largeBoost', Number],
       [elements.maxVoices, 'maxVoices', Number]

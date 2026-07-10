@@ -104,7 +104,7 @@ Gateway farm-status messages are printed as `IBKR notice`; request and entitleme
 - Enter a ticker and press `Enter` or `GO`. The input selects its full contents on focus for quick replacement.
 - Use the arrow buttons and recent-ticker dropdown to revisit symbols.
 - Select the tick count from the toolbar. `CUSTOM` opens the controls panel.
-- Use `CONTROLS` to change visible bars, tape rows, pane visibility, size visibility, and every sound parameter.
+- Use `CONTROLS` to change visible bars, tape rows, pane visibility, size visibility, and every sound parameter. `Master` boosts overall output up to 200%; `Small prints` sets an audible floor for isolated, low-size trades.
 - Press `SOUND START` once to satisfy the browser's audio gesture requirement. The same control then mutes/unmutes the mixer.
 - Press `/` while outside an input to focus the ticker field.
 
