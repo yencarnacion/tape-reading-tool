@@ -1,5 +1,4 @@
 .env
-tape-reading-tool
+/tape-reading-tool
 data/
 *.log
-
