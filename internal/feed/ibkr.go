@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net"
 	"sort"
 	"sync"
 	"time"
@@ -47,6 +46,19 @@ type streamStats struct {
 type ibWrapper struct {
 	ibapi.Wrapper
 	feed *IBKR
+
+	ready     chan struct{}
+	closed    chan struct{}
+	readyOnce sync.Once
+	closeOnce sync.Once
+}
+
+func newIBWrapper(feed *IBKR) *ibWrapper {
+	return &ibWrapper{
+		feed:   feed,
+		ready:  make(chan struct{}),
+		closed: make(chan struct{}),
+	}
 }
 
 func NewIBKR(cfg config.IBKRConfig, store *tape.Store) *IBKR {
@@ -87,18 +99,7 @@ func (f *IBKR) Run(ctx context.Context) {
 		attempt++
 		log.Printf("IBKR connection attempt=%d target=%s:%d client_id=%d", attempt, f.cfg.Host, f.cfg.Port, f.cfg.ClientID)
 		f.store.SetStatus(tape.FeedStatus{Mode: "live", State: "connecting", Message: fmt.Sprintf("%s:%d", f.cfg.Host, f.cfg.Port)})
-		probeStarted := time.Now()
-		if err := probe(ctx, f.cfg.Host, f.cfg.Port, connectTimeout); err != nil {
-			log.Printf("IBKR TCP probe failed after=%s error=%v; retrying_in=%s", time.Since(probeStarted).Round(time.Millisecond), err, reconnect)
-			f.store.SetStatus(tape.FeedStatus{Mode: "live", State: "waiting", Message: err.Error()})
-			if !sleepContext(ctx, reconnect) {
-				return
-			}
-			continue
-		}
-		log.Printf("IBKR TCP probe succeeded after=%s", time.Since(probeStarted).Round(time.Millisecond))
-
-		wrapper := &ibWrapper{feed: f}
+		wrapper := newIBWrapper(f)
 		client := ibapi.NewEClient(wrapper)
 		handshakeStarted := time.Now()
 		log.Printf("IBKR API handshake starting; if this line stalls, check API socket version, trusted IPs, and client ID conflicts")
@@ -114,6 +115,14 @@ func (f *IBKR) Run(ctx context.Context) {
 			"IBKR API handshake complete after=%s server_version=%d connection_time=%q",
 			time.Since(handshakeStarted).Round(time.Millisecond), client.ServerVersion(), client.TWSConnectionTime(),
 		)
+		if !waitForIBKRReady(ctx, wrapper, connectTimeout) {
+			_ = client.Disconnect()
+			f.store.SetStatus(tape.FeedStatus{Mode: "live", State: "waiting", Message: "IBKR API session did not become ready"})
+			if !sleepContext(ctx, reconnect) {
+				return
+			}
+			continue
+		}
 		f.setClient(client)
 		f.resetSubscriptions()
 		log.Printf("IBKR requesting market_data_type=%d", f.cfg.MarketDataType)
@@ -301,6 +310,7 @@ func (w *ibWrapper) Error(reqID ibapi.TickerID, errTime, errCode int64, errStrin
 
 func (w *ibWrapper) ConnectionClosed() {
 	log.Printf("IBKR callback connection_closed")
+	w.closeOnce.Do(func() { close(w.closed) })
 	w.feed.store.SetStatus(tape.FeedStatus{Mode: "live", State: "reconnecting", Message: "IBKR connection closed"})
 }
 
@@ -310,6 +320,7 @@ func (w *ibWrapper) ConnectAck() {
 
 func (w *ibWrapper) NextValidID(orderID int64) {
 	log.Printf("IBKR callback next_valid_id=%d; API session is ready", orderID)
+	w.readyOnce.Do(func() { close(w.ready) })
 }
 
 func (w *ibWrapper) MarketDataType(reqID ibapi.TickerID, marketDataType int64) {
@@ -367,13 +378,21 @@ func isIBKRNotice(code int64) bool {
 	return code >= 2100 && code <= 2199
 }
 
-func probe(ctx context.Context, host string, port int, timeout time.Duration) error {
-	dialer := net.Dialer{Timeout: timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", host, port))
-	if err != nil {
-		return fmt.Errorf("TWS/Gateway unavailable: %w", err)
+func waitForIBKRReady(ctx context.Context, wrapper *ibWrapper, timeout time.Duration) bool {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-wrapper.ready:
+		return true
+	case <-wrapper.closed:
+		log.Printf("IBKR API session closed before next_valid_id")
+		return false
+	case <-timer.C:
+		log.Printf("IBKR API session startup timed out after=%s waiting for next_valid_id", timeout)
+		return false
+	case <-ctx.Done():
+		return false
 	}
-	return conn.Close()
 }
 
 func sleepContext(ctx context.Context, duration time.Duration) bool {
