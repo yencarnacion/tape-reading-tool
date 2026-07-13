@@ -67,7 +67,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 
 .metrics {
   display: grid;
-  grid-template-columns: minmax(72px, 1.1fr) minmax(74px, 1fr) minmax(74px, 1fr) minmax(58px, .75fr);
+  grid-template-columns: minmax(160px, 1.4fr) minmax(74px, 1fr) minmax(74px, 1fr) minmax(58px, .75fr);
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
@@ -77,7 +77,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .metric strong { overflow: hidden; font: 750 24px/29px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
 .price-values { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
 .price-values strong { flex: 0 1 auto; }
-.price-change { overflow: hidden; flex: 0 1 auto; font: 800 14px/18px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
+.price-change { overflow: hidden; flex: 0 1 auto; font: 800 24px/29px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
 .price-change.up { color: var(--price-up); }
 .price-change.down { color: var(--price-down); }
 .price-change.neutral { color: var(--muted); }
@@ -147,7 +147,7 @@ input[type="range"] { width: 100%; height: 5px; padding: 0; accent-color: var(--
   .connection-state { min-width: 67px; }
   .metric { padding: 4px 6px; }
   .metric strong { font-size: 22px; }
-	.price-change { font-size: 12px; }
+  .price-change { font-size: 22px; line-height: 27px; }
   .workspace { grid-template-columns: minmax(0, 1fr) 124px; }
 }
 
@@ -155,10 +155,10 @@ input[type="range"] { width: 100%; height: 5px; padding: 0; accent-color: var(--
   .toolbar button { font-size: 10px; padding: 0 6px; }
   .toolbar select { padding: 0 4px; }
   .connection-state { min-width: 62px; font-size: 9px; }
-  .metrics { grid-template-columns: 1.05fr 1fr 1fr .72fr; }
+  .metrics { grid-template-columns: minmax(140px, 1.2fr) minmax(62px, 1fr) minmax(62px, 1fr) minmax(48px, .72fr); }
   .metric strong { font-size: 20px; }
-	.price-values { gap: 5px; }
-	.price-change { font-size: 11px; }
+  .price-values { gap: 5px; }
+  .price-change { font-size: 20px; line-height: 25px; }
   .metric span { font-size: 8px; }
   .workspace { grid-template-columns: minmax(0, 1fr) 120px; }
   .tape-header, .tape-row { padding-left: 4px; padding-right: 4px; }
