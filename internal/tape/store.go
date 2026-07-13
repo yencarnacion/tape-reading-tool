@@ -30,10 +30,11 @@ type Trade struct {
 }
 
 type Quote struct {
-	Bid     float64 `json:"bid"`
-	Ask     float64 `json:"ask"`
-	BidSize float64 `json:"bid_size"`
-	AskSize float64 `json:"ask_size"`
+	Bid           float64 `json:"bid"`
+	Ask           float64 `json:"ask"`
+	BidSize       float64 `json:"bid_size"`
+	AskSize       float64 `json:"ask_size"`
+	PreviousClose float64 `json:"previous_close"`
 }
 
 type FeedStatus struct {
@@ -163,6 +164,17 @@ func (s *Store) UpdateQuote(symbol string, bid, ask, bidSize, askSize float64) {
 	if askSize >= 0 {
 		tape.quote.AskSize = askSize
 	}
+	tape.mu.Unlock()
+}
+
+// UpdatePreviousClose records the reference close supplied by the market-data feed.
+func (s *Store) UpdatePreviousClose(symbol string, previousClose float64) {
+	tape := s.getOrCreate(symbol)
+	if tape == nil || previousClose <= 0 {
+		return
+	}
+	tape.mu.Lock()
+	tape.quote.PreviousClose = previousClose
 	tape.mu.Unlock()
 }
 

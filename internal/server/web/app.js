@@ -10,7 +10,7 @@
     tickerForm: $('tickerForm'), tickerInput: $('tickerInput'), historySelect: $('historySelect'),
     historyBack: $('historyBack'), historyForward: $('historyForward'), tickSelect: $('tickSelect'),
     soundButton: $('soundButton'), controlsButton: $('controlsButton'), connectionState: $('connectionState'),
-    lastPrice: $('lastPrice'), maxDelta: $('maxDelta'), minDelta: $('minDelta'), tapeRate: $('tapeRate'),
+    lastPrice: $('lastPrice'), priceChange: $('priceChange'), maxDelta: $('maxDelta'), minDelta: $('minDelta'), tapeRate: $('tapeRate'),
     quoteText: $('quoteText'), streamText: $('streamText'), clockText: $('clockText'),
     dialog: $('controlsDialog'), resetControls: $('resetControls'),
     customTicks: $('customTicks'), visibleBars: $('visibleBars'), tapeRowCount: $('tapeRowCount'),
@@ -711,6 +711,7 @@
     elements.tapeRate.textContent = `${state.rateTimes.length}/s`;
     const last = state.trades[state.trades.length - 1];
     elements.lastPrice.textContent = last ? formatPrice(last.p) : '--';
+    updatePriceChange(last?.p, state.quote.previous_close);
     elements.streamText.textContent = `${formatSize(state.trades.length)} PRINTS${state.dropped ? ` / ${formatSize(state.dropped)} LAGGED` : ''}`;
     elements.clockText.textContent = `${new Intl.DateTimeFormat('en-US', {
       timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
@@ -732,6 +733,24 @@
     if (!Number.isFinite(number)) return '--';
     const decimals = number < 1 ? 4 : 2;
     return number.toFixed(decimals);
+  }
+
+  function updatePriceChange(lastPrice, previousClose) {
+    const last = Number(lastPrice);
+    const previous = Number(previousClose);
+    const valid = Number.isFinite(last) && last > 0 && Number.isFinite(previous) && previous > 0;
+    if (!valid) {
+      elements.priceChange.textContent = '--';
+      elements.priceChange.className = 'price-change neutral';
+      elements.priceChange.removeAttribute('aria-label');
+      return;
+    }
+    const percent = (last - previous) / previous * 100;
+    const rounded = Math.abs(percent) < 0.005 ? 0 : percent;
+    const sign = rounded > 0 ? '+' : rounded < 0 ? '−' : '';
+    elements.priceChange.textContent = `${sign}${Math.abs(rounded).toFixed(2)}%`;
+    elements.priceChange.className = `price-change ${rounded > 0 ? 'up' : rounded < 0 ? 'down' : 'neutral'}`;
+    elements.priceChange.setAttribute('aria-label', `${sign}${Math.abs(rounded).toFixed(2)} percent from previous close`);
   }
 
   function formatAxisPrice(value) {

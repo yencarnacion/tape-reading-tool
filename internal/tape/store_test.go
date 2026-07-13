@@ -8,6 +8,7 @@ import (
 func TestTradeClassificationAndDirection(t *testing.T) {
 	store := NewStore("AAPL", 100, 4)
 	store.UpdateQuote("AAPL", 100, 101, 500, 600)
+	store.UpdatePreviousClose("AAPL", 99.5)
 	now := time.Unix(1_700_000_000, 0)
 	prices := []float64{99, 100, 100.5, 101, 102}
 	wantClasses := []Classification{BelowBid, AtBid, Between, AtAsk, AboveAsk}
@@ -23,7 +24,7 @@ func TestTradeClassificationAndDirection(t *testing.T) {
 	}
 
 	snapshot := store.Snapshot("AAPL", 10)
-	if snapshot.Quote.Bid != 100 || snapshot.Quote.Ask != 101 {
+	if snapshot.Quote.Bid != 100 || snapshot.Quote.Ask != 101 || snapshot.Quote.PreviousClose != 99.5 {
 		t.Fatalf("quote = %+v", snapshot.Quote)
 	}
 	if len(snapshot.Trades) != len(prices) {

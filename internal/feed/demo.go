@@ -52,6 +52,7 @@ func (d *Demo) Run(ctx context.Context) {
 			d.mu.Unlock()
 			if symbol != lastSymbol {
 				price = demoBase(symbol)
+				d.store.UpdatePreviousClose(symbol, demoPreviousClose(symbol))
 				lastSymbol = symbol
 			}
 			burst := math.Mod(now.Sub(started).Seconds(), 6) < 1.15
@@ -103,4 +104,12 @@ func demoBase(symbol string) float64 {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(symbol))
 	return math.Round((18+float64(h.Sum32()%22000)/100)*100) / 100
+}
+
+func demoPreviousClose(symbol string) float64 {
+	base := demoBase(symbol)
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(symbol + "-previous-close"))
+	move := (float64(h.Sum32()%401) - 200) / 10000
+	return math.Round(base*(1+move)*100) / 100
 }

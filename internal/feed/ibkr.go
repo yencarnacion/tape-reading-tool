@@ -269,6 +269,8 @@ func (w *ibWrapper) TickPrice(reqID ibapi.TickerID, tickType ibapi.TickType, pri
 		w.feed.store.UpdateQuote(symbol, price, 0, -1, -1)
 	case ibapi.ASK, ibapi.DELAYED_ASK:
 		w.feed.store.UpdateQuote(symbol, 0, price, -1, -1)
+	case ibapi.CLOSE, ibapi.DELAYED_CLOSE:
+		w.feed.store.UpdatePreviousClose(symbol, price)
 	default:
 		return
 	}
