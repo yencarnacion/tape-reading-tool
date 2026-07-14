@@ -350,11 +350,15 @@
     const top = 7;
     const bottom = 20;
     const usable = height - top - bottom;
-    const priceBottom = top + usable * 0.57;
-    const volumeTop = priceBottom + 8;
-    const volumeBottom = volumeTop + usable * 0.19;
-    const deltaTop = volumeBottom + 8;
-    const deltaBottom = height - bottom;
+    const paneGap = 8;
+    const priceHeight = usable * 0.57;
+    const volumePaneHeight = usable * 0.19;
+    const deltaTop = top;
+    const deltaBottom = deltaTop + usable - priceHeight - volumePaneHeight - paneGap * 2;
+    const volumeTop = deltaBottom + paneGap;
+    const volumeBottom = volumeTop + volumePaneHeight;
+    const priceTop = volumeBottom + paneGap;
+    const priceBottom = height - bottom;
     const visible = state.bars.slice(-state.settings.visibleBars);
     const step = (right - left) / visible.length;
 
@@ -375,14 +379,14 @@
     const pricePadding = Math.max((maximum - minimum) * 0.08, maximum * 0.00008, 0.005);
     minimum -= pricePadding;
     maximum += pricePadding;
-    const priceY = (value) => priceBottom - (value - minimum) / (maximum - minimum) * (priceBottom - top);
+    const priceY = (value) => priceBottom - (value - minimum) / (maximum - minimum) * (priceBottom - priceTop);
     const xAt = (index) => left + (index + 0.5) * step;
 
     context.font = '11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     context.textBaseline = 'middle';
     context.lineWidth = 1;
     for (let i = 0; i <= 4; i++) {
-      const y = top + (priceBottom - top) * i / 4;
+      const y = priceTop + (priceBottom - priceTop) * i / 4;
       const price = maximum - (maximum - minimum) * i / 4;
       context.strokeStyle = '#252b33';
       context.beginPath(); context.moveTo(left, y); context.lineTo(right, y); context.stroke();
