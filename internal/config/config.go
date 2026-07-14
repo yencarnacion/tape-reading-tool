@@ -86,8 +86,8 @@ func Defaults() Config {
 			ShowSize: true, ShowChart: true, ShowTape: true,
 		},
 		Audio: AudioConfig{
-			Enabled: true, MasterVolume: 0.45, MinimumGain: 0.65, BuyPitchHz: 920, SellPitchHz: 330,
-			DurationMS: 42, LargeSize: 1000, LargeBoost: 1.8, MaxVoices: 192,
+			Enabled: true, MasterVolume: 0.45, MinimumGain: 0.65, BuyPitchHz: 660, SellPitchHz: 490,
+			DurationMS: 110, LargeSize: 1000, LargeBoost: 1.8, MaxVoices: 192,
 		},
 	}
 }

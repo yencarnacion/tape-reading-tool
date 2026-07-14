@@ -130,7 +130,7 @@ At-bid and below-bid size is negative delta. At-ask and above-ask size is positi
 
 IBKR callbacks do constant, bounded work: quote lookup, classification, and one ring write. Each symbol uses a fixed-size ring rather than an ever-growing slice. WebSocket clients pull from sequence numbers in batches, so a slow client cannot block the feed callback or allocate a queue per print. If a client falls behind the ring, the UI reports the overwritten count as `LAGGED`.
 
-The canvas redraws only when data or dimensions change. Time and sales reuses a fixed DOM row pool. The audio worklet receives every delivered print, synthesizes it off the main thread, and uses a fixed voice pool; under extreme overlap, a new print steals the oldest active voice instead of allocating another Web Audio graph.
+The canvas redraws only when data or dimensions change. Time and sales reuses a fixed DOM row pool. The audio worklet receives every delivered print and performs synthesis off the main thread with a fixed voice pool. Above 60 trades per second it progressively thins, shortens, and lowers only small-print cues; large prints always bypass that limiter and take priority over small voices.
 
 ## Verify
 

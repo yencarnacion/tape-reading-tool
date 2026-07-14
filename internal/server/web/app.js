@@ -2,6 +2,8 @@
   'use strict';
 
   const STORAGE_KEY = 'tape-reading-tool.settings.v1';
+  const SOUND_PROFILE_VERSION = 2;
+  const LEGACY_SOUND_DEFAULTS = { buyPitchHz: 920, sellPitchHz: 330, durationMS: 42 };
   const MAX_LOCAL_TRADES = 120000;
   const $ = (id) => document.getElementById(id);
   const elements = {
@@ -112,12 +114,13 @@
       showChart: display.show_chart !== false,
       showTape: display.show_tape !== false,
       audio: {
+        profileVersion: SOUND_PROFILE_VERSION,
         enabled: audioConfig.enabled !== false,
         masterVolume: Number(audioConfig.master_volume) || 0.45,
         minimumGain: Number(audioConfig.minimum_gain) || 0.65,
-        buyPitchHz: Number(audioConfig.buy_pitch_hz) || 920,
-        sellPitchHz: Number(audioConfig.sell_pitch_hz) || 330,
-        durationMS: Number(audioConfig.duration_ms) || 42,
+        buyPitchHz: Number(audioConfig.buy_pitch_hz) || 660,
+        sellPitchHz: Number(audioConfig.sell_pitch_hz) || 490,
+        durationMS: Number(audioConfig.duration_ms) || 110,
         largeSize: Number(audioConfig.large_size) || 1000,
         largeBoost: Number(audioConfig.large_boost) || 1.8,
         maxVoices: Number(audioConfig.max_voices) || 192
@@ -128,6 +131,12 @@
   function mergeSettings(defaults, saved) {
     if (!saved || typeof saved !== 'object') return structuredClone(defaults);
     const result = { ...defaults, ...saved, audio: { ...defaults.audio, ...(saved.audio || {}) } };
+    if ((Number(result.audio.profileVersion) || 1) < SOUND_PROFILE_VERSION) {
+      for (const [key, legacyValue] of Object.entries(LEGACY_SOUND_DEFAULTS)) {
+        if (Number(result.audio[key]) === legacyValue) result.audio[key] = defaults.audio[key];
+      }
+    }
+    result.audio.profileVersion = SOUND_PROFILE_VERSION;
     result.tickSize = clampInt(result.tickSize, 1, 100000, defaults.tickSize);
     result.customTicks = clampInt(result.customTicks, 1, 100000, result.tickSize);
     result.visibleBars = clampInt(result.visibleBars, 20, 4000, defaults.visibleBars);
