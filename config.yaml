@@ -35,6 +35,8 @@ display:
 audio:
   enabled: true
   master_volume: 0.45
+  tape_rate_enabled: true
+  tape_rate_volume: 0.35
   minimum_gain: 0.65
   buy_pitch_hz: 660
   sell_pitch_hz: 490

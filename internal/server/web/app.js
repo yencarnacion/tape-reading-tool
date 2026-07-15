@@ -18,6 +18,7 @@
     customTicks: $('customTicks'), visibleBars: $('visibleBars'), tapeRowCount: $('tapeRowCount'),
     showChart: $('showChart'), showTape: $('showTape'), showSize: $('showSize'),
     masterVolume: $('masterVolume'), masterValue: $('masterValue'), minimumGain: $('minimumGain'), minimumGainValue: $('minimumGainValue'),
+    tapeRateEnabled: $('tapeRateEnabled'), tapeRateVolume: $('tapeRateVolume'), tapeRateVolumeValue: $('tapeRateVolumeValue'),
     buyPitch: $('buyPitch'), buyPitchValue: $('buyPitchValue'),
     sellPitch: $('sellPitch'), sellPitchValue: $('sellPitchValue'), soundDuration: $('soundDuration'), durationValue: $('durationValue'),
     largeSize: $('largeSize'), largeBoost: $('largeBoost'), largeBoostValue: $('largeBoostValue'), maxVoices: $('maxVoices')
@@ -35,9 +36,11 @@
       this.context = null;
       this.node = null;
       this.gain = null;
+      this.tapeRateGain = null;
       this.ready = false;
       this.enabled = true;
       this.starting = false;
+      this.currentTapeRate = 0;
     }
 
     async start() {
@@ -48,11 +51,13 @@
         await this.context.audioWorklet.addModule('/audio-worklet.js');
         this.node = new AudioWorkletNode(this.context, 'tape-mixer', {
           numberOfInputs: 0,
-          numberOfOutputs: 1,
-          outputChannelCount: [2]
+          numberOfOutputs: 2,
+          outputChannelCount: [2, 2]
         });
         this.gain = this.context.createGain();
-        this.node.connect(this.gain).connect(this.context.destination);
+        this.tapeRateGain = this.context.createGain();
+        this.node.connect(this.gain, 0, 0).connect(this.context.destination);
+        this.node.connect(this.tapeRateGain, 1, 0).connect(this.context.destination);
         await this.context.resume();
         this.ready = true;
         this.sync();
@@ -87,6 +92,15 @@
       }});
       const value = this.enabled ? config.masterVolume : 0;
       this.gain.gain.setTargetAtTime(value, this.context.currentTime, 0.012);
+      const tapeRateValue = config.tapeRateEnabled ? config.tapeRateVolume : 0;
+      this.tapeRateGain.gain.setTargetAtTime(tapeRateValue, this.context.currentTime, 0.025);
+      this.node.port.postMessage({ type: 'tape-rate-active', active: tapeRateValue > 0 });
+      this.node.port.postMessage({ type: 'tape-rate', rate: this.currentTapeRate });
+    }
+
+    setTapeRate(rate) {
+      this.currentTapeRate = Math.max(0, Number(rate) || 0);
+      if (this.ready) this.node.port.postMessage({ type: 'tape-rate', rate: this.currentTapeRate });
     }
 
     push(trades) {
@@ -117,6 +131,8 @@
         profileVersion: SOUND_PROFILE_VERSION,
         enabled: audioConfig.enabled !== false,
         masterVolume: Number(audioConfig.master_volume) || 0.45,
+        tapeRateEnabled: audioConfig.tape_rate_enabled !== false,
+        tapeRateVolume: Number.isFinite(Number(audioConfig.tape_rate_volume)) ? Number(audioConfig.tape_rate_volume) : 0.35,
         minimumGain: Number(audioConfig.minimum_gain) || 0.65,
         buyPitchHz: Number(audioConfig.buy_pitch_hz) || 660,
         sellPitchHz: Number(audioConfig.sell_pitch_hz) || 490,
@@ -142,6 +158,8 @@
     result.visibleBars = clampInt(result.visibleBars, 20, 4000, defaults.visibleBars);
     result.tapeRows = clampInt(result.tapeRows, 10, 300, defaults.tapeRows);
     result.audio.masterVolume = clampNumber(result.audio.masterVolume, 0, 2, defaults.audio.masterVolume);
+    result.audio.tapeRateEnabled = result.audio.tapeRateEnabled !== false;
+    result.audio.tapeRateVolume = clampNumber(result.audio.tapeRateVolume, 0, 1, defaults.audio.tapeRateVolume);
     result.audio.minimumGain = clampNumber(result.audio.minimumGain, 0.1, 1.5, defaults.audio.minimumGain);
     result.audio.buyPitchHz = clampNumber(result.audio.buyPitchHz, 300, 1800, defaults.audio.buyPitchHz);
     result.audio.sellPitchHz = clampNumber(result.audio.sellPitchHz, 100, 900, defaults.audio.sellPitchHz);
@@ -585,6 +603,8 @@
     elements.showTape.checked = settings.showTape;
     elements.showSize.checked = settings.showSize;
     elements.masterVolume.value = settings.audio.masterVolume;
+    elements.tapeRateEnabled.checked = settings.audio.tapeRateEnabled;
+    elements.tapeRateVolume.value = settings.audio.tapeRateVolume;
     elements.minimumGain.value = settings.audio.minimumGain;
     elements.buyPitch.value = settings.audio.buyPitchHz;
     elements.sellPitch.value = settings.audio.sellPitchHz;
@@ -599,6 +619,7 @@
   function updateControlOutputs() {
     if (!state.settings) return;
     elements.masterValue.textContent = `${Math.round(state.settings.audio.masterVolume * 100)}%`;
+    elements.tapeRateVolumeValue.textContent = `${Math.round(state.settings.audio.tapeRateVolume * 100)}%`;
     elements.minimumGainValue.textContent = `${Math.round(state.settings.audio.minimumGain * 100)}%`;
     elements.buyPitchValue.textContent = `${state.settings.audio.buyPitchHz} Hz`;
     elements.sellPitchValue.textContent = `${state.settings.audio.sellPitchHz} Hz`;
@@ -691,8 +712,14 @@
     for (const [element, key] of [[elements.showChart, 'showChart'], [elements.showTape, 'showTape'], [elements.showSize, 'showSize']]) {
       element.addEventListener('change', () => { state.settings[key] = element.checked; commitSettings(false); });
     }
+    elements.tapeRateEnabled.addEventListener('change', async () => {
+      state.settings.audio.tapeRateEnabled = elements.tapeRateEnabled.checked;
+      commitSettings(false);
+      if (state.settings.audio.tapeRateEnabled && !audio.ready) await audio.start();
+    });
     const audioBindings = [
-      [elements.masterVolume, 'masterVolume', Number], [elements.minimumGain, 'minimumGain', Number],
+      [elements.masterVolume, 'masterVolume', Number], [elements.tapeRateVolume, 'tapeRateVolume', Number],
+      [elements.minimumGain, 'minimumGain', Number],
       [elements.buyPitch, 'buyPitchHz', Number],
       [elements.sellPitch, 'sellPitchHz', Number], [elements.soundDuration, 'durationMS', Number],
       [elements.largeSize, 'largeSize', Number], [elements.largeBoost, 'largeBoost', Number],
@@ -721,7 +748,9 @@
   function updateLiveMetrics(now) {
     const cutoff = now - 1000;
     while (state.rateTimes.length && state.rateTimes[0] < cutoff) state.rateTimes.shift();
-    elements.tapeRate.textContent = `${state.rateTimes.length}/s`;
+    const tapeRate = state.rateTimes.length;
+    elements.tapeRate.textContent = `${tapeRate}/s`;
+    audio.setTapeRate(tapeRate);
     const last = state.trades[state.trades.length - 1];
     elements.lastPrice.textContent = last ? formatPrice(last.p) : '--';
     updatePriceChange(last?.p, state.quote.previous_close);

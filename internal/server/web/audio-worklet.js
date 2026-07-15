@@ -3,6 +3,16 @@ const SELL_INTERVALS = [1, 0.8, 0.6, 0.5];
 const FULL_DETAIL_RATE = 60;
 const MIN_SMALL_CUES_PER_SECOND = 12;
 const RATE_WINDOW_SECONDS = 0.25;
+const TAPE_RATE_REFERENCE = 500;
+const TAPE_RATE_MIN_PITCH = 90;
+const TAPE_RATE_PITCH_OCTAVES = 2;
+const TAPE_RATE_MIN_PULSE_HZ = 1.2;
+const TAPE_RATE_PULSE_SPAN_HZ = 10.8;
+const SINE_TABLE_SIZE = 2048;
+const SINE_TABLE = Float32Array.from(
+  { length: SINE_TABLE_SIZE },
+  (_, index) => Math.sin(index * Math.PI * 2 / SINE_TABLE_SIZE)
+);
 
 class TapeMixerProcessor extends AudioWorkletProcessor {
   constructor() {
@@ -24,6 +34,22 @@ class TapeMixerProcessor extends AudioWorkletProcessor {
     this.rateOffset = 0;
     this.smallTokens = 2;
     this.smallTokenFrame = 0;
+    this.tapeRateTarget = 0;
+    this.tapeRateSmoothed = 0;
+    this.tapeRateActive = true;
+    this.tapeCarrierPhase = 0;
+    this.tapePulsePhase = 0;
+    this.tapeActivity = 0;
+    this.tapeDuck = 1;
+    this.tapePitch = TAPE_RATE_MIN_PITCH;
+    this.tapePulseRate = TAPE_RATE_MIN_PULSE_HZ;
+    this.tapeParameterCountdown = 0;
+    this.tapeRateAttackStep = 1 - Math.exp(-1 / (sampleRate * 0.08));
+    this.tapeRateReleaseStep = 1 - Math.exp(-1 / (sampleRate * 0.16));
+    this.tapeActivityAttackStep = 1 - Math.exp(-1 / (sampleRate * 0.04));
+    this.tapeActivityReleaseStep = 1 - Math.exp(-1 / (sampleRate * 0.20));
+    this.tapeDuckAttackStep = 1 - Math.exp(-1 / (sampleRate * 0.004));
+    this.tapeDuckReleaseStep = 1 - Math.exp(-1 / (sampleRate * 0.075));
     this.port.onmessage = (event) => this.onMessage(event.data);
     this.allocate();
   }
@@ -94,6 +120,14 @@ class TapeMixerProcessor extends AudioWorkletProcessor {
       const previous = this.config.maxVoices;
       Object.assign(this.config, message.config || {});
       if (previous !== this.config.maxVoices) this.allocate();
+      return;
+    }
+    if (message.type === 'tape-rate') {
+      this.tapeRateTarget = Math.max(0, Math.min(5000, Number(message.rate) || 0));
+      return;
+    }
+    if (message.type === 'tape-rate-active') {
+      this.tapeRateActive = Boolean(message.active);
       return;
     }
     if (message.type !== 'ticks' || !Array.isArray(message.events)) return;
@@ -196,13 +230,65 @@ class TapeMixerProcessor extends AudioWorkletProcessor {
     ) * congestionGain;
   }
 
+  renderTapeRateSample(cueLevel) {
+    if (!this.tapeRateActive) return 0;
+    if (this.tapeRateTarget === 0 && this.tapeRateSmoothed < 0.01 && this.tapeActivity < 0.0001) {
+      this.tapeRateSmoothed = 0;
+      this.tapeActivity = 0;
+      return 0;
+    }
+    const rateStep = this.tapeRateTarget > this.tapeRateSmoothed
+      ? this.tapeRateAttackStep
+      : this.tapeRateReleaseStep;
+    this.tapeRateSmoothed += (this.tapeRateTarget - this.tapeRateSmoothed) * rateStep;
+
+    // Square-root compression spreads 30, 123, 300, and 500 prints/s across
+    // roughly 126/179/263/360 Hz and 3.8/6.6/9.6/12 Hz respectively.
+    // Pitch and envelope rate rise together so speed is encoded redundantly.
+    if (this.tapeParameterCountdown-- <= 0) {
+      const speed = Math.min(1, Math.sqrt(this.tapeRateSmoothed / TAPE_RATE_REFERENCE));
+      this.tapePitch = TAPE_RATE_MIN_PITCH * Math.pow(2, TAPE_RATE_PITCH_OCTAVES * speed);
+      this.tapePulseRate = TAPE_RATE_MIN_PULSE_HZ + TAPE_RATE_PULSE_SPAN_HZ * speed;
+      this.tapeParameterCountdown = 15;
+    }
+
+    this.tapeCarrierPhase += this.tapePitch / sampleRate;
+    this.tapeCarrierPhase -= Math.floor(this.tapeCarrierPhase);
+    this.tapePulsePhase += this.tapePulseRate / sampleRate;
+    this.tapePulsePhase -= Math.floor(this.tapePulsePhase);
+
+    const activityTarget = Math.min(1, this.tapeRateSmoothed / 8);
+    const activityStep = activityTarget > this.tapeActivity
+      ? this.tapeActivityAttackStep
+      : this.tapeActivityReleaseStep;
+    this.tapeActivity += (activityTarget - this.tapeActivity) * activityStep;
+
+    const duckTarget = cueLevel > 0.012 ? 0.28 : 1;
+    const duckStep = duckTarget < this.tapeDuck
+      ? this.tapeDuckAttackStep
+      : this.tapeDuckReleaseStep;
+    this.tapeDuck += (duckTarget - this.tapeDuck) * duckStep;
+
+    const carrier = SINE_TABLE[Math.floor(this.tapeCarrierPhase * SINE_TABLE_SIZE)];
+    let pulsePhase = this.tapePulsePhase + 0.75;
+    if (pulsePhase >= 1) pulsePhase -= 1;
+    const pulse = (1 + SINE_TABLE[Math.floor(pulsePhase * SINE_TABLE_SIZE)]) * 0.5;
+    const envelope = 0.16 + 0.84 * pulse * pulse * pulse;
+    return carrier * envelope * this.tapeActivity * this.tapeDuck * 0.32;
+  }
+
   process(inputs, outputs) {
     const output = outputs[0];
     if (!output || output.length === 0) return true;
     const left = output[0];
     const right = output[1] || output[0];
+    const tapeRateOutput = outputs[1];
+    const tapeRateLeft = tapeRateOutput && tapeRateOutput[0];
+    const tapeRateRight = tapeRateOutput && (tapeRateOutput[1] || tapeRateOutput[0]);
     left.fill(0);
     if (right !== left) right.fill(0);
+    if (tapeRateLeft) tapeRateLeft.fill(0);
+    if (tapeRateRight && tapeRateRight !== tapeRateLeft) tapeRateRight.fill(0);
 
     for (let sample = 0; sample < left.length; sample++) {
       const frame = currentFrame + sample;
@@ -240,6 +326,11 @@ class TapeMixerProcessor extends AudioWorkletProcessor {
       const value = Math.tanh(mixed);
       left[sample] = value;
       right[sample] = value;
+      if (tapeRateLeft) {
+        const tapeRateValue = this.renderTapeRateSample(Math.abs(mixed));
+        tapeRateLeft[sample] = tapeRateValue;
+        tapeRateRight[sample] = tapeRateValue;
+      }
     }
 
     if (this.queueOffset > 4096) {

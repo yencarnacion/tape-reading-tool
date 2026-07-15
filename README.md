@@ -106,8 +106,8 @@ Gateway farm-status messages are printed as `IBKR notice`; request and entitleme
 - Enter a ticker and press `Enter` or `GO`. The input selects its full contents on focus for quick replacement.
 - Use the arrow buttons and recent-ticker dropdown to revisit symbols.
 - Select the tick count from the toolbar. `CUSTOM` opens the controls panel.
-- Use `CONTROLS` to change visible bars, tape rows, pane visibility, size visibility, and every sound parameter. `Master` boosts overall output up to 200%; `Small prints` sets an audible floor for isolated, low-size trades.
-- Press `SOUND START` once to satisfy the browser's audio gesture requirement. The same control then mutes/unmutes the mixer.
+- Use `CONTROLS` to change visible bars, tape rows, pane visibility, size visibility, and every sound parameter. `Master` controls the existing print cues; `Tape speed sound` has its own mute and volume controls; `Small prints` sets an audible floor for isolated, low-size trades.
+- Press `SOUND START` once to satisfy the browser's audio gesture requirement. The same control then mutes/unmutes the existing print cues; the tape-speed background remains independent in `CONTROLS`.
 - Press `/` while outside an input to focus the ticker field.
 
 Browser settings are saved in local storage, so changes remain available on the next run without editing files.
@@ -132,12 +132,15 @@ IBKR callbacks do constant, bounded work: quote lookup, classification, and one 
 
 The canvas redraws only when data or dimensions change. Time and sales reuses a fixed DOM row pool. The audio worklet receives every delivered print and performs synthesis off the main thread with a fixed voice pool. Above 60 trades per second it progressively thins, shortens, and lowers only small-print cues; large prints always bypass that limiter and take priority over small voices.
 
+The optional tape-speed background follows the same rolling one-second rate shown in the `TAPE` metric. It maps speed to both a rising low-frequency pitch and a faster amplitude pulse: approximately 126 Hz / 3.8 Hz at 30 prints/s, 179 Hz / 6.6 Hz at 123 prints/s, 263 Hz / 9.6 Hz at 300 prints/s, and 360 Hz / 12 Hz at 500 prints/s. It runs on a separate gain path and automatically ducks beneath the existing print cues.
+
 ## Verify
 
 ```bash
 go test ./...
 go test -race ./...
 go build -buildvcs=false ./cmd/tape-reading-tool
+node scripts/audio-worklet-check.mjs
 ```
 
 With demo mode running, the dependency-free browser check drives local Chrome at the two target widths and saves screenshots under `/tmp`:

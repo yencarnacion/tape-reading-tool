@@ -54,6 +54,7 @@ func TestValidateRejectsInvalidTapeSettings(t *testing.T) {
 func TestValidateAudioGainRanges(t *testing.T) {
 	cfg := Defaults()
 	cfg.Audio.MasterVolume = 2
+	cfg.Audio.TapeRateVolume = 1
 	cfg.Audio.MinimumGain = 1.5
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("maximum audio gain values should be valid: %v", err)
@@ -62,6 +63,12 @@ func TestValidateAudioGainRanges(t *testing.T) {
 	cfg.Audio.MasterVolume = 2.01
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected master volume validation error")
+	}
+
+	cfg = Defaults()
+	cfg.Audio.TapeRateVolume = 1.01
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected tape rate volume validation error")
 	}
 
 	cfg = Defaults()

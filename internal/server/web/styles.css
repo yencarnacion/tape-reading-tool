@@ -122,6 +122,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .control-sections section { padding: 12px; }
 .control-sections section + section { border-left: 1px solid var(--line); }
 .control-sections h2 { margin: 0 0 9px; color: var(--yellow); font-size: 10px; }
+.control-sections h3 { margin: 14px 0 2px; color: var(--muted); font-size: 9px; letter-spacing: .08em; }
+.control-note { margin: 7px 0 0; color: var(--muted); font-size: 10px; line-height: 1.35; }
 .field-row, .switch-row, .range-row { min-height: 38px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line-soft); color: #c7cdd4; font-size: 12px; font-weight: 650; }
 .field-row input { width: 94px; height: 29px; padding: 0 6px; text-align: right; }
 .range-row { min-height: 52px; flex-direction: column; align-items: stretch; justify-content: center; gap: 4px; }

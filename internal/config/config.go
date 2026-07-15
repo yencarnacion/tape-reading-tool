@@ -58,15 +58,17 @@ type DisplayConfig struct {
 }
 
 type AudioConfig struct {
-	Enabled      bool    `yaml:"enabled" json:"enabled"`
-	MasterVolume float64 `yaml:"master_volume" json:"master_volume"`
-	MinimumGain  float64 `yaml:"minimum_gain" json:"minimum_gain"`
-	BuyPitchHz   float64 `yaml:"buy_pitch_hz" json:"buy_pitch_hz"`
-	SellPitchHz  float64 `yaml:"sell_pitch_hz" json:"sell_pitch_hz"`
-	DurationMS   float64 `yaml:"duration_ms" json:"duration_ms"`
-	LargeSize    float64 `yaml:"large_size" json:"large_size"`
-	LargeBoost   float64 `yaml:"large_boost" json:"large_boost"`
-	MaxVoices    int     `yaml:"max_voices" json:"max_voices"`
+	Enabled         bool    `yaml:"enabled" json:"enabled"`
+	MasterVolume    float64 `yaml:"master_volume" json:"master_volume"`
+	TapeRateEnabled bool    `yaml:"tape_rate_enabled" json:"tape_rate_enabled"`
+	TapeRateVolume  float64 `yaml:"tape_rate_volume" json:"tape_rate_volume"`
+	MinimumGain     float64 `yaml:"minimum_gain" json:"minimum_gain"`
+	BuyPitchHz      float64 `yaml:"buy_pitch_hz" json:"buy_pitch_hz"`
+	SellPitchHz     float64 `yaml:"sell_pitch_hz" json:"sell_pitch_hz"`
+	DurationMS      float64 `yaml:"duration_ms" json:"duration_ms"`
+	LargeSize       float64 `yaml:"large_size" json:"large_size"`
+	LargeBoost      float64 `yaml:"large_boost" json:"large_boost"`
+	MaxVoices       int     `yaml:"max_voices" json:"max_voices"`
 }
 
 func Defaults() Config {
@@ -86,7 +88,8 @@ func Defaults() Config {
 			ShowSize: true, ShowChart: true, ShowTape: true,
 		},
 		Audio: AudioConfig{
-			Enabled: true, MasterVolume: 0.45, MinimumGain: 0.65, BuyPitchHz: 660, SellPitchHz: 490,
+			Enabled: true, MasterVolume: 0.45, TapeRateEnabled: true, TapeRateVolume: 0.35,
+			MinimumGain: 0.65, BuyPitchHz: 660, SellPitchHz: 490,
 			DurationMS: 110, LargeSize: 1000, LargeBoost: 1.8, MaxVoices: 192,
 		},
 	}
@@ -151,8 +154,8 @@ func (c Config) Validate() error {
 	if c.Display.TickSize < 1 || c.Display.VisibleBars < 20 || c.Display.TapeRows < 10 {
 		return errors.New("display tick_size, visible_bars, and tape_rows are too small")
 	}
-	if c.Audio.MasterVolume < 0 || c.Audio.MasterVolume > 2 || c.Audio.MinimumGain < 0.1 || c.Audio.MinimumGain > 1.5 || c.Audio.BuyPitchHz <= 0 || c.Audio.SellPitchHz <= 0 {
-		return errors.New("audio volume must be 0..2, minimum_gain must be 0.1..1.5, and pitches must be positive")
+	if c.Audio.MasterVolume < 0 || c.Audio.MasterVolume > 2 || c.Audio.TapeRateVolume < 0 || c.Audio.TapeRateVolume > 1 || c.Audio.MinimumGain < 0.1 || c.Audio.MinimumGain > 1.5 || c.Audio.BuyPitchHz <= 0 || c.Audio.SellPitchHz <= 0 {
+		return errors.New("audio volume must be 0..2, tape_rate_volume must be 0..1, minimum_gain must be 0.1..1.5, and pitches must be positive")
 	}
 	if c.Audio.DurationMS <= 0 || c.Audio.LargeSize <= 0 || c.Audio.LargeBoost <= 0 || c.Audio.MaxVoices < 8 {
 		return errors.New("audio duration, large size/boost, and max voices are invalid")

@@ -54,6 +54,30 @@ try {
       await command('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 });
       await command('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 });
       await sleep(700);
+      const independence = await command('Runtime.evaluate', {
+        expression: `(() => {
+          const toggle = document.querySelector('#tapeRateEnabled');
+          const volume = document.querySelector('#tapeRateVolume');
+          const soundBefore = document.querySelector('#soundButton').textContent;
+          const originalVolume = volume.value;
+          toggle.click();
+          const savedMuted = JSON.parse(localStorage.getItem('tape-reading-tool.settings.v1')).audio.tapeRateEnabled;
+          const soundWhileMuted = document.querySelector('#soundButton').textContent;
+          toggle.click();
+          volume.value = '0.21';
+          volume.dispatchEvent(new Event('input', { bubbles: true }));
+          const savedVolume = JSON.parse(localStorage.getItem('tape-reading-tool.settings.v1')).audio.tapeRateVolume;
+          volume.value = originalVolume;
+          volume.dispatchEvent(new Event('input', { bubbles: true }));
+          return { soundBefore, soundWhileMuted, savedMuted, savedVolume, restored: toggle.checked };
+        })()`,
+        returnByValue: true
+      });
+      const independent = independence.result.value;
+      if (independent.soundBefore !== 'SOUND ON' || independent.soundWhileMuted !== 'SOUND ON' ||
+          independent.savedMuted !== false || independent.savedVolume !== 0.21 || independent.restored !== true) {
+        throw new Error(`tape-rate controls are not independent: ${JSON.stringify(independent)}`);
+      }
     }
     const inspection = await command('Runtime.evaluate', {
       expression: `(() => {
@@ -76,7 +100,9 @@ try {
           visibleTapeRows: rows.length,
           coloredCanvasSamples: colored,
           socketState: document.querySelector('#connectionState span')?.textContent,
-          soundState: document.querySelector('#soundButton')?.textContent
+          soundState: document.querySelector('#soundButton')?.textContent,
+          tapeRateSound: document.querySelector('#tapeRateEnabled')?.checked,
+          tapeRateVolume: document.querySelector('#tapeRateVolume')?.value
         };
       })()`,
       returnByValue: true
