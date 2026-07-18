@@ -35,10 +35,12 @@
     </header>
 
     <section class="metrics" aria-label="Tape metrics">
-      <div id="replayClock" class="replay-clock" hidden>
-        <span>REPLAY TIME</span>
-        <strong id="replayClockTime">--:--:--</strong>
-        <small>ET</small>
+      <div id="replayContext" class="replay-context" hidden>
+        <div id="replayClock" class="replay-clock">
+          <span>REPLAY TIME</span>
+          <strong id="replayClockTime">--:--:--</strong>
+          <small>ET</small>
+        </div>
       </div>
       <div class="metrics-group">
         <div class="metric price-metric">
@@ -107,6 +109,11 @@
         </section>
       </div>
       <aside id="tapePanel" class="tape-panel" aria-label="Time and sales">
+        <div id="replayRvol" class="replay-rvol building" title="Projected current one-minute volume versus the median of the previous 20 completed one-minute candles." hidden>
+          <div class="rvol-label"><span>RVOL PACE</span><small id="replayRvolState">BUILDING</small></div>
+          <strong id="replayRvolValue">--</strong>
+          <div class="rvol-track" aria-hidden="true"><i></i></div>
+        </div>
         <header class="tape-header">
           <span>PRICE</span><span id="sizeHeading">SIZE</span>
         </header>

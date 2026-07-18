@@ -42,7 +42,7 @@ try {
   await command('Runtime.enable');
 
   const results = [];
-  for (const width of [384, 634, 1372]) {
+  for (const width of [384, 634, 902, 1372]) {
     await command('Emulation.setDeviceMetricsOverride', { width, height: 1080, deviceScaleFactor: 1, mobile: false });
     await waitForApp();
     if (width === 384) {
@@ -103,6 +103,11 @@ try {
           last: document.querySelector('#lastPrice')?.textContent,
           maxDelta: document.querySelector('#maxDelta')?.textContent,
           minDelta: document.querySelector('#minDelta')?.textContent,
+          replayRvol: document.querySelector('#replayRvolValue')?.textContent,
+          replayRvolState: document.querySelector('#replayRvolState')?.textContent,
+          replayRvolVisible: getComputedStyle(document.querySelector('#replayRvol')).display !== 'none',
+          replayRvolFontSize: parseFloat(getComputedStyle(document.querySelector('#replayRvolValue')).fontSize),
+          lastPriceFontSize: parseFloat(getComputedStyle(document.querySelector('#lastPrice')).fontSize),
           visibleTapeRows: rows.length,
           coloredCanvasSamples: colored,
           replayChartVisible: !document.querySelector('#replayMarketPanel')?.hidden,
@@ -141,6 +146,10 @@ try {
     }
     if (checked.socketState === 'PAUSED' && (!checked.replayChartVisible || checked.replayColoredCanvasSamples < 10)) {
       throw new Error(`replay minute chart failed at ${width}px: ${JSON.stringify(checked)}`);
+    }
+    if (checked.socketState === 'PAUSED' && (!checked.replayRvolVisible || !/^[0-9]+(?:\.[0-9])?×$/.test(checked.replayRvol) ||
+        !['QUIET', 'NORMAL', 'ELEVATED', 'SURGE'].includes(checked.replayRvolState) || checked.replayRvolFontSize < checked.lastPriceFontSize)) {
+      throw new Error(`replay RVOL cue failed at ${width}px: ${JSON.stringify(checked)}`);
     }
     const screenshot = await command('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false }, 20000);
     const path = `/tmp/tape-reading-tool-${width}.png`;
