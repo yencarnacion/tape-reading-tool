@@ -35,13 +35,15 @@
     </header>
 
     <section class="metrics" aria-label="Tape metrics">
-      <div class="metric price-metric">
-        <span>LAST</span>
-        <div class="price-values"><strong id="lastPrice">--</strong><output id="priceChange" class="price-change" aria-live="polite">--</output></div>
+      <div class="metrics-group">
+        <div class="metric price-metric">
+          <span>LAST</span>
+          <div class="price-values"><strong id="lastPrice">--</strong><output id="priceChange" class="price-change" aria-live="polite">--</output></div>
+        </div>
+        <div class="metric positive"><span>MAX DELTA</span><strong id="maxDelta">0</strong></div>
+        <div class="metric negative"><span>MIN DELTA</span><strong id="minDelta">0</strong></div>
+        <div class="metric rate"><span>TAPE</span><strong id="tapeRate">0/s</strong></div>
       </div>
-      <div class="metric positive"><span>MAX DELTA</span><strong id="maxDelta">0</strong></div>
-      <div class="metric negative"><span>MIN DELTA</span><strong id="minDelta">0</strong></div>
-      <div class="metric rate"><span>TAPE</span><strong id="tapeRate">0/s</strong></div>
     </section>
 
     <section id="workspace" class="workspace">

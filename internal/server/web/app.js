@@ -782,8 +782,8 @@
     drawReplayIndicator('lower', '#f2f5f7', 1, 0.72);
     drawReplayIndicator('upper', '#f2f5f7', 1, 0.72);
     drawReplayIndicator('sma20', '#56c7ff', 1.4, 1);
-    drawReplayIndicator('sma9', '#ff4d5e', 1.4, 1);
-    drawReplayIndicator('vwap', '#ffd447', 1.7, 1);
+    drawReplayIndicator('sma9', '#ff4d5e', 2.2, 1);
+    drawReplayIndicator('vwap', '#ffd447', 2.6, 1);
 
     replayContext.strokeStyle = '#3a424c';
     replayContext.beginPath(); replayContext.moveTo(left, volumeTop); replayContext.lineTo(width, volumeTop); replayContext.stroke();
