@@ -110,6 +110,14 @@ try {
           lastPriceFontSize: parseFloat(getComputedStyle(document.querySelector('#lastPrice')).fontSize),
           rollingValueFontSize: parseFloat(getComputedStyle(document.querySelector('.rolling-row.primary .metric-cell output')).fontSize),
           rollingWindowFontSize: parseFloat(getComputedStyle(document.querySelector('.rolling-row.primary .window-cell strong')).fontSize),
+          marketClock: document.querySelector('#marketClockTime')?.textContent,
+          marketClockLabel: document.querySelector('#marketClockLabel')?.textContent,
+          marketClockVisible: getComputedStyle(document.querySelector('#marketClock')).display !== 'none',
+          marketClockFontSize: parseFloat(getComputedStyle(document.querySelector('#marketClockTime')).fontSize),
+          marketClockRect: (() => { const rect = document.querySelector('#marketClock').getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom, height: rect.height }; })(),
+          chartPanelRect: (() => { const rect = document.querySelector('#chartPanel').getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom, height: rect.height }; })(),
+          rollingPanelBottom: document.querySelector('#rollingPanel').getBoundingClientRect().bottom,
+          footerClockPresent: Boolean(document.querySelector('#clockText')),
           visibleTapeRows: rows.length,
           coloredCanvasSamples: colored,
           replayChartVisible: !document.querySelector('#replayMarketPanel')?.hidden,
@@ -159,6 +167,12 @@ try {
     const expectedRollingFontSize = checked.rollingPanelClientWidth > 430 ? 20 : 15;
     if (checked.rollingValueFontSize < expectedRollingFontSize || checked.rollingWindowFontSize < (checked.rollingPanelClientWidth > 430 ? 21 : 17)) {
       throw new Error(`rolling typography is too small at ${width}px: ${JSON.stringify(checked)}`);
+    }
+    const expectedClockLabel = checked.replayChartVisible ? 'REPLAY TIME' : 'MARKET TIME';
+    if (!checked.marketClockVisible || !/^\d{2}:\d{2}:\d{2}$/.test(checked.marketClock) || checked.marketClockLabel !== expectedClockLabel ||
+        checked.marketClockFontSize < checked.lastPriceFontSize || checked.footerClockPresent || Math.abs(checked.marketClockRect.height - 54) > 0.5 ||
+        Math.abs(checked.marketClockRect.bottom - checked.chartPanelRect.bottom) > 0.5 || checked.marketClockRect.top <= checked.rollingPanelBottom) {
+      throw new Error(`market clock placement failed at ${width}px: ${JSON.stringify(checked)}`);
     }
     const screenshot = await command('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false }, 20000);
     const path = `/tmp/tape-reading-tool-${width}.png`;

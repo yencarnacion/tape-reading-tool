@@ -35,13 +35,6 @@
     </header>
 
     <section class="metrics" aria-label="Tape metrics">
-      <div id="replayContext" class="replay-context" hidden>
-        <div id="replayClock" class="replay-clock">
-          <span>REPLAY TIME</span>
-          <strong id="replayClockTime">--:--:--</strong>
-          <small>ET</small>
-        </div>
-      </div>
       <div class="metrics-group">
         <div class="metric price-metric">
           <span>LAST</span>
@@ -106,6 +99,11 @@
           </div>
         </section>
           <div id="chartEmpty" class="chart-empty">WAITING FOR PRINTS</div>
+          <div id="marketClock" class="market-clock" aria-label="Market time in New York">
+            <span id="marketClockLabel">MARKET TIME</span>
+            <strong id="marketClockTime">--:--:--</strong>
+            <small>ET</small>
+          </div>
         </section>
       </div>
       <aside id="tapePanel" class="tape-panel" aria-label="Time and sales">
@@ -124,7 +122,6 @@
     <footer class="statusbar">
       <span id="quoteText">BID -- / ASK --</span>
       <span id="streamText">0 PRINTS</span>
-      <span id="clockText">--:--:-- ET</span>
     </footer>
   </main>
 

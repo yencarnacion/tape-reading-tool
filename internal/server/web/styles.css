@@ -78,25 +78,26 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
-.replay-context {
-  height: 54px;
-  display: block;
-}
-.replay-context[hidden] { display: none; }
-.replay-clock {
+.market-clock {
+  position: absolute;
+  z-index: 3;
+  right: 0;
+  bottom: 0;
+  left: 0;
   height: 54px;
   display: flex;
   align-items: baseline;
   justify-content: flex-end;
   gap: 8px;
-  padding: 10px 18px 7px 8px;
-  border-right: 1px solid var(--line-soft);
+  padding: 10px 12px 7px 8px;
+  border-top: 1px solid var(--line);
+  background: #10141a;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   white-space: nowrap;
 }
-.replay-clock span { color: var(--muted); font-size: 9px; font-weight: 800; }
-.replay-clock strong { color: var(--yellow); font-size: 26px; line-height: 29px; }
-.replay-clock small { color: var(--muted); font-size: 10px; font-weight: 800; }
+.market-clock span { color: var(--muted); font-size: 9px; font-weight: 800; }
+.market-clock strong { color: var(--yellow); font-size: 26px; line-height: 29px; }
+.market-clock small { color: var(--muted); font-size: 10px; font-weight: 800; }
 .relative-volume {
   --rvol-color: var(--muted);
   --rvol-width: 0%;
@@ -167,7 +168,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 
 .chart-panel { container-type: inline-size; position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #0c0f13; }
 #chartCanvas { display: block; width: 100%; height: 100%; }
-.chart-empty { position: absolute; z-index: 1; inset: 0; display: grid; place-items: end center; padding-bottom: 28px; color: #606975; font-size: 12px; font-weight: 800; pointer-events: none; }
+.chart-empty { position: absolute; z-index: 1; inset: 0 0 54px; display: grid; place-items: end center; padding-bottom: 28px; color: #606975; font-size: 12px; font-weight: 800; pointer-events: none; }
 .chart-empty.hidden { display: none; }
 
 .rolling-panel {
@@ -318,7 +319,6 @@ input[type="range"] { width: 100%; height: 5px; padding: 0; accent-color: var(--
 }
 
 @media (max-width: 900px) {
-  .replay-context { display: none; }
   .workspace.replay-mode .visual-stack { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, .9fr) minmax(0, 1.1fr); }
   .workspace.replay-mode .replay-market-panel { border-right: 0; border-bottom: 1px solid #3b434e; }
 }
@@ -328,7 +328,6 @@ input[type="range"] { width: 100%; height: 5px; padding: 0; accent-color: var(--
     display: grid;
     grid-template-columns: minmax(0, 1.55fr) minmax(320px, .9fr) clamp(124px, 23vw, 174px);
   }
-  body:has(.workspace.replay-mode) .replay-context { grid-column: 1; }
   body:has(.workspace.replay-mode) .metrics-group { grid-column: 2 / 4; }
 }
 

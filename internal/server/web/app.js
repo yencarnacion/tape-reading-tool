@@ -24,9 +24,9 @@
     historyBack: $('historyBack'), historyForward: $('historyForward'), tickSelect: $('tickSelect'),
     soundButton: $('soundButton'), replayButton: $('replayButton'), controlsButton: $('controlsButton'), connectionState: $('connectionState'),
     lastPrice: $('lastPrice'), priceChange: $('priceChange'), maxDelta: $('maxDelta'), minDelta: $('minDelta'), tapeRate: $('tapeRate'),
-    replayContext: $('replayContext'), replayClock: $('replayClock'), replayClockTime: $('replayClockTime'),
+    marketClock: $('marketClock'), marketClockLabel: $('marketClockLabel'), marketClockTime: $('marketClockTime'),
     relativeVolume: $('relativeVolume'), relativeVolumeValue: $('relativeVolumeValue'), relativeVolumeState: $('relativeVolumeState'),
-    quoteText: $('quoteText'), streamText: $('streamText'), clockText: $('clockText'),
+    quoteText: $('quoteText'), streamText: $('streamText'),
     dialog: $('controlsDialog'), resetControls: $('resetControls'),
     customTicks: $('customTicks'), visibleBars: $('visibleBars'), tapeRowCount: $('tapeRowCount'),
     showChart: $('showChart'), showTape: $('showTape'), showSize: $('showSize'),
@@ -544,6 +544,8 @@
     const right = width - rightAxis;
     const top = 7;
     const bottom = 20;
+    const clockHeight = 54;
+    const plotBottom = height - clockHeight;
     const usable = height - top - bottom;
     const paneGap = 8;
     const minimumRollingHeight = width <= 350 ? 224 : 184;
@@ -555,7 +557,7 @@
     const rollingTop = deltaBottom + paneGap;
     const rollingBottom = rollingTop + rollingPaneHeight;
     const priceTop = rollingBottom + paneGap;
-    const priceBottom = height - bottom;
+    const priceBottom = plotBottom - bottom;
     positionRollingPanel(rollingTop, rollingBottom);
     if (width < 80 || height < 120 || !state.bars.length) {
       elements.chartEmpty.classList.toggle('hidden', state.bars.length > 0);
@@ -646,7 +648,7 @@
     context.textBaseline = 'bottom';
     labelIndexes.forEach((index, labelIndex) => {
       context.textAlign = labelIndex === 0 ? 'left' : labelIndex === labelIndexes.length - 1 ? 'right' : 'center';
-      context.fillText(formatTime(visible[index].time), xAt(index), height - 2);
+      context.fillText(formatTime(visible[index].time), xAt(index), plotBottom - 2);
     });
 
     const last = visible[visible.length - 1];
@@ -920,7 +922,6 @@
     const replayMode = status?.mode === 'replay';
     const relativeVolumeMode = ['live', 'massive', 'demo', 'replay'].includes(String(status?.mode || '').toLowerCase());
     elements.replayButton.hidden = !replayMode;
-    elements.replayContext.hidden = !replayMode;
     elements.relativeVolume.hidden = !relativeVolumeMode;
     elements.replayMarketPanel.hidden = !replayMode;
     elements.workspace.classList.toggle('replay-mode', replayMode);
@@ -1405,8 +1406,10 @@
     const clockValue = new Intl.DateTimeFormat('en-US', {
       timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
     }).format(clockDate);
-    elements.clockText.textContent = `${replayMode ? (replayHasTimeline ? clockValue : '--:--:--') : clockValue} ET`;
-    if (replayMode) elements.replayClockTime.textContent = replayHasTimeline ? clockValue : '--:--:--';
+    const displayedClock = replayMode ? (replayHasTimeline ? clockValue : '--:--:--') : clockValue;
+    elements.marketClockLabel.textContent = replayMode ? 'REPLAY TIME' : 'MARKET TIME';
+    elements.marketClockTime.textContent = displayedClock;
+    elements.marketClock.setAttribute('aria-label', `${replayMode ? 'Replay' : 'New York market'} time ${displayedClock} Eastern Time`);
   }
 
   function animationLoop(now) {
