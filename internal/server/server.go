@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -22,10 +23,19 @@ import (
 var webFS embed.FS
 
 type Server struct {
-	cfg      config.Config
-	store    *tape.Store
-	feed     feed.Feed
-	upgrader websocket.Upgrader
+	cfg            config.Config
+	store          *tape.Store
+	feed           feed.Feed
+	upgrader       websocket.Upgrader
+	rvolMu         sync.Mutex
+	rvolCache      map[string]rvolHistoryCache
+	rvolMinuteBars func(context.Context, string, time.Time, int) ([]storage.MinuteBar, error)
+	now            func() time.Time
+}
+
+type rvolHistoryCache struct {
+	throughUS int64
+	bars      []storage.MinuteBar
 }
 
 type streamMessage struct {
@@ -44,13 +54,20 @@ type streamMessage struct {
 }
 
 func New(cfg config.Config, store *tape.Store, source feed.Feed) *Server {
-	return &Server{
+	server := &Server{
 		cfg: cfg, store: store, feed: source,
+		rvolCache: make(map[string]rvolHistoryCache), now: time.Now,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize: 4096, WriteBufferSize: 64 * 1024,
 			CheckOrigin: sameOrigin,
 		},
 	}
+	if source, ok := source.(interface {
+		RVOLMinuteBars(context.Context, string, time.Time, int) ([]storage.MinuteBar, error)
+	}); ok {
+		server.rvolMinuteBars = source.RVOLMinuteBars
+	}
+	return server
 }
 
 func (s *Server) Serve(ctx context.Context) error {
@@ -58,6 +75,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/ticker", s.handleTicker)
 	mux.HandleFunc("/api/replay", s.handleReplay)
+	mux.HandleFunc("/api/rvol-history", s.handleRVOLHistory)
 	mux.HandleFunc("/ws", s.handleWebSocket)
 
 	sub, err := fs.Sub(webFS, "web")
@@ -90,6 +108,49 @@ func (s *Server) Serve(ctx context.Context) error {
 		}
 		return err
 	}
+}
+
+func (s *Server) handleRVOLHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	mode := strings.ToLower(s.store.Status().Mode)
+	if mode != "live" {
+		http.Error(w, "RVOL history warmup is available only for the IBKR live feed", http.StatusConflict)
+		return
+	}
+	if s.rvolMinuteBars == nil {
+		http.Error(w, "IBKR live history is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	symbol := tape.NormalizeSymbol(r.URL.Query().Get("symbol"))
+	if symbol == "" {
+		symbol = s.store.Active()
+	}
+	through := s.now().UTC().Truncate(time.Minute)
+	throughUS := through.UnixMicro()
+
+	// Serialize cache misses so several browser tabs opened at the bell still
+	// produce only one small aggregate request. This mutex is never used by the
+	// feed or WebSocket path, so the tape remains independent of REST latency.
+	s.rvolMu.Lock()
+	defer s.rvolMu.Unlock()
+	entry, cached := s.rvolCache[symbol]
+	if !cached || entry.throughUS != throughUS {
+		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		defer cancel()
+		bars, err := s.rvolMinuteBars(ctx, symbol, through, 40)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		entry = rvolHistoryCache{throughUS: throughUS, bars: append([]storage.MinuteBar(nil), bars...)}
+		s.rvolCache[symbol] = entry
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"symbol": symbol, "provider": "ibkr", "through_us": entry.throughUS, "bars": entry.bars,
+	})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

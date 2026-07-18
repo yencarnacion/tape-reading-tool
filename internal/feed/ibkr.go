@@ -19,13 +19,14 @@ type IBKR struct {
 	store    *tape.Store
 	commands chan string
 
-	mu         sync.RWMutex
-	reqSymbols map[int64]string
-	subs       map[string]*subscription
-	nextReqID  int64
-	usage      uint64
-	client     *ibapi.EClient
-	recorder   *storage.Database
+	mu          sync.RWMutex
+	reqSymbols  map[int64]string
+	subs        map[string]*subscription
+	barRequests map[int64]*ibkrBarRequest
+	nextReqID   int64
+	usage       uint64
+	client      *ibapi.EClient
+	recorder    *storage.Database
 
 	statsMu sync.Mutex
 	stats   map[string]*streamStats
@@ -66,7 +67,7 @@ func newIBWrapper(feed *IBKR) *ibWrapper {
 func NewIBKR(cfg config.IBKRConfig, store *tape.Store, recorder *storage.Database) *IBKR {
 	return &IBKR{
 		cfg: cfg, store: store, recorder: recorder, commands: make(chan string, 32),
-		reqSymbols: make(map[int64]string), subs: make(map[string]*subscription), nextReqID: 1000,
+		reqSymbols: make(map[int64]string), subs: make(map[string]*subscription), barRequests: make(map[int64]*ibkrBarRequest), nextReqID: 1000,
 		stats: make(map[string]*streamStats),
 	}
 }
@@ -168,8 +169,19 @@ func (f *IBKR) Run(ctx context.Context) {
 
 func (f *IBKR) setClient(client *ibapi.EClient) {
 	f.mu.Lock()
+	pending := make([]*ibkrBarRequest, 0)
+	if client == nil {
+		for reqID, request := range f.barRequests {
+			pending = append(pending, request)
+			delete(f.barRequests, reqID)
+			delete(f.reqSymbols, reqID)
+		}
+	}
 	f.client = client
 	f.mu.Unlock()
+	for _, request := range pending {
+		request.result <- ibkrBarResult{err: fmt.Errorf("IBKR connection closed during RVOL history request")}
+	}
 }
 
 func (f *IBKR) resetSubscriptions() {
@@ -330,6 +342,10 @@ func (w *ibWrapper) Error(reqID ibapi.TickerID, errTime, errCode int64, errStrin
 	symbol := w.feed.symbolFor(reqID)
 	if isIBKRNotice(errCode) {
 		log.Printf("IBKR notice req=%d symbol=%s code=%d message=%q", reqID, symbol, errCode, errString)
+		return
+	}
+	if w.feed.failBarRequest(reqID, fmt.Errorf("IBKR %d: %s", errCode, errString)) {
+		log.Printf("IBKR RVOL history error req=%d symbol=%s code=%d message=%q", reqID, symbol, errCode, errString)
 		return
 	}
 	log.Printf("IBKR error req=%d symbol=%s code=%d message=%q", reqID, symbol, errCode, errString)

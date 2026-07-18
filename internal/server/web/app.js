@@ -48,7 +48,8 @@
     navSymbols: [], navIndex: -1, lastMetricUpdate: 0,
     prefixBase: { volume: 0, buyer: 0, seller: 0, prints: 0 }, midpoints: [],
     serverClockUS: 0, serverClockAt: 0, replay: null, replayConfig: null,
-    minuteBars: [], replayChartEndUS: 0, replayChartKey: '', dirtyReplayChart: true
+    minuteBars: [], replayChartEndUS: 0, replayChartKey: '', dirtyReplayChart: true,
+    rvolWarmup: { symbol: '', ready: false, pending: false, attempt: 0, token: 0, timer: null, controller: null }
   };
 
   const horizonElements = new Map(HORIZONS.map((seconds) => {
@@ -278,6 +279,7 @@
       ensureTapePool();
       state.dirtyTape = true;
       setConnection(state.status);
+      resetRVOLWarmup();
       const chartKey = `${state.symbol}|${state.replayConfig?.source || 'live'}|${state.replayConfig?.provider || 'all'}`;
       if (state.status.mode === 'replay' && state.replayChartKey !== chartKey) {
         state.replayChartKey = chartKey;
@@ -308,6 +310,7 @@
         }
         state.status = message.status;
         setConnection(message.status);
+        ensureRVOLWarmup();
       }
       if (message.history) {
         state.history = message.history;
@@ -477,6 +480,79 @@
     for (const trade of state.trades) {
       if ((Number(trade.r) || 0) > state.replayChartEndUS) addTradeToMinuteBars(trade);
     }
+    state.dirtyReplayChart = true;
+  }
+
+  function resetRVOLWarmup() {
+    const warmup = state.rvolWarmup;
+    clearTimeout(warmup.timer);
+    warmup.timer = null;
+    warmup.controller?.abort();
+    warmup.symbol = state.symbol;
+    warmup.ready = false;
+    warmup.pending = false;
+    warmup.attempt = 0;
+    warmup.token++;
+    ensureRVOLWarmup();
+  }
+
+  function ensureRVOLWarmup() {
+    const warmup = state.rvolWarmup;
+    if (String(state.status?.mode || '').toLowerCase() !== 'live' || warmup.ready || warmup.pending || warmup.timer || warmup.symbol !== state.symbol) return;
+    void loadRVOLWarmup(warmup.token, state.symbol);
+  }
+
+  async function loadRVOLWarmup(token, symbol) {
+    const warmup = state.rvolWarmup;
+    if (token !== warmup.token || symbol !== state.symbol) return;
+    warmup.pending = true;
+    const controller = new AbortController();
+    warmup.controller = controller;
+    try {
+      const response = await fetch(`/api/rvol-history?symbol=${encodeURIComponent(symbol)}`, { signal: controller.signal });
+      if (!response.ok) throw new Error(await response.text());
+      const payload = await response.json();
+      if (token !== warmup.token || symbol !== state.symbol) return;
+      mergeRVOLWarmupBars(payload.bars, payload.through_us);
+      warmup.ready = true;
+      warmup.attempt = 0;
+      clearTimeout(warmup.timer);
+      warmup.timer = null;
+    } catch (error) {
+      if (error?.name === 'AbortError' || token !== warmup.token || symbol !== state.symbol) return;
+      warmup.attempt++;
+      const delay = Math.min(15000, 1000 * (2 ** Math.min(4, warmup.attempt)));
+      clearTimeout(warmup.timer);
+      warmup.timer = setTimeout(() => {
+        warmup.timer = null;
+        ensureRVOLWarmup();
+      }, delay);
+    } finally {
+      if (token === warmup.token) {
+        warmup.pending = false;
+        warmup.controller = null;
+      }
+    }
+  }
+
+  function mergeRVOLWarmupBars(rawBars, throughUS) {
+    const boundary = Number(throughUS) || 0;
+    if (boundary <= 0) return;
+    const merged = new Map();
+    for (const raw of Array.isArray(rawBars) ? rawBars : []) {
+      const bar = {
+        timeUS: Number(raw.time_us), open: Number(raw.open), high: Number(raw.high), low: Number(raw.low),
+        close: Number(raw.close), volume: Number(raw.volume) || 0, dollarVolume: Number(raw.dollar_volume) || 0
+      };
+      if (bar.timeUS > 0 && bar.timeUS < boundary && bar.close > 0) merged.set(bar.timeUS, bar);
+    }
+    // The IBKR bars are authoritative for completed minutes. Keep only local
+    // receipt-time candles at and after the request boundary, including the
+    // forming candle and anything that arrived while the request was in flight.
+    for (const bar of state.minuteBars) {
+      if (Number(bar.timeUS) >= boundary) merged.set(Number(bar.timeUS), bar);
+    }
+    state.minuteBars = [...merged.values()].sort((left, right) => left.timeUS - right.timeUS).slice(-2000);
     state.dirtyReplayChart = true;
   }
 
