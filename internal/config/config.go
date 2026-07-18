@@ -84,9 +84,10 @@ type StorageConfig struct {
 }
 
 type ReplayConfig struct {
-	Source   string  `yaml:"source" json:"source"`
-	Provider string  `yaml:"provider" json:"provider"`
-	Speed    float64 `yaml:"speed" json:"speed"`
+	Source            string  `yaml:"source" json:"source"`
+	Provider          string  `yaml:"provider" json:"provider"`
+	Speed             float64 `yaml:"speed" json:"speed"`
+	ChartRightGapBars int     `yaml:"chart_right_gap_bars" json:"chart_right_gap_bars"`
 }
 
 type MassiveConfig struct {
@@ -119,7 +120,7 @@ func Defaults() Config {
 			Enabled: true, Path: "data/tape.db", QueueSize: 262144,
 			BatchSize: 2048, FlushInterval: "50ms", HistoricalRequestInterval: "11s",
 		},
-		Replay:  ReplayConfig{Source: "live", Provider: "all", Speed: 1},
+		Replay:  ReplayConfig{Source: "live", Provider: "all", Speed: 1, ChartRightGapBars: 5},
 		Massive: MassiveConfig{Feed: "realtime"},
 	}
 }
@@ -206,6 +207,9 @@ func (c Config) Validate() error {
 	}
 	if c.Replay.Speed < 0.1 || c.Replay.Speed > 20 {
 		return errors.New("replay.speed must be between 0.1 and 20")
+	}
+	if c.Replay.ChartRightGapBars < 5 || c.Replay.ChartRightGapBars > 100 {
+		return errors.New("replay.chart_right_gap_bars must be between 5 and 100")
 	}
 	if c.Massive.Feed != "realtime" && c.Massive.Feed != "delayed" {
 		return errors.New("massive.feed must be realtime or delayed")

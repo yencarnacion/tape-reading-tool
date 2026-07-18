@@ -131,7 +131,9 @@ Start replay mode against the local database:
 
 Open the browser and press `REPLAY`. Pick the provider/data source, start and end time, and speed, then press `PLAY`. `PAUSE` freezes the tape and all three receipt-time horizons. Enter any local date and minute in `Go to minute`, then press `GO` to clear the old tape and resume from that minute. `RESUME` continues from the exact stored event after the pause.
 
-On desktop, replay places the one-minute market chart beside the current tape-reading tool and keeps time and sales on the right. Yellow is exact trade-weighted VWAP beginning at 09:30 ET, red is the 9-period simple moving average, blue is the 20-period simple moving average, and white is the 20-period Bollinger envelope at two population standard deviations. Volume is rendered in a dedicated pane below price. Compact screens stack the market chart above the tape tool.
+On desktop, replay places the one-minute market chart beside the current tape-reading tool and keeps time and sales on the right. The prominent `REPLAY TIME` clock above the chart follows the replay receipt timeline, freezes on pause, and jumps with `Go to minute`. Yellow is exact trade-weighted VWAP beginning at 09:30 ET, red is the 9-period simple moving average, blue is the 20-period simple moving average, and white is the 20-period Bollinger envelope at two population standard deviations. Volume is rendered in a dedicated pane below price. Compact screens stack the market chart above the tape tool and show replay time in the footer.
+
+`replay.chart_right_gap_bars` in `config.yaml` controls the empty space between the newest candle and the price axis. It defaults to 5 and accepts values from 5 through 100.
 
 For Massive/IBKR historical records, the provider event timestamp acts as the replay receipt clock because no downloader can recover the original local arrival time. Live recordings preserve and replay the actual microsecond server receipt timestamp.
 

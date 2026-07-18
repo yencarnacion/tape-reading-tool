@@ -21,6 +21,7 @@
     historyBack: $('historyBack'), historyForward: $('historyForward'), tickSelect: $('tickSelect'),
     soundButton: $('soundButton'), replayButton: $('replayButton'), controlsButton: $('controlsButton'), connectionState: $('connectionState'),
     lastPrice: $('lastPrice'), priceChange: $('priceChange'), maxDelta: $('maxDelta'), minDelta: $('minDelta'), tapeRate: $('tapeRate'),
+    replayClock: $('replayClock'), replayClockTime: $('replayClockTime'),
     quoteText: $('quoteText'), streamText: $('streamText'), clockText: $('clockText'),
     dialog: $('controlsDialog'), resetControls: $('resetControls'),
     customTicks: $('customTicks'), visibleBars: $('visibleBars'), tapeRowCount: $('tapeRowCount'),
@@ -716,11 +717,12 @@
     const volumeBottom = height - axisBottom;
     const volumeTop = volumeBottom - volumeHeight;
     const priceBottom = volumeTop - paneGap;
-    const capacity = Math.max(24, Math.min(180, Math.floor((right - left) / (width < 500 ? 5 : 7))));
+    const rightGapBars = Math.max(5, Math.min(100, Math.round(Number(state.replayConfig?.chart_right_gap_bars) || 5)));
+    const capacity = Math.max(24, Math.min(180, Math.floor((right - left) / (width < 500 ? 5 : 7)) - rightGapBars));
     const start = Math.max(0, state.minuteBars.length - capacity);
     const visible = state.minuteBars.slice(start);
     const visibleIndicators = indicators.slice(start);
-    const step = (right - left) / visible.length;
+    const step = (right - left) / (visible.length + rightGapBars);
     const xAt = (index) => left + (index + 0.5) * step;
 
     let minimum = Infinity;
@@ -913,6 +915,7 @@
     elements.connectionState.title = status?.message || stateName;
     const replayMode = status?.mode === 'replay';
     elements.replayButton.hidden = !replayMode;
+    elements.replayClock.hidden = !replayMode;
     elements.replayMarketPanel.hidden = !replayMode;
     elements.workspace.classList.toggle('replay-mode', replayMode);
     state.dirtyReplayChart = true;
@@ -1336,9 +1339,15 @@
     elements.lastPrice.textContent = last ? formatPrice(last.p) : '--';
     updatePriceChange(last?.p, state.quote.previous_close);
     elements.streamText.textContent = `${formatSize(state.trades.length)} PRINTS${state.dropped ? ` / ${formatSize(state.dropped)} LAGGED` : ''}`;
-    elements.clockText.textContent = `${new Intl.DateTimeFormat('en-US', {
+    const replayMode = state.status?.mode === 'replay';
+    const replayState = String(state.replay?.state || state.status?.state || '').toLowerCase();
+    const replayHasTimeline = replayMode && receiptNowUS && replayState !== 'ready' && replayState !== 'stopped';
+    const clockDate = replayHasTimeline ? new Date(receiptNowUS / 1000) : new Date();
+    const clockValue = new Intl.DateTimeFormat('en-US', {
       timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
-    }).format(new Date())} ET`;
+    }).format(clockDate);
+    elements.clockText.textContent = `${replayMode ? (replayHasTimeline ? clockValue : '--:--:--') : clockValue} ET`;
+    if (replayMode) elements.replayClockTime.textContent = replayHasTimeline ? clockValue : '--:--:--';
   }
 
   function animationLoop(now) {

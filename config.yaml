@@ -57,6 +57,7 @@ replay:
   source: live
   provider: all
   speed: 1
+  chart_right_gap_bars: 5
 
 massive:
   # Keep the key in MASSIVE_API_KEY in .env, not in this file.

@@ -55,6 +55,26 @@ func TestValidateRejectsInvalidTapeSettings(t *testing.T) {
 	}
 }
 
+func TestReplayChartRightGapBars(t *testing.T) {
+	cfg := Defaults()
+	if cfg.Replay.ChartRightGapBars != 5 {
+		t.Fatalf("default replay chart right gap = %d, want 5", cfg.Replay.ChartRightGapBars)
+	}
+
+	for _, gap := range []int{5, 100} {
+		cfg.Replay.ChartRightGapBars = gap
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("gap %d should be valid: %v", gap, err)
+		}
+	}
+	for _, gap := range []int{4, 101} {
+		cfg.Replay.ChartRightGapBars = gap
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("gap %d should be invalid", gap)
+		}
+	}
+}
+
 func TestValidateAudioGainRanges(t *testing.T) {
 	cfg := Defaults()
 	cfg.Audio.MasterVolume = 2
