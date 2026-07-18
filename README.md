@@ -110,6 +110,8 @@ Massive is the preferred backfill for tape practice because its historical stock
 
 Use `-rth` to retain only 09:30–16:00 ET. Re-running an identical provider/symbol/range replaces that slice rather than duplicating it.
 
+Large Massive downloads automatically retry transient HTTP/TCP failures with bounded exponential backoff. A retry resumes inclusively from the last SIP nanosecond and suppresses already-processed sequence records at that timestamp, so it neither restarts the day nor duplicates the resume boundary.
+
 IBKR backfill is also available while TWS or IB Gateway is running:
 
 ```bash
