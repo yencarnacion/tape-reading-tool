@@ -10,6 +10,7 @@ import (
 
 	"github.com/scmhub/ibapi"
 	"tape-reading-tool/internal/config"
+	"tape-reading-tool/internal/storage"
 	"tape-reading-tool/internal/tape"
 )
 
@@ -24,6 +25,7 @@ type IBKR struct {
 	nextReqID  int64
 	usage      uint64
 	client     *ibapi.EClient
+	recorder   *storage.Database
 
 	statsMu sync.Mutex
 	stats   map[string]*streamStats
@@ -61,9 +63,9 @@ func newIBWrapper(feed *IBKR) *ibWrapper {
 	}
 }
 
-func NewIBKR(cfg config.IBKRConfig, store *tape.Store) *IBKR {
+func NewIBKR(cfg config.IBKRConfig, store *tape.Store, recorder *storage.Database) *IBKR {
 	return &IBKR{
-		cfg: cfg, store: store, commands: make(chan string, 32),
+		cfg: cfg, store: store, recorder: recorder, commands: make(chan string, 32),
 		reqSymbols: make(map[int64]string), subs: make(map[string]*subscription), nextReqID: 1000,
 		stats: make(map[string]*streamStats),
 	}
@@ -253,7 +255,16 @@ func (w *ibWrapper) TickByTickAllLast(reqID int64, tickType int64, unixTime int6
 	}
 	now := time.Now()
 	first := w.feed.recordTrade(symbol, now)
-	w.feed.store.AddTrade(symbol, time.Unix(unixTime, 0), now, price, size.Float())
+	trade := w.feed.store.AddTrade(symbol, time.Unix(unixTime, 0), now, price, size.Float())
+	if w.feed.recorder != nil {
+		w.feed.recorder.RecordTrade(storage.TradeRecord{
+			Symbol: symbol, EventUS: trade.ReceivedUS, ReceivedUS: trade.ReceivedUS,
+			ExchangeTimeMS: trade.ExchangeTimeMS, Price: trade.Price, Size: trade.Size,
+			Class: trade.Class, Side: trade.Side, Bid: trade.Bid, Ask: trade.Ask,
+			Exchange: exchange, Conditions: specialConditions, Source: "live",
+			Provider: "ibkr",
+		})
+	}
 	if first {
 		log.Printf("IBKR first trade symbol=%s req=%d price=%g size=%s exchange=%q tick_type=%d", symbol, reqID, price, size.String(), exchange, tickType)
 	}
@@ -264,17 +275,24 @@ func (w *ibWrapper) TickPrice(reqID ibapi.TickerID, tickType ibapi.TickType, pri
 	if symbol == "" {
 		return
 	}
+	now := time.Now()
+	var quote tape.Quote
+	record := true
 	switch tickType {
 	case ibapi.BID, ibapi.DELAYED_BID:
-		w.feed.store.UpdateQuote(symbol, price, 0, -1, -1)
+		quote = w.feed.store.UpdateQuote(symbol, price, 0, -1, -1)
 	case ibapi.ASK, ibapi.DELAYED_ASK:
-		w.feed.store.UpdateQuote(symbol, 0, price, -1, -1)
+		quote = w.feed.store.UpdateQuote(symbol, 0, price, -1, -1)
 	case ibapi.CLOSE, ibapi.DELAYED_CLOSE:
 		w.feed.store.UpdatePreviousClose(symbol, price)
+		record = false
 	default:
 		return
 	}
-	if w.feed.recordQuote(symbol, time.Now()) {
+	if record {
+		w.feed.recordQuoteSnapshot(symbol, now, quote)
+	}
+	if w.feed.recordQuote(symbol, now) {
 		log.Printf("IBKR first quote symbol=%s req=%d field=%s price=%g", symbol, reqID, ibapi.TickName(tickType), price)
 	}
 }
@@ -284,12 +302,28 @@ func (w *ibWrapper) TickSize(reqID ibapi.TickerID, tickType ibapi.TickType, size
 	if symbol == "" {
 		return
 	}
+	now := time.Now()
+	var quote tape.Quote
 	switch tickType {
 	case ibapi.BID_SIZE, ibapi.DELAYED_BID_SIZE:
-		w.feed.store.UpdateQuote(symbol, 0, 0, size.Float(), -1)
+		quote = w.feed.store.UpdateQuote(symbol, 0, 0, size.Float(), -1)
 	case ibapi.ASK_SIZE, ibapi.DELAYED_ASK_SIZE:
-		w.feed.store.UpdateQuote(symbol, 0, 0, -1, size.Float())
+		quote = w.feed.store.UpdateQuote(symbol, 0, 0, -1, size.Float())
+	default:
+		return
 	}
+	w.feed.recordQuoteSnapshot(symbol, now, quote)
+}
+
+func (f *IBKR) recordQuoteSnapshot(symbol string, at time.Time, quote tape.Quote) {
+	if f.recorder == nil {
+		return
+	}
+	f.recorder.RecordQuote(storage.QuoteRecord{
+		Symbol: symbol, EventUS: at.UnixMicro(), ReceivedUS: at.UnixMicro(),
+		Bid: quote.Bid, Ask: quote.Ask, BidSize: quote.BidSize, AskSize: quote.AskSize, Source: "live",
+		Provider: "ibkr",
+	})
 }
 
 func (w *ibWrapper) Error(reqID ibapi.TickerID, errTime, errCode int64, errString, advancedOrderRejectJSON string) {
@@ -363,10 +397,17 @@ func (f *IBKR) logDiagnostics(client *ibapi.EClient) {
 	stats := *f.statsForLocked(symbol)
 	f.statsMu.Unlock()
 	log.Printf(
-		"IBKR heartbeat connected=%v symbol=%s bid=%g ask=%g trades=%d quotes=%d last_trade=%s last_quote=%s state=%s message=%q",
+		"IBKR heartbeat connected=%v symbol=%s bid=%g ask=%g trades=%d quotes=%d last_trade=%s last_quote=%s recorder_dropped=%d state=%s message=%q",
 		client.IsConnected(), symbol, snapshot.Quote.Bid, snapshot.Quote.Ask, stats.trades, stats.quotes,
-		formatDiagnosticTime(stats.lastTradeAt), formatDiagnosticTime(stats.lastQuoteAt), snapshot.Status.State, snapshot.Status.Message,
+		formatDiagnosticTime(stats.lastTradeAt), formatDiagnosticTime(stats.lastQuoteAt), f.recorderDropped(), snapshot.Status.State, snapshot.Status.Message,
 	)
+}
+
+func (f *IBKR) recorderDropped() uint64 {
+	if f.recorder == nil {
+		return 0
+	}
+	return f.recorder.Dropped()
 }
 
 func formatDiagnosticTime(value time.Time) string {

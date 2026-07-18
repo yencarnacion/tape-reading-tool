@@ -32,6 +32,23 @@ func TestTradeClassificationAndDirection(t *testing.T) {
 	}
 }
 
+func TestTradeKeepsMicrosecondReceiptTimeSeparateFromExchangeTime(t *testing.T) {
+	store := NewStore("AAPL", 100, 4)
+	exchangeTime := time.Unix(1_700_000_000, 0)
+	received := time.Unix(1_700_000_001, 987_654_000)
+	trade := store.AddTrade("AAPL", exchangeTime, received, 100, 25)
+
+	if trade.ExchangeTimeMS != exchangeTime.UnixMilli() {
+		t.Fatalf("exchange time = %d, want %d", trade.ExchangeTimeMS, exchangeTime.UnixMilli())
+	}
+	if trade.ReceivedUS != received.UnixMicro() {
+		t.Fatalf("receipt time = %d, want %d", trade.ReceivedUS, received.UnixMicro())
+	}
+	if trade.ReceivedUS%1000 != 654 {
+		t.Fatalf("receipt time lost sub-millisecond precision: %d", trade.ReceivedUS)
+	}
+}
+
 func TestBetweenTradesUseTickRule(t *testing.T) {
 	store := NewStore("AAPL", 100, 4)
 	now := time.Unix(1_700_000_000, 0)
@@ -83,5 +100,23 @@ func TestActivateMaintainsMRUHistory(t *testing.T) {
 	}
 	if store.Activate("bad symbol") {
 		t.Fatal("invalid symbol was accepted")
+	}
+}
+
+func TestClearPreservesSequenceAndAdvancesGeneration(t *testing.T) {
+	store := NewStore("AAPL", 100, 4)
+	now := time.Now()
+	first := store.AddTrade("AAPL", now, now, 100, 10)
+	generation := store.Generation("AAPL")
+	store.Clear("AAPL")
+	second := store.AddTrade("AAPL", now, now, 101, 20)
+	if second.Seq <= first.Seq {
+		t.Fatalf("sequence was reused: first=%d second=%d", first.Seq, second.Seq)
+	}
+	if store.Generation("AAPL") != generation+1 {
+		t.Fatalf("generation = %d, want %d", store.Generation("AAPL"), generation+1)
+	}
+	if snapshot := store.Snapshot("AAPL", 10); len(snapshot.Trades) != 1 || snapshot.Trades[0].Price != 101 {
+		t.Fatalf("snapshot after clear = %+v", snapshot.Trades)
 	}
 }

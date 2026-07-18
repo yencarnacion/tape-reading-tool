@@ -46,11 +46,12 @@ type FeedStatus struct {
 }
 
 type Snapshot struct {
-	Symbol  string     `json:"symbol"`
-	Quote   Quote      `json:"quote"`
-	Trades  []Trade    `json:"trades"`
-	History []string   `json:"history"`
-	Status  FeedStatus `json:"status"`
+	Symbol     string     `json:"symbol"`
+	Quote      Quote      `json:"quote"`
+	Trades     []Trade    `json:"trades"`
+	History    []string   `json:"history"`
+	Status     FeedStatus `json:"status"`
+	Generation uint64     `json:"generation"`
 }
 
 type Store struct {
@@ -64,15 +65,16 @@ type Store struct {
 }
 
 type symbolTape struct {
-	mu        sync.RWMutex
-	symbol    string
-	items     []Trade
-	start     int
-	count     int
-	nextSeq   uint64
-	quote     Quote
-	lastPrice float64
-	lastSide  int8
+	mu         sync.RWMutex
+	symbol     string
+	items      []Trade
+	start      int
+	count      int
+	nextSeq    uint64
+	quote      Quote
+	lastPrice  float64
+	lastSide   int8
+	generation uint64
 }
 
 func NewStore(defaultSymbol string, ringSize, historySize int) *Store {
@@ -146,10 +148,10 @@ func (s *Store) Status() FeedStatus {
 	return s.status
 }
 
-func (s *Store) UpdateQuote(symbol string, bid, ask, bidSize, askSize float64) {
+func (s *Store) UpdateQuote(symbol string, bid, ask, bidSize, askSize float64) Quote {
 	tape := s.getOrCreate(symbol)
 	if tape == nil {
-		return
+		return Quote{}
 	}
 	tape.mu.Lock()
 	if bid > 0 {
@@ -164,7 +166,9 @@ func (s *Store) UpdateQuote(symbol string, bid, ask, bidSize, askSize float64) {
 	if askSize >= 0 {
 		tape.quote.AskSize = askSize
 	}
+	quote := tape.quote
 	tape.mu.Unlock()
+	return quote
 }
 
 // UpdatePreviousClose records the reference close supplied by the market-data feed.
@@ -186,6 +190,14 @@ func (s *Store) AddTrade(symbol string, exchangeTime time.Time, received time.Ti
 	return tape.add(exchangeTime, received, price, size)
 }
 
+func (s *Store) AddRecordedTrade(symbol string, exchangeTime, received time.Time, price, size float64, class Classification, side int8, bid, ask float64) Trade {
+	tape := s.getOrCreate(symbol)
+	if tape == nil || price <= 0 || size < 0 {
+		return Trade{}
+	}
+	return tape.addRecorded(exchangeTime, received, price, size, class, side, bid, ask)
+}
+
 func (s *Store) Snapshot(symbol string, limit int) Snapshot {
 	s.mu.RLock()
 	if symbol == "" {
@@ -199,7 +211,34 @@ func (s *Store) Snapshot(symbol string, limit int) Snapshot {
 		return Snapshot{Symbol: symbol, History: history, Status: status}
 	}
 	trades, quote := tape.snapshot(limit)
-	return Snapshot{Symbol: symbol, Quote: quote, Trades: trades, History: history, Status: status}
+	return Snapshot{Symbol: symbol, Quote: quote, Trades: trades, History: history, Status: status, Generation: tape.Generation()}
+}
+
+func (s *Store) Generation(symbol string) uint64 {
+	s.mu.RLock()
+	tape := s.tapes[symbol]
+	s.mu.RUnlock()
+	if tape == nil {
+		return 0
+	}
+	return tape.Generation()
+}
+
+// Clear resets one symbol without reusing sequence numbers. Generation tells
+// connected browsers to discard the previous replay before new prints arrive.
+func (s *Store) Clear(symbol string) {
+	tape := s.getOrCreate(symbol)
+	if tape == nil {
+		return
+	}
+	tape.mu.Lock()
+	tape.start = 0
+	tape.count = 0
+	tape.quote = Quote{}
+	tape.lastPrice = 0
+	tape.lastSide = 0
+	tape.generation++
+	tape.mu.Unlock()
 }
 
 func (s *Store) Since(symbol string, seq uint64, limit int) (trades []Trade, quote Quote, dropped uint64, more bool) {
@@ -233,7 +272,13 @@ func (s *Store) getOrCreate(symbol string) *symbolTape {
 }
 
 func newSymbolTape(symbol string, size int) *symbolTape {
-	return &symbolTape{symbol: symbol, items: make([]Trade, size), nextSeq: 1}
+	return &symbolTape{symbol: symbol, items: make([]Trade, size), nextSeq: 1, generation: 1}
+}
+
+func (t *symbolTape) Generation() uint64 {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.generation
 }
 
 func (t *symbolTape) add(exchangeTime, received time.Time, price, size float64) Trade {
@@ -241,9 +286,28 @@ func (t *symbolTape) add(exchangeTime, received time.Time, price, size float64) 
 	defer t.mu.Unlock()
 	class := classify(price, t.quote.Bid, t.quote.Ask)
 	side := direction(class, price, t.lastPrice, t.lastSide)
+	return t.appendLocked(exchangeTime, received, price, size, class, side, t.quote.Bid, t.quote.Ask)
+}
+
+func (t *symbolTape) addRecorded(exchangeTime, received time.Time, price, size float64, class Classification, side int8, bid, ask float64) Trade {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if class == "" {
+		class = classify(price, t.quote.Bid, t.quote.Ask)
+	}
+	if bid <= 0 {
+		bid = t.quote.Bid
+	}
+	if ask <= 0 {
+		ask = t.quote.Ask
+	}
+	return t.appendLocked(exchangeTime, received, price, size, class, side, bid, ask)
+}
+
+func (t *symbolTape) appendLocked(exchangeTime, received time.Time, price, size float64, class Classification, side int8, bid, ask float64) Trade {
 	trade := Trade{
 		Seq: t.nextSeq, ExchangeTimeMS: exchangeTime.UnixMilli(), ReceivedUS: received.UnixMicro(),
-		Price: price, Size: size, Class: class, Side: side, Bid: t.quote.Bid, Ask: t.quote.Ask,
+		Price: price, Size: size, Class: class, Side: side, Bid: bid, Ask: ask,
 	}
 	t.nextSeq++
 	if t.count < len(t.items) {

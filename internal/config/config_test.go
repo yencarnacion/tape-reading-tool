@@ -12,6 +12,7 @@ func TestLoadAppliesEnvironmentOverrides(t *testing.T) {
 	t.Setenv("IBKR_CLIENT_ID", "123")
 	t.Setenv("DEFAULT_TICKER", "nvda")
 	t.Setenv("PORT", "9191")
+	t.Setenv("MASSIVE_API_KEY", "test-key-not-a-secret")
 
 	cfg, err := Load("")
 	if err != nil {
@@ -22,6 +23,9 @@ func TestLoadAppliesEnvironmentOverrides(t *testing.T) {
 	}
 	if cfg.Tape.DefaultSymbol != "NVDA" || cfg.App.Addr != ":9191" {
 		t.Fatalf("app overrides not applied: app=%+v tape=%+v", cfg.App, cfg.Tape)
+	}
+	if cfg.Massive.APIKey != "test-key-not-a-secret" {
+		t.Fatal("Massive API key override not applied")
 	}
 }
 

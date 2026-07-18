@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"tape-reading-tool/internal/config"
 	"tape-reading-tool/internal/feed"
+	"tape-reading-tool/internal/storage"
 	"tape-reading-tool/internal/tape"
 )
 
@@ -37,6 +38,7 @@ type streamMessage struct {
 	Status       *tape.FeedStatus      `json:"status,omitempty"`
 	Display      *config.DisplayConfig `json:"display,omitempty"`
 	Audio        *config.AudioConfig   `json:"audio,omitempty"`
+	ReplayConfig *config.ReplayConfig  `json:"replay_config,omitempty"`
 	Dropped      uint64                `json:"dropped,omitempty"`
 	ServerTimeMS int64                 `json:"server_time_ms,omitempty"`
 }
@@ -55,6 +57,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/ticker", s.handleTicker)
+	mux.HandleFunc("/api/replay", s.handleReplay)
 	mux.HandleFunc("/ws", s.handleWebSocket)
 
 	sub, err := fs.Sub(webFS, "web")
@@ -127,6 +130,110 @@ func (s *Server) handleTicker(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"symbol": symbol, "history": s.store.Symbols()})
 }
 
+func (s *Server) handleReplay(w http.ResponseWriter, r *http.Request) {
+	replay, ok := s.feed.(*feed.Replay)
+	if !ok {
+		http.Error(w, "start the application in replay mode", http.StatusConflict)
+		return
+	}
+	if r.Method == http.MethodGet {
+		symbol := tape.NormalizeSymbol(r.URL.Query().Get("symbol"))
+		if symbol == "" {
+			symbol = s.store.Active()
+		}
+		source := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("source")))
+		if source == "" {
+			source = s.cfg.Replay.Source
+		}
+		provider := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("provider")))
+		if provider == "" {
+			provider = s.cfg.Replay.Provider
+		}
+		dataRange, err := replay.DataRange(r.Context(), symbol, source, provider)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		replayStatus := replay.Status()
+		if dataRange.Trades == 0 || dataRange.StartUS <= 0 {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"range": dataRange, "replay": replayStatus,
+				"chart_bars": []storage.MinuteBar{}, "chart_end_us": int64(0),
+			})
+			return
+		}
+		chartEndUS := replayStatus.PositionUS
+		if replayStatus.Symbol != symbol || chartEndUS <= 0 {
+			chartEndUS = dataRange.StartUS
+		}
+		chartStartUS := replayChartDayStart(chartEndUS, dataRange.StartUS, s.cfg.App.Timezone)
+		chartBars, err := replay.MinuteBars(r.Context(), symbol, source, provider, chartStartUS, chartEndUS)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"range": dataRange, "replay": replayStatus,
+			"chart_bars": chartBars, "chart_end_us": chartEndUS,
+		})
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	defer r.Body.Close()
+	var request struct {
+		Action   string  `json:"action"`
+		Symbol   string  `json:"symbol"`
+		Source   string  `json:"source"`
+		Provider string  `json:"provider"`
+		StartUS  int64   `json:"start_us"`
+		EndUS    int64   `json:"end_us"`
+		TargetUS int64   `json:"target_us"`
+		Speed    float64 `json:"speed"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	var err error
+	switch strings.ToLower(request.Action) {
+	case "start":
+		err = replay.Start(feed.ReplayRequest{Symbol: request.Symbol, Source: request.Source, Provider: request.Provider, StartUS: request.StartUS, EndUS: request.EndUS, Speed: request.Speed})
+	case "pause":
+		err = replay.Pause()
+	case "resume":
+		err = replay.Resume()
+	case "seek":
+		err = replay.Seek(request.TargetUS)
+	case "stop":
+		replay.Stop()
+	default:
+		err = fmt.Errorf("unknown replay action %q", request.Action)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, replay.Status())
+}
+
+func replayChartDayStart(positionUS, dataStartUS int64, timezone string) int64 {
+	location, err := time.LoadLocation(timezone)
+	if err != nil {
+		return dataStartUS
+	}
+	position := time.UnixMicro(positionUS).In(location)
+	dayStart := time.Date(position.Year(), position.Month(), position.Day(), 0, 0, 0, 0, location).UnixMicro()
+	if dayStart > dataStartUS {
+		return dayStart
+	}
+	return dataStartUS
+}
+
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -162,6 +269,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	generation := s.store.Generation(symbol)
 	for {
 		select {
 		case <-done:
@@ -176,6 +284,15 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				if err != nil {
 					return
 				}
+				generation = s.store.Generation(symbol)
+				continue
+			}
+			if current := s.store.Generation(symbol); current != generation {
+				seq, err = s.writeSnapshot(conn, symbol)
+				if err != nil {
+					return
+				}
+				generation = current
 				continue
 			}
 			for drain := 0; drain < 8; drain++ {
@@ -198,7 +315,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		case <-statusTicker.C:
 			status := s.store.Status()
 			if err := writeWebSocketJSON(conn, streamMessage{
-				Type: "status", Symbol: symbol, Status: &status, History: s.store.Symbols(), ServerTimeMS: time.Now().UnixMilli(),
+				Type: "status", Symbol: symbol, Status: &status, History: s.store.Symbols(), ServerTimeMS: s.streamTimeMS(),
 			}); err != nil {
 				return
 			}
@@ -215,7 +332,7 @@ func (s *Server) writeSnapshot(conn *websocket.Conn, symbol string) (uint64, err
 	snapshot := s.store.Snapshot(symbol, s.cfg.Tape.SnapshotTrades)
 	message := streamMessage{
 		Type: "snapshot", Symbol: symbol, Snapshot: &snapshot,
-		Display: &s.cfg.Display, Audio: &s.cfg.Audio, ServerTimeMS: time.Now().UnixMilli(),
+		Display: &s.cfg.Display, Audio: &s.cfg.Audio, ReplayConfig: &s.cfg.Replay, ServerTimeMS: s.streamTimeMS(),
 	}
 	if err := writeWebSocketJSON(conn, message); err != nil {
 		return 0, err
@@ -224,6 +341,17 @@ func (s *Server) writeSnapshot(conn *websocket.Conn, symbol string) (uint64, err
 		return 0, nil
 	}
 	return snapshot.Trades[len(snapshot.Trades)-1].Seq, nil
+}
+
+// streamTimeMS follows the replay timeline so receipt-time rolling windows
+// survive pause, seek, and browser reload. Live feeds use the server clock.
+func (s *Server) streamTimeMS() int64 {
+	if replay, ok := s.feed.(*feed.Replay); ok {
+		if position := replay.Status().PositionUS; position > 0 {
+			return position / 1000
+		}
+	}
+	return time.Now().UnixMilli()
 }
 
 func writeWebSocketJSON(conn *websocket.Conn, value any) error {

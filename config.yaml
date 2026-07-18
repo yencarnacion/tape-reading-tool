@@ -44,3 +44,21 @@ audio:
   large_size: 1000
   large_boost: 1.8
   max_voices: 192
+
+storage:
+  enabled: true
+  path: data/tape.db
+  queue_size: 262144
+  batch_size: 2048
+  flush_interval: 50ms
+  historical_request_interval: 11s
+
+replay:
+  source: live
+  provider: all
+  speed: 1
+
+massive:
+  # Keep the key in MASSIVE_API_KEY in .env, not in this file.
+  api_key: ""
+  feed: realtime

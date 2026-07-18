@@ -42,7 +42,7 @@ try {
   await command('Runtime.enable');
 
   const results = [];
-  for (const width of [384, 634]) {
+  for (const width of [384, 634, 1372]) {
     await command('Emulation.setDeviceMetricsOverride', { width, height: 1080, deviceScaleFactor: 1, mobile: false });
     await waitForApp();
     if (width === 384) {
@@ -82,11 +82,17 @@ try {
     const inspection = await command('Runtime.evaluate', {
       expression: `(() => {
         const canvas = document.querySelector('#chartCanvas');
+        const replayCanvas = document.querySelector('#replayChartCanvas');
         const rows = [...document.querySelectorAll('.tape-row')].filter(row => !row.hidden);
         const pixels = canvas?.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data || [];
         let colored = 0;
         for (let i = 0; i < pixels.length; i += 64) {
           if (pixels[i] > 30 || pixels[i + 1] > 30 || pixels[i + 2] > 30) colored++;
+        }
+        const replayPixels = replayCanvas?.getContext('2d').getImageData(0, 0, replayCanvas.width, replayCanvas.height).data || [];
+        let replayColored = 0;
+        for (let i = 0; i < replayPixels.length; i += 64) {
+          if (replayPixels[i] > 30 || replayPixels[i + 1] > 30 || replayPixels[i + 2] > 30) replayColored++;
         }
         return {
           href: location.href,
@@ -99,21 +105,47 @@ try {
           minDelta: document.querySelector('#minDelta')?.textContent,
           visibleTapeRows: rows.length,
           coloredCanvasSamples: colored,
+          replayChartVisible: !document.querySelector('#replayMarketPanel')?.hidden,
+          replayChartWidth: replayCanvas?.clientWidth,
+          replayChartHeight: replayCanvas?.clientHeight,
+          replayColoredCanvasSamples: replayColored,
           socketState: document.querySelector('#connectionState span')?.textContent,
           soundState: document.querySelector('#soundButton')?.textContent,
           tapeRateSound: document.querySelector('#tapeRateEnabled')?.checked,
-          tapeRateVolume: document.querySelector('#tapeRateVolume')?.value
+          tapeRateVolume: document.querySelector('#tapeRateVolume')?.value,
+          horizons: [...document.querySelectorAll('.rolling-row')].map(row => ({
+            seconds: row.dataset.horizon,
+            volume: row.querySelector('.volume')?.textContent,
+            buyer: row.querySelector('.buyer-volume')?.textContent,
+            seller: row.querySelector('.seller-volume')?.textContent,
+            delta: row.querySelector('.signed-delta')?.textContent,
+            deltaPercent: row.querySelector('.delta-percent')?.textContent,
+            sharesRate: row.querySelector('.shares-rate')?.textContent,
+            printsRate: row.querySelector('.prints-rate')?.textContent,
+            midChange: row.querySelector('.mid-change')?.textContent,
+            pace: row.querySelector('.relative-pace')?.textContent,
+            winner: row.querySelector('.winner')?.textContent
+          })),
+          rollingPanelWidth: document.querySelector('#rollingPanel')?.scrollWidth,
+          rollingPanelClientWidth: document.querySelector('#rollingPanel')?.clientWidth
         };
       })()`,
       returnByValue: true
     });
     console.error(`browser check ${width}px:`, JSON.stringify(inspection.result.value));
-    await command('Emulation.setVirtualTimePolicy', { policy: 'pause' });
+    const checked = inspection.result.value;
+    if (checked.rollingPanelWidth !== checked.rollingPanelClientWidth || checked.horizons?.length !== 3 ||
+        checked.horizons.some(row => !row.volume || !row.buyer || !row.seller || !row.delta || !row.deltaPercent ||
+          !row.sharesRate || !row.printsRate || !row.midChange || !row.pace || !row.winner)) {
+      throw new Error(`rolling horizon panel failed at ${width}px: ${JSON.stringify(checked)}`);
+    }
+    if (checked.socketState === 'PAUSED' && (!checked.replayChartVisible || checked.replayColoredCanvasSamples < 10)) {
+      throw new Error(`replay minute chart failed at ${width}px: ${JSON.stringify(checked)}`);
+    }
     const screenshot = await command('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false }, 20000);
     const path = `/tmp/tape-reading-tool-${width}.png`;
     writeFileSync(path, Buffer.from(screenshot.data, 'base64'));
     results.push({ ...inspection.result.value, screenshot: path });
-    await command('Emulation.setVirtualTimePolicy', { policy: 'advance', budget: 1 });
   }
   console.log(JSON.stringify(results, null, 2));
 } finally {

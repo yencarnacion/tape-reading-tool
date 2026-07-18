@@ -17,6 +17,9 @@ type Config struct {
 	Tape    TapeConfig    `yaml:"tape" json:"tape"`
 	Display DisplayConfig `yaml:"display" json:"display"`
 	Audio   AudioConfig   `yaml:"audio" json:"audio"`
+	Storage StorageConfig `yaml:"storage" json:"storage"`
+	Replay  ReplayConfig  `yaml:"replay" json:"replay"`
+	Massive MassiveConfig `yaml:"massive" json:"massive"`
 }
 
 type AppConfig struct {
@@ -71,6 +74,26 @@ type AudioConfig struct {
 	MaxVoices       int     `yaml:"max_voices" json:"max_voices"`
 }
 
+type StorageConfig struct {
+	Enabled                   bool   `yaml:"enabled" json:"enabled"`
+	Path                      string `yaml:"path" json:"path"`
+	QueueSize                 int    `yaml:"queue_size" json:"queue_size"`
+	BatchSize                 int    `yaml:"batch_size" json:"batch_size"`
+	FlushInterval             string `yaml:"flush_interval" json:"flush_interval"`
+	HistoricalRequestInterval string `yaml:"historical_request_interval" json:"historical_request_interval"`
+}
+
+type ReplayConfig struct {
+	Source   string  `yaml:"source" json:"source"`
+	Provider string  `yaml:"provider" json:"provider"`
+	Speed    float64 `yaml:"speed" json:"speed"`
+}
+
+type MassiveConfig struct {
+	APIKey string `yaml:"api_key" json:"-"`
+	Feed   string `yaml:"feed" json:"feed"`
+}
+
 func Defaults() Config {
 	return Config{
 		App: AppConfig{Name: "tape-reading-tool", Addr: ":8097", Timezone: "America/New_York"},
@@ -92,6 +115,12 @@ func Defaults() Config {
 			MinimumGain: 0.65, BuyPitchHz: 660, SellPitchHz: 490,
 			DurationMS: 110, LargeSize: 1000, LargeBoost: 1.8, MaxVoices: 192,
 		},
+		Storage: StorageConfig{
+			Enabled: true, Path: "data/tape.db", QueueSize: 262144,
+			BatchSize: 2048, FlushInterval: "50ms", HistoricalRequestInterval: "11s",
+		},
+		Replay:  ReplayConfig{Source: "live", Provider: "all", Speed: 1},
+		Massive: MassiveConfig{Feed: "realtime"},
 	}
 }
 
@@ -160,6 +189,27 @@ func (c Config) Validate() error {
 	if c.Audio.DurationMS <= 0 || c.Audio.LargeSize <= 0 || c.Audio.LargeBoost <= 0 || c.Audio.MaxVoices < 8 {
 		return errors.New("audio duration, large size/boost, and max voices are invalid")
 	}
+	if c.Storage.Path == "" || c.Storage.QueueSize < 1024 || c.Storage.BatchSize < 1 || c.Storage.BatchSize > c.Storage.QueueSize {
+		return errors.New("storage path, queue_size, and batch_size are invalid")
+	}
+	if _, err := time.ParseDuration(c.Storage.FlushInterval); err != nil {
+		return fmt.Errorf("storage.flush_interval: %w", err)
+	}
+	if _, err := time.ParseDuration(c.Storage.HistoricalRequestInterval); err != nil {
+		return fmt.Errorf("storage.historical_request_interval: %w", err)
+	}
+	if c.Replay.Source != "live" && c.Replay.Source != "historical" && c.Replay.Source != "all" {
+		return errors.New("replay.source must be live, historical, or all")
+	}
+	if c.Replay.Provider != "ibkr" && c.Replay.Provider != "massive" && c.Replay.Provider != "all" {
+		return errors.New("replay.provider must be ibkr, massive, or all")
+	}
+	if c.Replay.Speed < 0.1 || c.Replay.Speed > 20 {
+		return errors.New("replay.speed must be between 0.1 and 20")
+	}
+	if c.Massive.Feed != "realtime" && c.Massive.Feed != "delayed" {
+		return errors.New("massive.feed must be realtime or delayed")
+	}
 	return nil
 }
 
@@ -213,6 +263,9 @@ func applyEnv(c *Config) error {
 	}
 	if value := normalizeSymbol(os.Getenv("DEFAULT_TICKER")); value != "" {
 		c.Tape.DefaultSymbol = value
+	}
+	if value := strings.TrimSpace(os.Getenv("MASSIVE_API_KEY")); value != "" {
+		c.Massive.APIKey = value
 	}
 	if value := strings.TrimSpace(os.Getenv("PORT")); value != "" {
 		port, err := strconv.Atoi(value)

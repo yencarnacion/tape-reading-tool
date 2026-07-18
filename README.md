@@ -1,19 +1,25 @@
 # tape-reading-tool
 
-A compact, real-time IBKR tape reader for split-second scalping. It renders tick bars, trade volume, volume delta, and a narrow color-coded time-and-sales stream. Every received print is also sent to a low-latency browser audio mixer.
+A compact tape reader for split-second scalping with IBKR or Massive market data. It renders tick bars, rolling 5/15/60-second tape pressure, and a narrow color-coded time-and-sales stream. Live trades and quotes can be recorded to SQLite and replayed later.
 
 ![Tape Reading Tool showing live tick bars, volume delta, and time and sales](docs/assets/tape-reading-tool.gif)
 
 ## What it does
 
 - Connects to TWS or IB Gateway through the socket API.
+- Can alternatively use the official Massive Go client for REST backfills and a live stocks WebSocket.
 - Requests `AllLast` tick-by-tick trades and a top-of-book quote stream.
 - Aggregates `1T`, `10T`, `100T`, `1000T`, or custom tick bars in the browser.
-- Keeps volume and volume delta aligned with the price pane.
+- Shows total, buyer, and seller volume; signed delta and delta percent; shares and prints per second; midpoint movement in ticks; and relative pace for rolling 5, 15, and 60-second horizons.
+- Treats 15 seconds as the primary tradeable pressure cycle, with 5 seconds for ignition and 60 seconds for context.
 - Shows the maximum positive and minimum negative delta in large text.
 - Retains a recent ticker history and caches a configurable number of IBKR subscriptions for fast switching back.
 - Runs the sound path through an `AudioWorklet` mixer with distinct buy/sell timbres and size-sensitive emphasis.
 - Batches WebSocket delivery at frame-scale intervals without threshold-filtering prints.
+- Records live trades and quotes with server-side microsecond receipt times using an asynchronous, batched SQLite writer.
+- Downloads IBKR or Massive historical trades and quotes for backfill.
+- Replays a selected range at 0.25x–10x with pause, resume, stop, and go-to-minute seeking.
+- Adds a replay-only one-minute candlestick chart with 09:30 session VWAP, 9 SMA, 20 SMA, 20-period/2-deviation Bollinger bands, and volume in its own pane.
 
 The program is read-only. It does not place or manage orders.
 
@@ -23,6 +29,7 @@ The program is read-only. It does not place or manage orders.
 - TWS or IB Gateway running locally or on a reachable host.
 - The TWS socket API enabled and the configured client ID available.
 - Live market-data permissions for the instruments being watched.
+- For Massive mode or backfill, a Massive subscription that includes the requested stock trades/quotes and a `MASSIVE_API_KEY`.
 - A current Chromium, Chrome, Firefox, or Safari browser with AudioWorklet support.
 
 IBKR's tick-by-tick behavior and request restrictions are documented in the [official tick-by-tick guide](https://interactivebrokers.github.io/tws-api/tick_data.html).
@@ -37,7 +44,10 @@ IBKR_PORT=7497
 IBKR_CLIENT_ID=97
 DEFAULT_TICKER=AAPL
 PORT=8097
+MASSIVE_API_KEY=replace_with_your_massive_api_key
 ```
+
+Keep the real Massive key only in `.env`; `.env` and the `data/` recording directory are ignored by Git. The app loads `.env` automatically. `config.yaml` deliberately leaves `massive.api_key` blank.
 
 Common socket ports are `7497` for TWS paper, `7496` for TWS live, `4002` for Gateway paper, and `4001` for Gateway live. Confirm the port in the API settings of the running TWS/Gateway instance.
 
@@ -73,6 +83,14 @@ Connect to IBKR:
 ./go.sh live
 ```
 
+Connect to the Massive live stocks feed instead:
+
+```bash
+./go.sh massive -symbol IONQ
+```
+
+Both live modes continuously record trades and quotes into `data/tape.db`. Recording uses a large non-blocking queue, WAL mode, and batched commits so SQLite disk I/O does not run inside the feed callback. The terminal heartbeat reports dropped recording events if the queue is ever saturated.
+
 Then open [http://localhost:8097](http://localhost:8097). `Ctrl-C` shuts down the HTTP server and IBKR connection cleanly.
 
 An alternate config or listen address can be supplied from the CLI:
@@ -80,6 +98,40 @@ An alternate config or listen address can be supplied from the CLI:
 ```bash
 ./go.sh live -config config.yaml -addr :8098
 ```
+
+## Historical backfill
+
+Massive is the preferred backfill for tape practice because its historical stock records provide precise SIP timestamps and the official Go client handles paginated REST results. Download one interval with:
+
+```bash
+./go.sh download -provider massive -symbol IONQ \
+  -start "2026-07-17 04:00:00" -end "2026-07-17 20:00:00"
+```
+
+Use `-rth` to retain only 09:30–16:00 ET. Re-running an identical provider/symbol/range replaces that slice rather than duplicating it.
+
+IBKR backfill is also available while TWS or IB Gateway is running:
+
+```bash
+./go.sh download -provider ibkr -symbol IONQ \
+  -start "2026-07-17 04:00:00" -end "2026-07-17 20:00:00"
+```
+
+IBKR uses a separate client ID and deliberately paced `reqHistoricalTicks` pages. Its historical timestamps have one-second resolution, so Massive is generally more suitable for reconstructing intrasecond tape pacing. For the live tape, choose the feed whose entitlement and latency best match the execution setup.
+
+## Replay practice
+
+Start replay mode against the local database:
+
+```bash
+./go.sh replay -symbol IONQ -provider massive -source historical
+```
+
+Open the browser and press `REPLAY`. Pick the provider/data source, start and end time, and speed, then press `PLAY`. `PAUSE` freezes the tape and all three receipt-time horizons. Enter any local date and minute in `Go to minute`, then press `GO` to clear the old tape and resume from that minute. `RESUME` continues from the exact stored event after the pause.
+
+On desktop, replay places the one-minute market chart beside the current tape-reading tool and keeps time and sales on the right. Yellow is exact trade-weighted VWAP beginning at 09:30 ET, red is the 9-period simple moving average, blue is the 20-period simple moving average, and white is the 20-period Bollinger envelope at two population standard deviations. Volume is rendered in a dedicated pane below price. Compact screens stack the market chart above the tape tool.
+
+For Massive/IBKR historical records, the provider event timestamp acts as the replay receipt clock because no downloader can recover the original local arrival time. Live recordings preserve and replay the actual microsecond server receipt timestamp.
 
 ## Live diagnostics
 
@@ -128,11 +180,11 @@ At-bid and below-bid size is negative delta. At-ask and above-ask size is positi
 
 ## Performance model
 
-IBKR callbacks do constant, bounded work: quote lookup, classification, and one ring write. Each symbol uses a fixed-size ring rather than an ever-growing slice. WebSocket clients pull from sequence numbers in batches, so a slow client cannot block the feed callback or allocate a queue per print. If a client falls behind the ring, the UI reports the overwritten count as `LAGGED`.
+Live feed callbacks do constant, bounded work: quote lookup, classification, one ring write, and a non-blocking enqueue to the recorder. Each symbol uses a fixed-size ring rather than an ever-growing slice. WebSocket clients pull from sequence numbers in batches, so a slow client cannot block the feed callback or allocate a queue per print. If a client falls behind the ring, the UI reports the overwritten count as `LAGGED`.
 
-The canvas redraws only when data or dimensions change. Time and sales reuses a fixed DOM row pool. The audio worklet receives every delivered print and performs synthesis off the main thread with a fixed voice pool. Above 60 trades per second it progressively thins, shortens, and lowers only small-print cues; large prints always bypass that limiter and take priority over small voices.
+The canvas redraws only when data or dimensions change. Time and sales reuses a fixed DOM row pool. Rolling horizon totals use cumulative counters and binary searches rather than rescanning the trade history. The three fixed rows refresh every 100 ms, while WebSocket delivery retains the configurable 16 ms default batch. Old browser history is pruned in chunks to avoid repeated front-of-array work at the open. The audio worklet receives every delivered print and performs synthesis off the main thread with a fixed voice pool. Above 60 trades per second it progressively thins, shortens, and lowers only small-print cues; large prints always bypass that limiter and take priority over small voices.
 
-The optional tape-speed background follows the same rolling one-second rate shown in the `TAPE` metric. It maps speed to both a rising low-frequency pitch and a faster amplitude pulse: approximately 126 Hz / 3.8 Hz at 30 prints/s, 179 Hz / 6.6 Hz at 123 prints/s, 263 Hz / 9.6 Hz at 300 prints/s, and 360 Hz / 12 Hz at 500 prints/s. It runs on a separate gain path and automatically ducks beneath the existing print cues.
+The optional tape-speed background follows the same rolling one-second receipt-time rate shown in the `TAPE` metric. It maps speed to both a rising low-frequency pitch and a faster amplitude pulse: approximately 126 Hz / 3.8 Hz at 30 prints/s, 179 Hz / 6.6 Hz at 123 prints/s, 263 Hz / 9.6 Hz at 300 prints/s, and 360 Hz / 12 Hz at 500 prints/s. It runs on a separate gain path and automatically ducks beneath the existing print cues.
 
 ## Verify
 
@@ -152,5 +204,6 @@ node scripts/browser-check.mjs
 ## Notes
 
 - `AllLast` includes additional trade types such as combos, derivatives, and average-price trades when IBKR supplies them. This tool intentionally does not filter those prints.
-- Exchange timestamps in the IBKR tick callback have one-second resolution. The tool separately records local receipt time in microseconds for tape-rate measurement and audio scheduling.
+- Exchange timestamps in the IBKR tick callback have one-second resolution. Rolling horizons, tape-rate measurement, and audio scheduling use the separate server-side local receipt time recorded in microseconds; browser batch-processing time is not used.
+- Massive live mode also stamps each event when the Go server receives it; neither provider's browser WebSocket batching time is used for rolling metrics.
 - The referenced `ticksonic-original` repository returned GitHub 404 during implementation. The mixer and synthesis path here were implemented directly from the requested behavior.

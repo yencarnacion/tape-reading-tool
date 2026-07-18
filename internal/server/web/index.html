@@ -28,6 +28,7 @@
           <option value="custom">CUSTOM</option>
         </select>
         <button id="soundButton" class="sound-button" type="button">SOUND START</button>
+        <button id="replayButton" type="button" hidden>REPLAY</button>
         <button id="controlsButton" type="button">CONTROLS</button>
         <span id="connectionState" class="connection-state"><i></i><span>STARTING</span></span>
       </div>
@@ -44,10 +45,60 @@
     </section>
 
     <section id="workspace" class="workspace">
-      <section id="chartPanel" class="chart-panel" aria-label="Volume delta, volume, and tick chart">
+      <div id="visualStack" class="visual-stack">
+        <section id="replayMarketPanel" class="replay-market-panel" aria-label="Replay one-minute price and volume chart" hidden>
+          <canvas id="replayChartCanvas"></canvas>
+          <div class="replay-chart-legend" aria-hidden="true">
+            <strong>1 MIN</strong>
+            <span class="legend-vwap">VWAP 09:30</span>
+            <span class="legend-sma9">SMA 9</span>
+            <span class="legend-sma20">SMA 20</span>
+            <span class="legend-bollinger">BOLLINGER 20,2</span>
+          </div>
+          <div id="replayChartEmpty" class="replay-chart-empty">START REPLAY TO BUILD THE CHART</div>
+        </section>
+        <section id="chartPanel" class="chart-panel" aria-label="Volume delta, rolling tape pressure, and tick chart">
         <canvas id="chartCanvas"></canvas>
-        <div id="chartEmpty" class="chart-empty">WAITING FOR PRINTS</div>
-      </section>
+        <section id="rollingPanel" class="rolling-panel" aria-label="Rolling tape pressure by horizon" title="PACE compares shares per second with the immediately preceding window of the same length.">
+          <header class="rolling-header" aria-hidden="true">
+            <span>WINDOW</span><span>VOLUME / SIDE</span><span>DELTA%</span><span>SHARES/S</span><span>PRINTS/S</span><span>Δ MID</span><span>PACE</span>
+          </header>
+          <div class="rolling-rows">
+            <article class="rolling-row ignition" data-horizon="5">
+              <div class="window-cell"><strong>5s</strong><small>IGNITION</small><b class="winner">BALANCED</b></div>
+              <div class="metric-cell volume-cell" data-label="VOLUME"><output class="volume">0</output><small><span class="buyer-volume">B 0</span><span class="seller-volume">S 0</span></small></div>
+              <div class="metric-cell delta-cell" data-label="DELTA%"><output class="delta-percent">0%</output><small class="signed-delta">Δ 0</small></div>
+              <div class="metric-cell" data-label="SHARES/S"><output class="shares-rate">0</output></div>
+              <div class="metric-cell" data-label="PRINTS/S"><output class="prints-rate">0</output></div>
+              <div class="metric-cell" data-label="Δ MID"><output class="mid-change">0t</output></div>
+              <div class="metric-cell" data-label="PACE"><output class="relative-pace">—</output></div>
+              <div class="pressure-track" aria-hidden="true"><i></i></div>
+            </article>
+            <article class="rolling-row primary" data-horizon="15">
+              <div class="window-cell"><strong>15s</strong><small>PRIMARY</small><b class="winner">BALANCED</b></div>
+              <div class="metric-cell volume-cell" data-label="VOLUME"><output class="volume">0</output><small><span class="buyer-volume">B 0</span><span class="seller-volume">S 0</span></small></div>
+              <div class="metric-cell delta-cell" data-label="DELTA%"><output class="delta-percent">0%</output><small class="signed-delta">Δ 0</small></div>
+              <div class="metric-cell" data-label="SHARES/S"><output class="shares-rate">0</output></div>
+              <div class="metric-cell" data-label="PRINTS/S"><output class="prints-rate">0</output></div>
+              <div class="metric-cell" data-label="Δ MID"><output class="mid-change">0t</output></div>
+              <div class="metric-cell" data-label="PACE"><output class="relative-pace">—</output></div>
+              <div class="pressure-track" aria-hidden="true"><i></i></div>
+            </article>
+            <article class="rolling-row context" data-horizon="60">
+              <div class="window-cell"><strong>60s</strong><small>CONTEXT</small><b class="winner">BALANCED</b></div>
+              <div class="metric-cell volume-cell" data-label="VOLUME"><output class="volume">0</output><small><span class="buyer-volume">B 0</span><span class="seller-volume">S 0</span></small></div>
+              <div class="metric-cell delta-cell" data-label="DELTA%"><output class="delta-percent">0%</output><small class="signed-delta">Δ 0</small></div>
+              <div class="metric-cell" data-label="SHARES/S"><output class="shares-rate">0</output></div>
+              <div class="metric-cell" data-label="PRINTS/S"><output class="prints-rate">0</output></div>
+              <div class="metric-cell" data-label="Δ MID"><output class="mid-change">0t</output></div>
+              <div class="metric-cell" data-label="PACE"><output class="relative-pace">—</output></div>
+              <div class="pressure-track" aria-hidden="true"><i></i></div>
+            </article>
+          </div>
+        </section>
+          <div id="chartEmpty" class="chart-empty">WAITING FOR PRINTS</div>
+        </section>
+      </div>
       <aside id="tapePanel" class="tape-panel" aria-label="Time and sales">
         <header class="tape-header">
           <span>PRICE</span><span id="sizeHeading">SIZE</span>
@@ -98,6 +149,32 @@
     <form method="dialog" class="dialog-actions">
       <button id="resetControls" type="button">RESET</button>
       <button value="done" class="primary-button">DONE</button>
+    </form>
+  </dialog>
+
+  <dialog id="replayDialog" class="controls-dialog replay-dialog">
+    <form method="dialog" class="dialog-heading">
+      <strong>REPLAY</strong>
+      <button class="icon-button" value="cancel" aria-label="Close replay controls" title="Close">X</button>
+    </form>
+    <div class="replay-fields">
+      <div class="replay-pair">
+        <label class="field-row"><span>Provider</span><select id="replayProvider"><option value="massive">Massive</option><option value="ibkr">IBKR</option><option value="all">All</option></select></label>
+        <label class="field-row"><span>Data</span><select id="replaySource"><option value="historical">Historical</option><option value="live">Recorded live</option><option value="all">All</option></select></label>
+      </div>
+      <label class="field-row"><span>Start</span><input id="replayStart" type="datetime-local" step="1"></label>
+      <label class="field-row"><span>End</span><input id="replayEnd" type="datetime-local" step="1"></label>
+      <label class="field-row"><span>Speed</span><select id="replaySpeed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="10">10×</option></select></label>
+      <div class="replay-seek-row">
+        <label class="field-row"><span>Go to minute</span><input id="replaySeek" type="datetime-local" step="60"></label>
+        <button id="replaySeekButton" type="button">GO</button>
+      </div>
+      <output id="replayStatus" class="replay-status" aria-live="polite">LOADING RECORDINGS…</output>
+    </div>
+    <form method="dialog" class="dialog-actions replay-actions">
+      <button id="replayStop" type="button">STOP</button>
+      <button id="replayPause" type="button">PAUSE</button>
+      <button id="replayStartButton" type="button" class="primary-button">PLAY</button>
     </form>
   </dialog>
 
