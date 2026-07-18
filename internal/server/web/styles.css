@@ -166,6 +166,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .metric-cell::before { display: none; content: attr(data-label); }
 .metric-cell output { display: block; overflow: hidden; color: #f4f7f9; font-size: 16px; line-height: 20px; font-weight: 800; letter-spacing: -.045em; white-space: nowrap; }
 .rolling-row.primary .metric-cell output, .rolling-row.primary .window-cell strong { font-weight: 900; }
+.workspace.replay-mode .rolling-header, .workspace.replay-mode .rolling-row {
+  grid-template-columns: minmax(47px, .7fr) minmax(78px, 1.25fr) minmax(50px, .8fr) minmax(58px, .95fr) minmax(52px, .85fr) minmax(50px, .72fr) minmax(60px, .85fr);
+}
+.workspace.replay-mode .rolling-row .metric-cell output { font-size: 20px; line-height: 24px; }
+.workspace.replay-mode .rolling-row .window-cell strong { font-size: 21.25px; }
 .delta-cell output { color: var(--cue); }
 .delta-cell small { display: block; color: var(--cue); font-size: 9px; line-height: 11px; font-weight: 800; white-space: nowrap; }
 .volume-cell small { display: flex; justify-content: flex-end; gap: 7px; color: var(--muted); font-size: 9px; line-height: 11px; font-weight: 800; white-space: nowrap; }
@@ -186,6 +191,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
     column-gap: 3px;
     padding: 3px 5px 5px;
   }
+  .workspace.replay-mode .rolling-row { grid-template-columns: 48px repeat(3, minmax(0, 1fr)); }
   .window-cell { grid-column: 1; grid-row: 1; }
   .volume-cell { grid-column: 1 / span 2; grid-row: 2; text-align: left; }
   .delta-cell { grid-column: 2; grid-row: 1; }
