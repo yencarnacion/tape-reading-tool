@@ -25,7 +25,7 @@
     soundButton: $('soundButton'), replayButton: $('replayButton'), controlsButton: $('controlsButton'), connectionState: $('connectionState'),
     lastPrice: $('lastPrice'), priceChange: $('priceChange'), maxDelta: $('maxDelta'), minDelta: $('minDelta'), tapeRate: $('tapeRate'),
     replayContext: $('replayContext'), replayClock: $('replayClock'), replayClockTime: $('replayClockTime'),
-    replayRvol: $('replayRvol'), replayRvolValue: $('replayRvolValue'), replayRvolState: $('replayRvolState'),
+    relativeVolume: $('relativeVolume'), relativeVolumeValue: $('relativeVolumeValue'), relativeVolumeState: $('relativeVolumeState'),
     quoteText: $('quoteText'), streamText: $('streamText'), clockText: $('clockText'),
     dialog: $('controlsDialog'), resetControls: $('resetControls'),
     customTicks: $('customTicks'), visibleBars: $('visibleBars'), tapeRowCount: $('tapeRowCount'),
@@ -918,9 +918,10 @@
     elements.connectionState.querySelector('span').textContent = stateName;
     elements.connectionState.title = status?.message || stateName;
     const replayMode = status?.mode === 'replay';
+    const relativeVolumeMode = ['live', 'massive', 'demo', 'replay'].includes(String(status?.mode || '').toLowerCase());
     elements.replayButton.hidden = !replayMode;
     elements.replayContext.hidden = !replayMode;
-    elements.replayRvol.hidden = !replayMode;
+    elements.relativeVolume.hidden = !relativeVolumeMode;
     elements.replayMarketPanel.hidden = !replayMode;
     elements.workspace.classList.toggle('replay-mode', replayMode);
     state.dirtyReplayChart = true;
@@ -1364,25 +1365,25 @@
     return { ratio, baseline, baselineBars: baselineVolumes.length, currentVolume, elapsedSeconds, forming };
   }
 
-  function updateReplayRelativeVolume(nowUS) {
+  function updateRelativeVolume(nowUS) {
     const metric = calculateCurrentCandleRVOL(nowUS);
-    elements.replayRvol.classList.remove('building', 'quiet', 'normal', 'elevated', 'surge');
+    elements.relativeVolume.classList.remove('building', 'quiet', 'normal', 'elevated', 'surge');
     if (!metric) {
-      elements.replayRvol.classList.add('building');
-      elements.replayRvolValue.textContent = '--';
-      elements.replayRvolState.textContent = 'BUILDING';
-      elements.replayRvol.style.setProperty('--rvol-width', '0%');
-      elements.replayRvol.setAttribute('aria-label', 'Relative volume pace is building its recent-candle baseline.');
+      elements.relativeVolume.classList.add('building');
+      elements.relativeVolumeValue.textContent = '--';
+      elements.relativeVolumeState.textContent = 'BUILDING';
+      elements.relativeVolume.style.setProperty('--rvol-width', '0%');
+      elements.relativeVolume.setAttribute('aria-label', 'Relative volume pace is building its recent-candle baseline.');
       return;
     }
 
     const level = metric.ratio < 0.75 ? 'quiet' : metric.ratio < 1.25 ? 'normal' : metric.ratio < 2 ? 'elevated' : 'surge';
-    elements.replayRvol.classList.add(level);
-    elements.replayRvolValue.textContent = `${metric.ratio < 10 ? metric.ratio.toFixed(1) : Math.round(metric.ratio)}×`;
-    elements.replayRvolState.textContent = level.toUpperCase();
-    elements.replayRvol.style.setProperty('--rvol-width', `${Math.min(100, metric.ratio / 3 * 100)}%`);
+    elements.relativeVolume.classList.add(level);
+    elements.relativeVolumeValue.textContent = `${metric.ratio < 10 ? metric.ratio.toFixed(1) : Math.round(metric.ratio)}×`;
+    elements.relativeVolumeState.textContent = level.toUpperCase();
+    elements.relativeVolume.style.setProperty('--rvol-width', `${Math.min(100, metric.ratio / 3 * 100)}%`);
     const timing = metric.forming ? `${Math.round(metric.elapsedSeconds)} seconds into the candle` : 'completed candle';
-    elements.replayRvol.setAttribute('aria-label', `Relative volume pace ${metric.ratio.toFixed(2)} times, ${level}; ${timing}; compared with the median volume of ${metric.baselineBars} recent completed candles.`);
+    elements.relativeVolume.setAttribute('aria-label', `Relative volume pace ${metric.ratio.toFixed(2)} times, ${level}; ${timing}; compared with the median volume of ${metric.baselineBars} recent completed candles.`);
   }
 
   function updateLiveMetrics(now) {
@@ -1396,9 +1397,10 @@
     updatePriceChange(last?.p, state.quote.previous_close);
     elements.streamText.textContent = `${formatSize(state.trades.length)} PRINTS${state.dropped ? ` / ${formatSize(state.dropped)} LAGGED` : ''}`;
     const replayMode = state.status?.mode === 'replay';
+    const relativeVolumeMode = ['live', 'massive', 'demo', 'replay'].includes(String(state.status?.mode || '').toLowerCase());
     const replayState = String(state.replay?.state || state.status?.state || '').toLowerCase();
     const replayHasTimeline = replayMode && receiptNowUS && replayState !== 'ready' && replayState !== 'stopped';
-    if (replayMode) updateReplayRelativeVolume(replayHasTimeline ? receiptNowUS : 0);
+    if (relativeVolumeMode) updateRelativeVolume(replayMode ? (replayHasTimeline ? receiptNowUS : 0) : receiptNowUS);
     const clockDate = replayHasTimeline ? new Date(receiptNowUS / 1000) : new Date();
     const clockValue = new Intl.DateTimeFormat('en-US', {
       timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false

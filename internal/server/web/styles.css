@@ -97,7 +97,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .replay-clock span { color: var(--muted); font-size: 9px; font-weight: 800; }
 .replay-clock strong { color: var(--yellow); font-size: 26px; line-height: 29px; }
 .replay-clock small { color: var(--muted); font-size: 10px; font-weight: 800; }
-.replay-rvol {
+.relative-volume {
   --rvol-color: var(--muted);
   --rvol-width: 0%;
   position: relative;
@@ -114,15 +114,15 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   color: var(--rvol-color);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
-.replay-rvol[hidden] { display: none; }
-.replay-rvol.quiet { --rvol-color: var(--rvol-quiet); }
-.replay-rvol.normal { --rvol-color: var(--rvol-normal); }
-.replay-rvol.elevated { --rvol-color: var(--rvol-elevated); }
-.replay-rvol.surge { --rvol-color: var(--rvol-surge); }
+.relative-volume[hidden] { display: none; }
+.relative-volume.quiet { --rvol-color: var(--rvol-quiet); }
+.relative-volume.normal { --rvol-color: var(--rvol-normal); }
+.relative-volume.elevated { --rvol-color: var(--rvol-elevated); }
+.relative-volume.surge { --rvol-color: var(--rvol-surge); }
 .rvol-label { min-width: 0; display: flex; align-items: baseline; justify-content: space-between; gap: 4px; }
 .rvol-label span { color: var(--muted); font-size: 9px; line-height: 12px; font-weight: 800; white-space: nowrap; }
 .rvol-label small { overflow: hidden; color: var(--rvol-color); font-size: 8px; line-height: 11px; font-weight: 900; white-space: nowrap; }
-.replay-rvol strong { overflow: hidden; text-align: center; font-size: 28px; line-height: 32px; font-weight: 800; white-space: nowrap; }
+.relative-volume strong { overflow: hidden; text-align: center; font-size: 28px; line-height: 32px; font-weight: 800; white-space: nowrap; }
 .rvol-track { position: absolute; left: 8px; right: 8px; bottom: 6px; height: 3px; overflow: hidden; background: #2b3139; }
 .rvol-track::after { content: ''; position: absolute; z-index: 1; left: 33.333%; top: -1px; width: 1px; height: 5px; background: #e4e8ec; opacity: .8; }
 .rvol-track i { display: block; width: var(--rvol-width); height: 100%; background: var(--rvol-color); }
@@ -183,7 +183,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 }
 .rolling-header, .rolling-row {
   display: grid;
-  grid-template-columns: minmax(50px, .72fr) minmax(86px, 1.34fr) minmax(54px, .82fr) minmax(62px, 1fr) minmax(56px, .88fr) minmax(46px, .72fr) minmax(46px, .72fr);
+  grid-template-columns: minmax(47px, .7fr) minmax(78px, 1.25fr) minmax(50px, .8fr) minmax(58px, .95fr) minmax(52px, .85fr) minmax(50px, .72fr) minmax(60px, .85fr);
   align-items: center;
   column-gap: 4px;
   padding-inline: 6px;
@@ -212,18 +212,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .rolling-row.buyer { --cue: var(--buyer); --cue-soft: rgba(86, 199, 255, .12); }
 .rolling-row.seller { --cue: var(--seller); --cue-soft: rgba(255, 159, 67, .12); }
 .window-cell { min-width: 0; display: grid; align-content: center; justify-items: start; line-height: 1; }
-.window-cell strong { color: var(--text); font-size: 17px; letter-spacing: -.04em; }
+.window-cell strong { color: var(--text); font-size: 21.25px; letter-spacing: -.04em; }
 .window-cell small { margin-top: 3px; color: var(--muted); font-size: 8px; font-weight: 850; letter-spacing: .05em; }
 .window-cell .winner { margin-top: 3px; overflow: hidden; color: var(--cue); font-size: 9px; white-space: nowrap; }
 .metric-cell { min-width: 0; text-align: right; }
 .metric-cell::before { display: none; content: attr(data-label); }
-.metric-cell output { display: block; overflow: hidden; color: #f4f7f9; font-size: 16px; line-height: 20px; font-weight: 800; letter-spacing: -.045em; white-space: nowrap; }
+.metric-cell output { display: block; overflow: hidden; color: #f4f7f9; font-size: 20px; line-height: 24px; font-weight: 800; letter-spacing: -.045em; white-space: nowrap; }
 .rolling-row.primary .metric-cell output, .rolling-row.primary .window-cell strong { font-weight: 900; }
-.workspace.replay-mode .rolling-header, .workspace.replay-mode .rolling-row {
-  grid-template-columns: minmax(47px, .7fr) minmax(78px, 1.25fr) minmax(50px, .8fr) minmax(58px, .95fr) minmax(52px, .85fr) minmax(50px, .72fr) minmax(60px, .85fr);
-}
-.workspace.replay-mode .rolling-row .metric-cell output { font-size: 20px; line-height: 24px; }
-.workspace.replay-mode .rolling-row .window-cell strong { font-size: 21.25px; }
 .delta-cell output { color: var(--cue); }
 .delta-cell small { display: block; color: var(--cue); font-size: 9px; line-height: 11px; font-weight: 800; white-space: nowrap; }
 .volume-cell small { display: flex; justify-content: flex-end; gap: 7px; color: var(--muted); font-size: 9px; line-height: 11px; font-weight: 800; white-space: nowrap; }
@@ -234,7 +229,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .rolling-row.buyer .pressure-track i { left: 50%; }
 .rolling-row.seller .pressure-track i { right: 50%; }
 
-@container (max-width: 350px) {
+@container (max-width: 430px) {
   .rolling-panel { min-height: 224px; }
   .rolling-header { display: none; }
   .rolling-rows { height: 100%; }
@@ -244,7 +239,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
     column-gap: 3px;
     padding: 3px 5px 5px;
   }
-  .workspace.replay-mode .rolling-row { grid-template-columns: 48px repeat(3, minmax(0, 1fr)); }
   .window-cell { grid-column: 1; grid-row: 1; }
   .volume-cell { grid-column: 1 / span 2; grid-row: 2; text-align: left; }
   .delta-cell { grid-column: 2; grid-row: 1; }

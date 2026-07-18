@@ -103,11 +103,13 @@ try {
           last: document.querySelector('#lastPrice')?.textContent,
           maxDelta: document.querySelector('#maxDelta')?.textContent,
           minDelta: document.querySelector('#minDelta')?.textContent,
-          replayRvol: document.querySelector('#replayRvolValue')?.textContent,
-          replayRvolState: document.querySelector('#replayRvolState')?.textContent,
-          replayRvolVisible: getComputedStyle(document.querySelector('#replayRvol')).display !== 'none',
-          replayRvolFontSize: parseFloat(getComputedStyle(document.querySelector('#replayRvolValue')).fontSize),
+          replayRvol: document.querySelector('#relativeVolumeValue')?.textContent,
+          replayRvolState: document.querySelector('#relativeVolumeState')?.textContent,
+          replayRvolVisible: getComputedStyle(document.querySelector('#relativeVolume')).display !== 'none',
+          replayRvolFontSize: parseFloat(getComputedStyle(document.querySelector('#relativeVolumeValue')).fontSize),
           lastPriceFontSize: parseFloat(getComputedStyle(document.querySelector('#lastPrice')).fontSize),
+          rollingValueFontSize: parseFloat(getComputedStyle(document.querySelector('.rolling-row.primary .metric-cell output')).fontSize),
+          rollingWindowFontSize: parseFloat(getComputedStyle(document.querySelector('.rolling-row.primary .window-cell strong')).fontSize),
           visibleTapeRows: rows.length,
           coloredCanvasSamples: colored,
           replayChartVisible: !document.querySelector('#replayMarketPanel')?.hidden,
@@ -150,6 +152,13 @@ try {
     if (checked.socketState === 'PAUSED' && (!checked.replayRvolVisible || !/^[0-9]+(?:\.[0-9])?×$/.test(checked.replayRvol) ||
         !['QUIET', 'NORMAL', 'ELEVATED', 'SURGE'].includes(checked.replayRvolState) || checked.replayRvolFontSize < checked.lastPriceFontSize)) {
       throw new Error(`replay RVOL cue failed at ${width}px: ${JSON.stringify(checked)}`);
+    }
+    if (['LIVE', 'PAUSED'].includes(checked.socketState) && !checked.replayRvolVisible) {
+      throw new Error(`RVOL is hidden for an active feed at ${width}px: ${JSON.stringify(checked)}`);
+    }
+    const expectedRollingFontSize = checked.rollingPanelClientWidth > 430 ? 20 : 15;
+    if (checked.rollingValueFontSize < expectedRollingFontSize || checked.rollingWindowFontSize < (checked.rollingPanelClientWidth > 430 ? 21 : 17)) {
+      throw new Error(`rolling typography is too small at ${width}px: ${JSON.stringify(checked)}`);
     }
     const screenshot = await command('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false }, 20000);
     const path = `/tmp/tape-reading-tool-${width}.png`;
