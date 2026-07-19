@@ -83,6 +83,14 @@ Connect to IBKR:
 ./go.sh live
 ```
 
+Add the replay-style one-minute price, indicator, and volume chart to IBKR live mode with:
+
+```bash
+./go.sh live -chart
+```
+
+Without `-chart`, live mode keeps the existing compact layout.
+
 Connect to the Massive live stocks feed instead:
 
 ```bash

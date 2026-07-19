@@ -31,6 +31,7 @@ type Server struct {
 	rvolCache      map[string]rvolHistoryCache
 	rvolMinuteBars func(context.Context, string, time.Time, int) ([]storage.MinuteBar, error)
 	now            func() time.Time
+	liveChart      bool
 }
 
 type rvolHistoryCache struct {
@@ -51,9 +52,10 @@ type streamMessage struct {
 	ReplayConfig *config.ReplayConfig  `json:"replay_config,omitempty"`
 	Dropped      uint64                `json:"dropped,omitempty"`
 	ServerTimeMS int64                 `json:"server_time_ms,omitempty"`
+	MarketChart  bool                  `json:"market_chart,omitempty"`
 }
 
-func New(cfg config.Config, store *tape.Store, source feed.Feed) *Server {
+func New(cfg config.Config, store *tape.Store, source feed.Feed, liveChart ...bool) *Server {
 	server := &Server{
 		cfg: cfg, store: store, feed: source,
 		rvolCache: make(map[string]rvolHistoryCache), now: time.Now,
@@ -62,6 +64,7 @@ func New(cfg config.Config, store *tape.Store, source feed.Feed) *Server {
 			CheckOrigin: sameOrigin,
 		},
 	}
+	server.liveChart = len(liveChart) > 0 && liveChart[0]
 	if source, ok := source.(interface {
 		RVOLMinuteBars(context.Context, string, time.Time, int) ([]storage.MinuteBar, error)
 	}); ok {
@@ -393,7 +396,8 @@ func (s *Server) writeSnapshot(conn *websocket.Conn, symbol string) (uint64, err
 	snapshot := s.store.Snapshot(symbol, s.cfg.Tape.SnapshotTrades)
 	message := streamMessage{
 		Type: "snapshot", Symbol: symbol, Snapshot: &snapshot,
-		Display: &s.cfg.Display, Audio: &s.cfg.Audio, ReplayConfig: &s.cfg.Replay, ServerTimeMS: s.streamTimeMS(),
+		Display: &s.cfg.Display, Audio: &s.cfg.Audio, ReplayConfig: &s.cfg.Replay,
+		ServerTimeMS: s.streamTimeMS(), MarketChart: s.liveChart,
 	}
 	if err := writeWebSocketJSON(conn, message); err != nil {
 		return 0, err

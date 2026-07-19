@@ -153,7 +153,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .workspace.tape-hidden .tape-panel, .workspace.chart-hidden .visual-stack, .workspace.both-hidden .visual-stack, .workspace.both-hidden .tape-panel { display: none; }
 
 .visual-stack { min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); overflow: hidden; }
-.workspace.replay-mode .visual-stack { grid-template-columns: minmax(0, 1.55fr) minmax(320px, .9fr); grid-template-rows: minmax(0, 1fr); }
+.workspace.market-chart-mode .visual-stack { grid-template-columns: minmax(0, 1.55fr) minmax(320px, .9fr); grid-template-rows: minmax(0, 1fr); }
 .replay-market-panel { position: relative; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid #3b434e; background: #0c0f13; }
 .replay-market-panel[hidden] { display: none; }
 #replayChartCanvas { display: block; width: 100%; height: 100%; }
@@ -319,16 +319,16 @@ input[type="range"] { width: 100%; height: 5px; padding: 0; accent-color: var(--
 }
 
 @media (max-width: 900px) {
-  .workspace.replay-mode .visual-stack { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, .9fr) minmax(0, 1.1fr); }
-  .workspace.replay-mode .replay-market-panel { border-right: 0; border-bottom: 1px solid #3b434e; }
+  .workspace.market-chart-mode .visual-stack { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, .9fr) minmax(0, 1.1fr); }
+  .workspace.market-chart-mode .replay-market-panel { border-right: 0; border-bottom: 1px solid #3b434e; }
 }
 
 @media (min-width: 901px) {
-  body:has(.workspace.replay-mode) .metrics {
+  body:has(.workspace.market-chart-mode) .metrics {
     display: grid;
     grid-template-columns: minmax(0, 1.55fr) minmax(320px, .9fr) clamp(124px, 23vw, 174px);
   }
-  body:has(.workspace.replay-mode) .metrics-group { grid-column: 2 / 4; }
+  body:has(.workspace.market-chart-mode) .metrics-group { grid-column: 2 / 4; }
 }
 
 @media (max-width: 620px) {

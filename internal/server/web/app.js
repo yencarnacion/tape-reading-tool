@@ -48,7 +48,7 @@
     navSymbols: [], navIndex: -1, lastMetricUpdate: 0,
     prefixBase: { volume: 0, buyer: 0, seller: 0, prints: 0 }, midpoints: [],
     serverClockUS: 0, serverClockAt: 0, replay: null, replayConfig: null,
-    minuteBars: [], replayChartEndUS: 0, replayChartKey: '', dirtyReplayChart: true,
+    minuteBars: [], replayChartEndUS: 0, replayChartKey: '', dirtyReplayChart: true, marketChartEnabled: false,
     rvolWarmup: { symbol: '', ready: false, pending: false, attempt: 0, token: 0, timer: null, controller: null }
   };
 
@@ -265,6 +265,7 @@
       state.quote = snapshot.quote || {};
       state.history = snapshot.history || [];
       state.status = snapshot.status || {};
+      state.marketChartEnabled = state.status.mode === 'replay' || message.market_chart === true;
       state.replayConfig = message.replay_config || state.replayConfig;
       if (state.replayConfig) {
         elements.replayProvider.value = state.replayConfig.provider || 'all';
@@ -999,8 +1000,12 @@
     const relativeVolumeMode = ['live', 'massive', 'demo', 'replay'].includes(String(status?.mode || '').toLowerCase());
     elements.replayButton.hidden = !replayMode;
     elements.relativeVolume.hidden = !relativeVolumeMode;
-    elements.replayMarketPanel.hidden = !replayMode;
+    const marketChartMode = replayMode || state.marketChartEnabled;
+    elements.replayMarketPanel.hidden = !marketChartMode;
+    elements.replayMarketPanel.setAttribute('aria-label', `${replayMode ? 'Replay' : 'Live'} one-minute price and volume chart`);
+    elements.replayChartEmpty.textContent = replayMode ? 'START REPLAY TO BUILD THE CHART' : 'WAITING FOR LIVE MINUTE BARS';
     elements.workspace.classList.toggle('replay-mode', replayMode);
+    elements.workspace.classList.toggle('market-chart-mode', marketChartMode);
     state.dirtyReplayChart = true;
     if (replayMode) updateReplayControls({ ...(state.replay || {}), state: String(status?.state || '').toLowerCase(), message: status?.message });
   }
@@ -1058,6 +1063,7 @@
     const { showChart, showTape, showSize } = state.settings;
     elements.workspace.className = 'workspace';
     if (state.status?.mode === 'replay') elements.workspace.classList.add('replay-mode');
+    if (state.status?.mode === 'replay' || state.marketChartEnabled) elements.workspace.classList.add('market-chart-mode');
     if (!showChart && !showTape) elements.workspace.classList.add('both-hidden');
     else if (!showChart) elements.workspace.classList.add('chart-hidden');
     else if (!showTape) elements.workspace.classList.add('tape-hidden');
@@ -1489,7 +1495,7 @@
   }
 
   function animationLoop(now) {
-    if (state.dirtyReplayChart && state.status?.mode === 'replay' && state.settings?.showChart) drawReplayChart();
+    if (state.dirtyReplayChart && (state.status?.mode === 'replay' || state.marketChartEnabled) && state.settings?.showChart) drawReplayChart();
     if (state.dirtyChart && state.settings?.showChart) drawChart();
     if (state.dirtyTape && state.settings?.showTape) renderTape();
     if (now - state.lastMetricUpdate > 100) {
