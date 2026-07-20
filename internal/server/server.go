@@ -30,6 +30,9 @@ type Server struct {
 	rvolMu         sync.Mutex
 	rvolCache      map[string]rvolHistoryCache
 	rvolMinuteBars func(context.Context, string, time.Time, int) ([]storage.MinuteBar, error)
+	dailyBars      func(context.Context, string, time.Time, int) ([]storage.MinuteBar, error)
+	dailyMu        sync.Mutex
+	dailyCache     map[string]dailyHistoryCache
 	now            func() time.Time
 	liveChart      bool
 }
@@ -37,6 +40,11 @@ type Server struct {
 type rvolHistoryCache struct {
 	throughUS int64
 	bars      []storage.MinuteBar
+}
+
+type dailyHistoryCache struct {
+	through string
+	bars    []storage.MinuteBar
 }
 
 type streamMessage struct {
@@ -58,7 +66,7 @@ type streamMessage struct {
 func New(cfg config.Config, store *tape.Store, source feed.Feed, liveChart ...bool) *Server {
 	server := &Server{
 		cfg: cfg, store: store, feed: source,
-		rvolCache: make(map[string]rvolHistoryCache), now: time.Now,
+		rvolCache: make(map[string]rvolHistoryCache), dailyCache: make(map[string]dailyHistoryCache), now: time.Now,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize: 4096, WriteBufferSize: 64 * 1024,
 			CheckOrigin: sameOrigin,
@@ -70,6 +78,11 @@ func New(cfg config.Config, store *tape.Store, source feed.Feed, liveChart ...bo
 	}); ok {
 		server.rvolMinuteBars = source.RVOLMinuteBars
 	}
+	if source, ok := source.(interface {
+		DailyBars(context.Context, string, time.Time, int) ([]storage.MinuteBar, error)
+	}); ok {
+		server.dailyBars = source.DailyBars
+	}
 	return server
 }
 
@@ -79,6 +92,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	mux.HandleFunc("/api/ticker", s.handleTicker)
 	mux.HandleFunc("/api/replay", s.handleReplay)
 	mux.HandleFunc("/api/rvol-history", s.handleRVOLHistory)
+	mux.HandleFunc("/api/daily-history", s.handleDailyHistory)
 	mux.HandleFunc("/ws", s.handleWebSocket)
 
 	sub, err := fs.Sub(webFS, "web")
@@ -156,6 +170,38 @@ func (s *Server) handleRVOLHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"symbol": symbol, "provider": "ibkr", "through_us": entry.throughUS, "bars": entry.bars,
 	})
+}
+
+func (s *Server) handleDailyHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.dailyBars == nil {
+		http.Error(w, "daily history is unavailable for this feed", http.StatusServiceUnavailable)
+		return
+	}
+	symbol := tape.NormalizeSymbol(r.URL.Query().Get("symbol"))
+	if symbol == "" {
+		symbol = s.store.Active()
+	}
+	through := s.now().UTC()
+	cacheKey := through.Format("2006-01-02")
+	s.dailyMu.Lock()
+	defer s.dailyMu.Unlock()
+	entry, cached := s.dailyCache[symbol]
+	if !cached || entry.through != cacheKey {
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		bars, err := s.dailyBars(ctx, symbol, through, 90)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		entry = dailyHistoryCache{through: cacheKey, bars: append([]storage.MinuteBar(nil), bars...)}
+		s.dailyCache[symbol] = entry
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"symbol": symbol, "provider": "ibkr", "bars": entry.bars})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

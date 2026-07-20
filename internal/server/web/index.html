@@ -65,8 +65,12 @@
       <div id="visualStack" class="visual-stack">
         <section id="replayMarketPanel" class="replay-market-panel" aria-label="Replay one-minute price and volume chart" hidden>
           <canvas id="replayChartCanvas"></canvas>
+          <canvas id="dailyChartCanvas" hidden></canvas>
+          <nav class="market-chart-tabs" aria-label="Market chart timeframe">
+            <button id="minuteChartTab" class="active" type="button" aria-pressed="true">1 MIN</button>
+            <button id="dailyChartTab" type="button" aria-pressed="false">90 DAY</button>
+          </nav>
           <div class="replay-chart-legend" aria-hidden="true">
-            <strong>1 MIN</strong>
             <span class="legend-vwap">VWAP 09:30</span>
             <span class="legend-sma9">SMA 9</span>
             <span class="legend-sma20">SMA 20</span>
@@ -85,6 +89,7 @@
               <span>L <b id="dayContextLow">--</b></span>
             </footer>
           </section>
+          <div id="dailyChartEmpty" class="replay-chart-empty" hidden>SELECT 90 DAY TO LOAD DAILY BARS</div>
           <div id="replayChartEmpty" class="replay-chart-empty">START REPLAY TO BUILD THE CHART</div>
         </section>
         <section id="chartPanel" class="chart-panel" aria-label="Volume delta, rolling tape pressure, and tick chart">

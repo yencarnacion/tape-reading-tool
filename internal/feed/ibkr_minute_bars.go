@@ -28,6 +28,16 @@ type ibkrBarResult struct {
 // existing live session. The server caches it by symbol/minute, so this does
 // not create a polling stream or compete with receipt-time tape calculations.
 func (f *IBKR) RVOLMinuteBars(ctx context.Context, symbol string, endExclusive time.Time, limit int) ([]storage.MinuteBar, error) {
+	return f.historicalBars(ctx, symbol, endExclusive.UTC().Truncate(time.Minute), limit, "7 D", "1 min", false)
+}
+
+// DailyBars returns completed regular-session daily candles for longer-term
+// context without creating a streaming subscription.
+func (f *IBKR) DailyBars(ctx context.Context, symbol string, endExclusive time.Time, limit int) ([]storage.MinuteBar, error) {
+	return f.historicalBars(ctx, symbol, endExclusive.UTC(), limit, "6 M", "1 day", true)
+}
+
+func (f *IBKR) historicalBars(ctx context.Context, symbol string, endExclusive time.Time, limit int, duration, barSize string, useRTH bool) ([]storage.MinuteBar, error) {
 	symbol = tape.NormalizeSymbol(symbol)
 	if symbol == "" || endExclusive.IsZero() || limit < 1 {
 		return nil, fmt.Errorf("valid symbol, end time, and limit are required")
@@ -52,8 +62,8 @@ func (f *IBKR) RVOLMinuteBars(ctx context.Context, symbol string, endExclusive t
 		PrimaryExchange: f.cfg.PrimaryExchange, Currency: f.cfg.Currency,
 	}
 	client.ReqHistoricalData(
-		reqID, contract, endExclusive.Format("20060102-15:04:05"), "7 D", "1 min", "TRADES",
-		false, 2, false, nil,
+		reqID, contract, endExclusive.Format("20060102-15:04:05"), duration, barSize, "TRADES",
+		useRTH, 2, false, nil,
 	)
 
 	select {
@@ -141,10 +151,13 @@ func (f *IBKR) failBarRequest(reqID int64, err error) bool {
 
 func ibkrBarTimeUS(value string) (int64, error) {
 	seconds, err := strconv.ParseInt(value, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("IBKR bar timestamp %q is not epoch seconds", value)
+	if err == nil {
+		return seconds * int64(time.Second/time.Microsecond), nil
 	}
-	return seconds * int64(time.Second/time.Microsecond), nil
+	if day, dateErr := time.Parse("20060102", value); dateErr == nil {
+		return day.UnixMicro(), nil
+	}
+	return 0, fmt.Errorf("IBKR bar timestamp %q is neither epoch seconds nor YYYYMMDD", value)
 }
 
 func latestCompletedBars(bars []storage.MinuteBar, endExclusive time.Time, limit int) []storage.MinuteBar {

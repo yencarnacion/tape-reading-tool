@@ -169,8 +169,12 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .workspace.market-chart-mode .visual-stack { grid-template-columns: minmax(0, 1.55fr) minmax(320px, .9fr); grid-template-rows: minmax(0, 1fr); }
 .replay-market-panel { container-type: inline-size; position: relative; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid #3b434e; background: #0c0f13; }
 .replay-market-panel[hidden] { display: none; }
-#replayChartCanvas { display: block; width: 100%; height: 100%; }
-.replay-chart-legend { position: absolute; z-index: 1; top: 5px; left: 8px; display: flex; flex-wrap: wrap; gap: 5px 12px; padding: 3px 5px; color: var(--muted); background: rgba(12, 15, 19, .82); font: 800 10px/14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; pointer-events: none; }
+#replayChartCanvas, #dailyChartCanvas { display: block; width: 100%; height: 100%; }
+#replayChartCanvas[hidden], #dailyChartCanvas[hidden] { display: none; }
+.market-chart-tabs { position: absolute; z-index: 5; top: 5px; left: 8px; display: flex; gap: 2px; }
+.market-chart-tabs button { min-height: 22px; height: 22px; padding: 0 8px; border-radius: 2px; color: var(--muted); background: rgba(14,18,23,.94); font: 850 9px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.market-chart-tabs button.active { color: #07110e; border-color: var(--yellow); background: var(--yellow); }
+.replay-chart-legend { position: absolute; z-index: 1; top: 31px; left: 8px; display: flex; flex-wrap: wrap; gap: 5px 12px; padding: 3px 5px; color: var(--muted); background: rgba(12, 15, 19, .82); font: 800 10px/14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; pointer-events: none; }
 .replay-chart-legend strong { color: #cbd2da; }
 .legend-vwap { color: #ffd447; }
 .legend-sma9 { color: #ff4d5e; }
@@ -185,7 +189,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   --day-direction: var(--muted);
   position: absolute;
   z-index: 4;
-  top: 42px;
+  top: 62px;
   left: 8px;
   width: clamp(238px, 28cqw, 320px);
   height: 170px;
@@ -202,6 +206,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 }
 .day-context.above { --day-direction: var(--price-up); }
 .day-context.below { --day-direction: var(--price-down); }
+.day-context[hidden], .replay-chart-empty[hidden] { display: none; }
 .day-context > header, .day-context > footer { display: flex; align-items: center; padding: 0 7px; white-space: nowrap; }
 .day-context > header { gap: 7px; border-bottom: 1px solid #2a3038; background: rgba(18, 23, 29, .96); }
 .day-context > header strong { color: #f2f5f7; font-size: 10px; letter-spacing: .05em; }

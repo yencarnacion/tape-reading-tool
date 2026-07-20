@@ -22,6 +22,7 @@
     app: $('app'), workspace: $('workspace'), visualStack: $('visualStack'), chartPanel: $('chartPanel'), chart: $('chartCanvas'), chartEmpty: $('chartEmpty'), rollingPanel: $('rollingPanel'),
     dayContext: $('dayContext'), dayContextCanvas: $('dayContextCanvas'), dayContextSession: $('dayContextSession'), dayContextChange: $('dayContextChange'), dayContextHigh: $('dayContextHigh'), dayContextLow: $('dayContextLow'), dayContextPosition: $('dayContextPosition'),
     replayMarketPanel: $('replayMarketPanel'), replayChart: $('replayChartCanvas'), replayChartEmpty: $('replayChartEmpty'),
+    dailyChart: $('dailyChartCanvas'), dailyChartEmpty: $('dailyChartEmpty'), minuteChartTab: $('minuteChartTab'), dailyChartTab: $('dailyChartTab'),
     tapePanel: $('tapePanel'), tapeRows: $('tapeRows'), sizeHeading: $('sizeHeading'),
     tickerForm: $('tickerForm'), tickerInput: $('tickerInput'), historySelect: $('historySelect'),
     historyBack: $('historyBack'), historyForward: $('historyForward'), tickSelect: $('tickSelect'),
@@ -52,7 +53,8 @@
     navSymbols: [], navIndex: -1, lastMetricUpdate: 0,
     prefixBase: { volume: 0, buyer: 0, seller: 0, prints: 0 }, midpoints: [],
     serverClockUS: 0, serverClockAt: 0, replay: null, replayConfig: null,
-    minuteBars: [], replayChartEndUS: 0, replayChartKey: '', dirtyReplayChart: true, marketChartEnabled: false,
+    minuteBars: [], dailyBars: [], marketChartView: 'minute', dailyHistorySymbol: '', dailyHistoryPending: false, dirtyDailyChart: true,
+    replayChartEndUS: 0, replayChartKey: '', dirtyReplayChart: true, marketChartEnabled: false,
     rvolWarmup: { symbol: '', ready: false, pending: false, attempt: 0, token: 0, timer: null, controller: null },
     tickScale: null, minuteScale: null
   };
@@ -156,6 +158,7 @@
   const context = elements.chart.getContext('2d', { alpha: false, desynchronized: true });
   const replayContext = elements.replayChart.getContext('2d', { alpha: false, desynchronized: true });
   const dayContext = elements.dayContextCanvas.getContext('2d', { alpha: false, desynchronized: true });
+  const dailyContext = elements.dailyChart.getContext('2d', { alpha: false, desynchronized: true });
 
   function serverDefaults(display, audioConfig) {
     return {
@@ -264,6 +267,12 @@
       }
       const snapshot = message.snapshot;
       state.symbol = snapshot.symbol || message.symbol;
+      if (state.dailyHistorySymbol !== state.symbol) {
+        state.dailyBars = [];
+        state.dailyHistorySymbol = '';
+        state.dirtyDailyChart = true;
+        if (state.marketChartView === 'daily') void loadDailyHistory();
+      }
       state.trades = Array.isArray(snapshot.trades) ? snapshot.trades : [];
       prepareTradeHistory();
       rebuildMinuteBars(state.trades);
@@ -565,6 +574,54 @@
     state.minuteBars = [...merged.values()].sort((left, right) => left.timeUS - right.timeUS).slice(-2000);
     state.dirtyReplayChart = true;
     state.dirtyDayContext = true;
+  }
+
+  async function loadDailyHistory() {
+    if (state.dailyHistoryPending || state.dailyHistorySymbol === state.symbol) return;
+    state.dailyHistoryPending = true;
+    elements.dailyChartEmpty.hidden = false;
+    elements.dailyChartEmpty.textContent = 'LOADING 90 DAILY BARS…';
+    try {
+      const response = await fetch(`/api/daily-history?symbol=${encodeURIComponent(state.symbol)}`);
+      if (!response.ok) throw new Error((await response.text()).trim());
+      const payload = await response.json();
+      if (payload.symbol !== state.symbol) return;
+      state.dailyBars = (Array.isArray(payload.bars) ? payload.bars : []).map((bar) => ({
+        timeUS: Number(bar.time_us), open: Number(bar.open), high: Number(bar.high), low: Number(bar.low),
+        close: Number(bar.close), volume: Number(bar.volume) || 0
+      })).filter((bar) => bar.timeUS > 0 && bar.close > 0).slice(-90);
+      state.dailyHistorySymbol = state.symbol;
+      elements.dailyChartEmpty.textContent = state.dailyBars.length ? '' : 'NO DAILY HISTORY AVAILABLE';
+      elements.dailyChartEmpty.hidden = state.dailyBars.length > 0;
+      state.dirtyDailyChart = true;
+    } catch (error) {
+      elements.dailyChartEmpty.textContent = String(error.message || error).toUpperCase();
+      elements.dailyChartEmpty.hidden = false;
+    } finally {
+      state.dailyHistoryPending = false;
+    }
+  }
+
+  function selectMarketChart(view) {
+    state.marketChartView = view === 'daily' ? 'daily' : 'minute';
+    const daily = state.marketChartView === 'daily';
+    elements.replayChart.hidden = daily;
+    elements.dailyChart.hidden = !daily;
+    elements.dayContext.hidden = daily;
+    elements.replayChartEmpty.hidden = daily || state.minuteBars.length > 0;
+    elements.dailyChartEmpty.hidden = !daily || state.dailyBars.length > 0;
+    elements.minuteChartTab.classList.toggle('active', !daily);
+    elements.dailyChartTab.classList.toggle('active', daily);
+    elements.minuteChartTab.setAttribute('aria-pressed', String(!daily));
+    elements.dailyChartTab.setAttribute('aria-pressed', String(daily));
+    document.querySelector('.legend-vwap').hidden = daily;
+    if (daily) {
+      state.dirtyDailyChart = true;
+      void loadDailyHistory();
+    } else {
+      state.dirtyReplayChart = true;
+      state.dirtyDayContext = true;
+    }
   }
 
   function ensureTapePool() {
@@ -1093,6 +1150,116 @@
     }
   }
 
+  function drawDailyChart() {
+    const canvas = elements.dailyChart;
+    const rect = canvas.getBoundingClientRect();
+    const width = rect.width;
+    const height = rect.height;
+    const ratio = Math.min(2, window.devicePixelRatio || 1);
+    const pixelWidth = Math.max(1, Math.round(width * ratio));
+    const pixelHeight = Math.max(1, Math.round(height * ratio));
+    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+      canvas.width = pixelWidth;
+      canvas.height = pixelHeight;
+    }
+    dailyContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+    dailyContext.fillStyle = '#0c0f13';
+    dailyContext.fillRect(0, 0, width, height);
+    const bars = state.dailyBars.slice(-90);
+    if (width < 160 || height < 150 || !bars.length) {
+      state.dirtyDailyChart = false;
+      return;
+    }
+    elements.dailyChartEmpty.hidden = true;
+    const indicators = calculateDailyIndicators(bars);
+    const axisWidth = width < 360 ? 48 : 56;
+    const left = 7;
+    const right = width - axisWidth;
+    const top = 55;
+    const bottom = height - 22;
+    const step = (right - left) / bars.length;
+    const xAt = (index) => left + (index + .5) * step;
+    let minimum = Infinity;
+    let maximum = -Infinity;
+    bars.forEach((bar, index) => {
+      minimum = Math.min(minimum, bar.low);
+      maximum = Math.max(maximum, bar.high);
+      for (const value of [indicators[index].sma9, indicators[index].sma20, indicators[index].upper, indicators[index].lower]) {
+        if (Number.isFinite(value)) { minimum = Math.min(minimum, value); maximum = Math.max(maximum, value); }
+      }
+    });
+    const padding = Math.max((maximum - minimum) * .06, maximum * .0001, .01);
+    minimum -= padding; maximum += padding;
+    const yAt = (value) => bottom - (value - minimum) / (maximum - minimum) * (bottom - top);
+    dailyContext.font = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    dailyContext.textBaseline = 'middle';
+    for (let index = 0; index <= 4; index++) {
+      const y = top + (bottom - top) * index / 4;
+      dailyContext.strokeStyle = '#252b33';
+      dailyContext.lineWidth = 1;
+      dailyContext.beginPath(); dailyContext.moveTo(left, y); dailyContext.lineTo(right, y); dailyContext.stroke();
+      dailyContext.fillStyle = '#8d96a2'; dailyContext.textAlign = 'left';
+      dailyContext.fillText(formatAxisPrice(maximum - (maximum - minimum) * index / 4), right + 5, y);
+    }
+    const bodyWidth = Math.max(1, Math.min(6, step * .62));
+    bars.forEach((bar, index) => {
+      const x = xAt(index);
+      const up = bar.close >= bar.open;
+      const color = up ? '#34c7d9' : '#ff4d5e';
+      dailyContext.strokeStyle = color; dailyContext.fillStyle = color;
+      dailyContext.beginPath(); dailyContext.moveTo(x, yAt(bar.high)); dailyContext.lineTo(x, yAt(bar.low)); dailyContext.stroke();
+      const bodyTop = Math.min(yAt(bar.open), yAt(bar.close));
+      const bodyHeight = Math.max(1, Math.abs(yAt(bar.open) - yAt(bar.close)));
+      if (up) {
+        dailyContext.globalAlpha = .3; dailyContext.fillRect(x - bodyWidth / 2, bodyTop, bodyWidth, bodyHeight); dailyContext.globalAlpha = 1;
+        dailyContext.strokeRect(x - bodyWidth / 2, bodyTop, bodyWidth, bodyHeight);
+      } else dailyContext.fillRect(x - bodyWidth / 2, bodyTop, bodyWidth, bodyHeight);
+    });
+    drawLine('lower', '#f2f5f7', 1, .72);
+    drawLine('upper', '#f2f5f7', 1, .72);
+    drawLine('sma20', '#56c7ff', 1.6, 1);
+    drawLine('sma9', '#ff4d5e', 2.1, 1);
+    const labelIndexes = [0, Math.floor((bars.length - 1) / 2), bars.length - 1];
+    dailyContext.fillStyle = '#78818c'; dailyContext.textBaseline = 'bottom';
+    labelIndexes.forEach((index, position) => {
+      dailyContext.textAlign = position === 0 ? 'left' : position === 2 ? 'right' : 'center';
+      dailyContext.fillText(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' }).format(new Date(bars[index].timeUS / 1000)), xAt(index), height - 3);
+    });
+    const last = bars[bars.length - 1];
+    const lastY = yAt(last.close);
+    dailyContext.setLineDash([2, 3]); dailyContext.strokeStyle = '#d8dde2'; dailyContext.globalAlpha = .65;
+    dailyContext.beginPath(); dailyContext.moveTo(left, lastY); dailyContext.lineTo(right, lastY); dailyContext.stroke();
+    dailyContext.setLineDash([]); dailyContext.globalAlpha = 1;
+    dailyContext.fillStyle = '#d8dde2'; dailyContext.fillRect(right, lastY - 9, axisWidth, 18);
+    dailyContext.fillStyle = '#090b0e'; dailyContext.textAlign = 'left'; dailyContext.textBaseline = 'middle';
+    dailyContext.fillText(formatPrice(last.close), right + 4, lastY);
+    state.dirtyDailyChart = false;
+
+    function drawLine(key, color, lineWidth, alpha) {
+      dailyContext.beginPath(); let drawing = false;
+      indicators.forEach((values, index) => {
+        const value = values[key];
+        if (!Number.isFinite(value)) { drawing = false; return; }
+        if (drawing) dailyContext.lineTo(xAt(index), yAt(value)); else dailyContext.moveTo(xAt(index), yAt(value));
+        drawing = true;
+      });
+      dailyContext.strokeStyle = color; dailyContext.lineWidth = lineWidth; dailyContext.globalAlpha = alpha; dailyContext.stroke(); dailyContext.globalAlpha = 1;
+    }
+  }
+
+  function calculateDailyIndicators(bars) {
+    let sum9 = 0; let sum20 = 0; let squares20 = 0;
+    return bars.map((bar, index) => {
+      sum9 += bar.close; sum20 += bar.close; squares20 += bar.close * bar.close;
+      if (index >= 9) sum9 -= bars[index - 9].close;
+      if (index >= 20) { sum20 -= bars[index - 20].close; squares20 -= bars[index - 20].close ** 2; }
+      const sma9 = index >= 8 ? sum9 / 9 : null;
+      const sma20 = index >= 19 ? sum20 / 20 : null;
+      const deviation = sma20 === null ? 0 : Math.sqrt(Math.max(0, squares20 / 20 - sma20 * sma20));
+      return { sma9, sma20, upper: sma20 === null ? null : sma20 + deviation * 2, lower: sma20 === null ? null : sma20 - deviation * 2 };
+    });
+  }
+
   function calculateReplayIndicators(bars) {
     const result = [];
     let sum9 = 0;
@@ -1292,6 +1459,8 @@
   }
 
   function bindControls() {
+    elements.minuteChartTab.addEventListener('click', () => selectMarketChart('minute'));
+    elements.dailyChartTab.addEventListener('click', () => selectMarketChart('daily'));
     elements.tickerForm.addEventListener('submit', (event) => {
       event.preventDefault();
       switchSymbol(elements.tickerInput.value, true);
@@ -1674,6 +1843,7 @@
     if (state.dirtyReplayChart && (state.status?.mode === 'replay' || state.marketChartEnabled) && state.settings?.showChart) drawReplayChart();
     if (state.dirtyChart && state.settings?.showChart) drawChart();
     if (state.dirtyDayContext && state.settings?.showChart) drawDayContext();
+    if (state.dirtyDailyChart && state.marketChartView === 'daily' && state.settings?.showChart) drawDailyChart();
     if (state.dirtyTape && state.settings?.showTape) renderTape();
     if (now - state.lastMetricUpdate > 100) {
       updateLiveMetrics(now);
@@ -1762,7 +1932,7 @@
   }
 
   bindControls();
-  new ResizeObserver(() => { state.dirtyChart = true; state.dirtyReplayChart = true; state.dirtyDayContext = true; }).observe(elements.visualStack);
+  new ResizeObserver(() => { state.dirtyChart = true; state.dirtyReplayChart = true; state.dirtyDayContext = true; state.dirtyDailyChart = true; }).observe(elements.visualStack);
   connect();
   updateNavButtons();
   updateSoundButton();
