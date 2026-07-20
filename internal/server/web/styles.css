@@ -181,6 +181,42 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 
 .chart-panel { container-type: inline-size; position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #0c0f13; }
 #chartCanvas { display: block; width: 100%; height: 100%; }
+.day-context {
+  --day-direction: var(--muted);
+  position: absolute;
+  z-index: 4;
+  top: 8px;
+  left: 8px;
+  width: clamp(238px, 28cqw, 320px);
+  height: 170px;
+  display: grid;
+  grid-template-rows: 25px minmax(0, 1fr) 23px;
+  overflow: hidden;
+  border: 1px solid #46505d;
+  border-top: 2px solid var(--day-direction);
+  border-radius: 3px;
+  background: rgba(8, 11, 15, .94);
+  box-shadow: 0 5px 18px rgba(0, 0, 0, .5);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  pointer-events: none;
+}
+.day-context.above { --day-direction: var(--price-up); }
+.day-context.below { --day-direction: var(--price-down); }
+.day-context > header, .day-context > footer { display: flex; align-items: center; padding: 0 7px; white-space: nowrap; }
+.day-context > header { gap: 7px; border-bottom: 1px solid #2a3038; background: rgba(18, 23, 29, .96); }
+.day-context > header strong { color: #f2f5f7; font-size: 10px; letter-spacing: .05em; }
+.day-context > header span { flex: 1; color: var(--muted); font-size: 8px; }
+.day-context > header output { color: var(--day-direction); font-size: 11px; font-weight: 900; }
+#dayContextCanvas { display: block; width: 100%; height: 100%; }
+.day-context > footer { justify-content: space-between; gap: 4px; border-top: 1px solid #2a3038; color: var(--muted); font-size: 9px; font-weight: 800; }
+.day-context > footer b { color: #dce2e7; font-weight: 800; }
+#dayContextPosition { color: var(--day-direction); }
+@container (max-width: 520px) {
+  .day-context { width: 224px; height: 145px; }
+}
+@container (max-width: 270px) {
+  .day-context { display: none; }
+}
 .chart-empty { position: absolute; z-index: 1; inset: 0 0 54px; display: grid; place-items: end center; padding-bottom: 28px; color: #606975; font-size: 12px; font-weight: 800; pointer-events: none; }
 .chart-empty.hidden { display: none; }
 

@@ -20,6 +20,7 @@
   const $ = (id) => document.getElementById(id);
   const elements = {
     app: $('app'), workspace: $('workspace'), visualStack: $('visualStack'), chartPanel: $('chartPanel'), chart: $('chartCanvas'), chartEmpty: $('chartEmpty'), rollingPanel: $('rollingPanel'),
+    dayContext: $('dayContext'), dayContextCanvas: $('dayContextCanvas'), dayContextSession: $('dayContextSession'), dayContextChange: $('dayContextChange'), dayContextHigh: $('dayContextHigh'), dayContextLow: $('dayContextLow'), dayContextPosition: $('dayContextPosition'),
     replayMarketPanel: $('replayMarketPanel'), replayChart: $('replayChartCanvas'), replayChartEmpty: $('replayChartEmpty'),
     tapePanel: $('tapePanel'), tapeRows: $('tapeRows'), sizeHeading: $('sizeHeading'),
     tickerForm: $('tickerForm'), tickerInput: $('tickerInput'), historySelect: $('historySelect'),
@@ -47,7 +48,7 @@
   const state = {
     symbol: 'AAPL', trades: [], bars: [], quote: {}, history: [], status: {},
     defaults: null, settings: null, ws: null, reconnectTimer: null, reconnectDelay: 500,
-    tapePool: [], dropped: 0, dirtyChart: true, dirtyTape: true,
+    tapePool: [], dropped: 0, dirtyChart: true, dirtyDayContext: true, dirtyTape: true,
     navSymbols: [], navIndex: -1, lastMetricUpdate: 0,
     prefixBase: { volume: 0, buyer: 0, seller: 0, prints: 0 }, midpoints: [],
     serverClockUS: 0, serverClockAt: 0, replay: null, replayConfig: null,
@@ -154,6 +155,7 @@
   const audio = new TapeAudio();
   const context = elements.chart.getContext('2d', { alpha: false, desynchronized: true });
   const replayContext = elements.replayChart.getContext('2d', { alpha: false, desynchronized: true });
+  const dayContext = elements.dayContextCanvas.getContext('2d', { alpha: false, desynchronized: true });
 
   function serverDefaults(display, audioConfig) {
     return {
@@ -343,6 +345,7 @@
     audio.push(trades);
     state.dirtyChart = true;
     state.dirtyReplayChart = true;
+    state.dirtyDayContext = true;
     state.dirtyTape = true;
   }
 
@@ -453,6 +456,7 @@
     state.minuteBars = [];
     for (const trade of trades) addTradeToMinuteBars(trade);
     state.dirtyReplayChart = true;
+    state.dirtyDayContext = true;
   }
 
   function addTradeToMinuteBars(trade) {
@@ -486,6 +490,7 @@
       if ((Number(trade.t) * 1000 || 0) > state.replayChartEndUS) addTradeToMinuteBars(trade);
     }
     state.dirtyReplayChart = true;
+    state.dirtyDayContext = true;
   }
 
   function resetRVOLWarmup() {
@@ -559,6 +564,7 @@
     }
     state.minuteBars = [...merged.values()].sort((left, right) => left.timeUS - right.timeUS).slice(-2000);
     state.dirtyReplayChart = true;
+    state.dirtyDayContext = true;
   }
 
   function ensureTapePool() {
@@ -807,6 +813,124 @@
       elements.replayChart.width = width;
       elements.replayChart.height = height;
     }
+  }
+
+  function drawDayContext() {
+    const canvas = elements.dayContextCanvas;
+    const rect = canvas.getBoundingClientRect();
+    const width = rect.width;
+    const height = rect.height;
+    const ratio = Math.min(2, window.devicePixelRatio || 1);
+    const pixelWidth = Math.max(1, Math.round(width * ratio));
+    const pixelHeight = Math.max(1, Math.round(height * ratio));
+    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+      canvas.width = pixelWidth;
+      canvas.height = pixelHeight;
+    }
+    dayContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+    dayContext.fillStyle = '#090d12';
+    dayContext.fillRect(0, 0, width, height);
+
+    const latestBar = state.minuteBars[state.minuteBars.length - 1];
+    if (!latestBar || width < 80 || height < 40) {
+      elements.dayContext.classList.remove('above', 'below');
+      elements.dayContextChange.textContent = '--';
+      elements.dayContextHigh.textContent = '--';
+      elements.dayContextLow.textContent = '--';
+      elements.dayContextPosition.textContent = 'RANGE --';
+      state.dirtyDayContext = false;
+      return;
+    }
+
+    const partsFor = (bar) => Object.fromEntries(ET_MINUTE_PARTS.formatToParts(new Date(bar.timeUS / 1000)).map((part) => [part.type, part.value]));
+    const latestParts = partsFor(latestBar);
+    const sessionDate = `${latestParts.year}-${latestParts.month}-${latestParts.day}`;
+    const bars = state.minuteBars.filter((bar) => {
+      const parts = partsFor(bar);
+      bar._dayMapMinute = Number(parts.hour) * 60 + Number(parts.minute);
+      return `${parts.year}-${parts.month}-${parts.day}` === sessionDate && bar._dayMapMinute >= 4 * 60 && bar._dayMapMinute <= 20 * 60;
+    });
+    if (!bars.length) {
+      state.dirtyDayContext = false;
+      return;
+    }
+
+    const regular = bars.filter((bar) => bar._dayMapMinute >= 570 && bar._dayMapMinute < 960);
+    const referenceBars = regular.length ? regular : bars;
+    const open = Number(referenceBars[0].open);
+    const last = Number(bars[bars.length - 1].close);
+    const high = Math.max(...bars.map((bar) => Number(bar.high)));
+    const low = Math.min(...bars.map((bar) => Number(bar.low)));
+    const hasExtended = bars.some((bar) => bar._dayMapMinute < 570 || bar._dayMapMinute >= 960);
+    const startMinute = hasExtended ? 240 : 570;
+    const endMinute = hasExtended ? 1200 : 960;
+    const pad = Math.max((high - low) * .08, high * .00008, .005);
+    const minimum = low - pad;
+    const maximum = high + pad;
+    const left = 5;
+    const right = width - 5;
+    const top = 5;
+    const bottom = height - 13;
+    const xAt = (bar) => left + (bar._dayMapMinute - startMinute) / (endMinute - startMinute) * (right - left);
+    const yAt = (price) => bottom - (price - minimum) / (maximum - minimum) * (bottom - top);
+    const direction = last > open ? 'above' : last < open ? 'below' : 'neutral';
+    const color = direction === 'above' ? '#00bfc4' : direction === 'below' ? '#e69f00' : '#aab2bc';
+    const change = open > 0 ? (last - open) / open * 100 : 0;
+    const rangePosition = high > low ? (last - low) / (high - low) * 100 : 50;
+
+    elements.dayContext.classList.toggle('above', direction === 'above');
+    elements.dayContext.classList.toggle('below', direction === 'below');
+    elements.dayContextSession.textContent = hasExtended ? '04:00–20:00 ET · XTD' : '09:30–16:00 ET';
+    elements.dayContextChange.textContent = `${change > 0 ? '+' : ''}${change.toFixed(2)}% OPEN`;
+    elements.dayContextHigh.textContent = formatPrice(high);
+    elements.dayContextLow.textContent = formatPrice(low);
+    elements.dayContextPosition.textContent = `${Math.round(rangePosition)}% OF RANGE`;
+    elements.dayContext.setAttribute('aria-label', `Day map: last ${formatPrice(last)}, ${change >= 0 ? 'above' : 'below'} open by ${Math.abs(change).toFixed(2)} percent; high ${formatPrice(high)}, low ${formatPrice(low)}, at ${Math.round(rangePosition)} percent of the day range.`);
+
+    dayContext.lineWidth = 1;
+    dayContext.strokeStyle = '#202832';
+    for (let index = 0; index < 3; index++) {
+      const y = top + (bottom - top) * index / 2;
+      dayContext.beginPath(); dayContext.moveTo(left, y); dayContext.lineTo(right, y); dayContext.stroke();
+    }
+    if (hasExtended) {
+      dayContext.fillStyle = 'rgba(141,150,162,.055)';
+      dayContext.fillRect(left, top, xAt({ _dayMapMinute: 570 }) - left, bottom - top);
+      dayContext.fillRect(xAt({ _dayMapMinute: 960 }), top, right - xAt({ _dayMapMinute: 960 }), bottom - top);
+      dayContext.strokeStyle = '#343d48';
+      for (const minute of [570, 960]) {
+        const x = left + (minute - startMinute) / (endMinute - startMinute) * (right - left);
+        dayContext.beginPath(); dayContext.moveTo(x, top); dayContext.lineTo(x, bottom); dayContext.stroke();
+      }
+    }
+    dayContext.setLineDash([3, 3]);
+    dayContext.strokeStyle = '#7d8792';
+    dayContext.globalAlpha = .7;
+    dayContext.beginPath(); dayContext.moveTo(left, yAt(open)); dayContext.lineTo(right, yAt(open)); dayContext.stroke();
+    dayContext.setLineDash([]);
+    dayContext.globalAlpha = 1;
+
+    dayContext.beginPath();
+    bars.forEach((bar, index) => {
+      const x = xAt(bar);
+      const y = yAt(bar.close);
+      if (index === 0) dayContext.moveTo(x, y); else dayContext.lineTo(x, y);
+    });
+    dayContext.strokeStyle = color;
+    dayContext.lineWidth = 1.7;
+    dayContext.stroke();
+    const lastX = xAt(bars[bars.length - 1]);
+    const lastY = yAt(last);
+    dayContext.fillStyle = color;
+    dayContext.beginPath(); dayContext.arc(lastX, lastY, 2.7, 0, Math.PI * 2); dayContext.fill();
+
+    dayContext.font = '8px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    dayContext.textBaseline = 'bottom';
+    dayContext.fillStyle = '#77818d';
+    dayContext.textAlign = 'left'; dayContext.fillText(hasExtended ? '04' : '09:30', left, height - 1);
+    dayContext.textAlign = 'center'; dayContext.fillText('12', left + (720 - startMinute) / (endMinute - startMinute) * (right - left), height - 1);
+    dayContext.textAlign = 'right'; dayContext.fillText(hasExtended ? '20' : '16', right, height - 1);
+    state.dirtyDayContext = false;
   }
 
   function drawReplayChart() {
@@ -1109,6 +1233,7 @@
     ensureTapePool();
     state.dirtyChart = true;
     state.dirtyReplayChart = true;
+    state.dirtyDayContext = true;
     state.dirtyTape = true;
   }
 
@@ -1548,6 +1673,7 @@
   function animationLoop(now) {
     if (state.dirtyReplayChart && (state.status?.mode === 'replay' || state.marketChartEnabled) && state.settings?.showChart) drawReplayChart();
     if (state.dirtyChart && state.settings?.showChart) drawChart();
+    if (state.dirtyDayContext && state.settings?.showChart) drawDayContext();
     if (state.dirtyTape && state.settings?.showTape) renderTape();
     if (now - state.lastMetricUpdate > 100) {
       updateLiveMetrics(now);
@@ -1636,7 +1762,7 @@
   }
 
   bindControls();
-  new ResizeObserver(() => { state.dirtyChart = true; state.dirtyReplayChart = true; }).observe(elements.visualStack);
+  new ResizeObserver(() => { state.dirtyChart = true; state.dirtyReplayChart = true; state.dirtyDayContext = true; }).observe(elements.visualStack);
   connect();
   updateNavButtons();
   updateSoundButton();

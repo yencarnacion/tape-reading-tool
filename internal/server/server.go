@@ -143,7 +143,9 @@ func (s *Server) handleRVOLHistory(w http.ResponseWriter, r *http.Request) {
 	if !cached || entry.throughUS != throughUS {
 		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 		defer cancel()
-		bars, err := s.rvolMinuteBars(ctx, symbol, through, 40)
+		// Keep enough one-minute history for both the RVOL baseline and the
+		// compact full-session day map in the tape chart.
+		bars, err := s.rvolMinuteBars(ctx, symbol, through, 960)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
