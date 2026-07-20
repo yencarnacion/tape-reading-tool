@@ -74,10 +74,20 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .connection-state.error i { background: var(--red); box-shadow: 0 0 0 2px #3a181d; }
 
 .metrics {
-  display: block;
+  display: grid;
+  grid-template-columns: minmax(280px, .9fr) minmax(500px, 2fr);
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
+.nbbo { min-width: 0; height: 54px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-right: 1px solid var(--line); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.nbbo-side { min-width: 0; display: flex; flex-direction: column; justify-content: center; padding: 4px 9px; }
+.nbbo-side + .nbbo-side { border-left: 1px solid var(--line-soft); }
+.nbbo-side > span { color: var(--muted); font: 800 9px/12px Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: .04em; }
+.nbbo-side > div { min-width: 0; display: flex; align-items: baseline; gap: 7px; white-space: nowrap; }
+.nbbo-side strong { overflow: hidden; font-size: 24px; line-height: 29px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.nbbo-side output { overflow: hidden; color: var(--text); font-size: 14px; line-height: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.nbbo-side.bid strong { color: var(--buyer); }
+.nbbo-side.ask strong { color: var(--seller); }
 .market-clock {
   position: absolute;
   z-index: 3;
@@ -325,14 +335,19 @@ input[type="range"] { width: 100%; height: 5px; padding: 0; accent-color: var(--
 
 @media (min-width: 901px) {
   body:has(.workspace.market-chart-mode) .metrics {
-    display: grid;
     grid-template-columns: minmax(0, 1.55fr) minmax(320px, .9fr) clamp(124px, 23vw, 174px);
   }
+  body:has(.workspace.market-chart-mode) .nbbo { grid-column: 1; }
   body:has(.workspace.market-chart-mode) .metrics-group { grid-column: 2 / 4; }
 }
 
+@media (max-width: 700px) {
+  .app { grid-template-rows: auto auto minmax(0, 1fr) 26px; }
+  .metrics { grid-template-columns: minmax(0, 1fr); }
+  .nbbo { border-right: 0; border-bottom: 1px solid var(--line-soft); }
+}
+
 @media (max-width: 620px) {
-  .app { grid-template-rows: auto 54px minmax(0, 1fr) 26px; }
   .topbar { align-items: stretch; flex-direction: column; gap: 5px; padding: 5px 6px; }
   .ticker-group, .toolbar { width: 100%; }
   .ticker-form { flex: 1; }

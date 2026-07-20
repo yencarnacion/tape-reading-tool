@@ -333,6 +333,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	lastQuote := s.store.Snapshot(symbol, 0).Quote
 	generation := s.store.Generation(symbol)
 	for {
 		select {
@@ -349,6 +350,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				generation = s.store.Generation(symbol)
+				lastQuote = s.store.Snapshot(symbol, 0).Quote
 				continue
 			}
 			if current := s.store.Generation(symbol); current != generation {
@@ -357,11 +359,13 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				generation = current
+				lastQuote = s.store.Snapshot(symbol, 0).Quote
 				continue
 			}
 			for drain := 0; drain < 8; drain++ {
 				trades, quote, dropped, more := s.store.Since(symbol, seq, s.cfg.Tape.WebSocketMaxBatch)
-				if len(trades) == 0 && dropped == 0 {
+				quoteChanged := quote != lastQuote
+				if len(trades) == 0 && dropped == 0 && !quoteChanged {
 					break
 				}
 				if len(trades) > 0 {
@@ -372,6 +376,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				}); err != nil {
 					return
 				}
+				lastQuote = quote
 				if !more {
 					break
 				}

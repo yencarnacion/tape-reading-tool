@@ -55,7 +55,7 @@ storage:
 
 replay:
   source: live
-  provider: all
+  provider: ibkr
   speed: 1
   chart_right_gap_bars: 5
 
