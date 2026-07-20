@@ -72,23 +72,23 @@
             <span class="legend-sma20">SMA 20</span>
             <span class="legend-bollinger">BOLLINGER 20,2</span>
           </div>
+          <section id="dayContext" class="day-context" aria-label="Intraday price context">
+            <header>
+              <strong>DAY MAP</strong>
+              <span id="dayContextSession">09:30–16:00 ET</span>
+              <output id="dayContextChange">--</output>
+            </header>
+            <canvas id="dayContextCanvas"></canvas>
+            <footer>
+              <span>H <b id="dayContextHigh">--</b></span>
+              <span id="dayContextPosition">RANGE --</span>
+              <span>L <b id="dayContextLow">--</b></span>
+            </footer>
+          </section>
           <div id="replayChartEmpty" class="replay-chart-empty">START REPLAY TO BUILD THE CHART</div>
         </section>
         <section id="chartPanel" class="chart-panel" aria-label="Volume delta, rolling tape pressure, and tick chart">
         <canvas id="chartCanvas"></canvas>
-        <section id="dayContext" class="day-context" aria-label="Intraday price context">
-          <header>
-            <strong>DAY MAP</strong>
-            <span id="dayContextSession">09:30–16:00 ET</span>
-            <output id="dayContextChange">--</output>
-          </header>
-          <canvas id="dayContextCanvas"></canvas>
-          <footer>
-            <span>H <b id="dayContextHigh">--</b></span>
-            <span id="dayContextPosition">RANGE --</span>
-            <span>L <b id="dayContextLow">--</b></span>
-          </footer>
-        </section>
         <section id="rollingPanel" class="rolling-panel" aria-label="Rolling tape pressure by horizon" title="PACE compares shares per second with the immediately preceding window of the same length.">
           <header class="rolling-header" aria-hidden="true">
             <span>WINDOW</span><span>VOLUME / SIDE</span><span>DELTA%</span><span>SHARES/S</span><span>PRINTS/S</span><span>Δ MID</span><span>PACE</span>
