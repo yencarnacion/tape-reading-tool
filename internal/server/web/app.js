@@ -23,7 +23,7 @@
     tickerForm: $('tickerForm'), tickerInput: $('tickerInput'), historySelect: $('historySelect'),
     historyBack: $('historyBack'), historyForward: $('historyForward'), tickSelect: $('tickSelect'),
     soundButton: $('soundButton'), replayButton: $('replayButton'), controlsButton: $('controlsButton'), connectionState: $('connectionState'),
-    nbbo: $('nbbo'), bestBid: $('bestBid'), bestBidSize: $('bestBidSize'), bestAsk: $('bestAsk'), bestAskSize: $('bestAskSize'),
+    nbbo: $('nbbo'), bestBid: $('bestBid'), bestBidSize: $('bestBidSize'), nbboSpread: $('nbboSpread'), nbboSpreadDollars: $('nbboSpreadDollars'), bestAsk: $('bestAsk'), bestAskSize: $('bestAskSize'),
     lastPrice: $('lastPrice'), priceChange: $('priceChange'), maxDelta: $('maxDelta'), minDelta: $('minDelta'), tapeRate: $('tapeRate'),
     marketClock: $('marketClock'), marketClockLabel: $('marketClockLabel'), marketClockTime: $('marketClockTime'),
     relativeVolume: $('relativeVolume'), relativeVolumeValue: $('relativeVolumeValue'), relativeVolumeState: $('relativeVolumeState'),
@@ -1332,6 +1332,9 @@
     elements.bestAskSize.textContent = `× ${askSize}`;
     const hasSpread = state.quote.ask > 0 && state.quote.bid > 0 && state.quote.ask >= state.quote.bid;
     const spread = hasSpread ? state.quote.ask - state.quote.bid : 0;
+    const spreadCents = spread * 100;
+    elements.nbboSpread.textContent = hasSpread ? `${spreadCents.toFixed(1).replace(/\.0$/, '')}¢` : '--';
+    elements.nbboSpreadDollars.textContent = hasSpread ? `$${formatPrice(spread)}` : '--';
     elements.nbbo.title = hasSpread ? `IBKR SMART NBBO spread ${formatPrice(spread)}` : 'IBKR SMART national best bid and offer';
     elements.nbbo.setAttribute('aria-label', `IBKR best bid ${bid}, size ${bidSize}; best ask ${ask}, size ${askSize}${hasSpread ? `; spread ${formatPrice(spread)}` : ''}`);
     elements.quoteText.textContent = `BID ${bid} / ASK ${ask}`;
