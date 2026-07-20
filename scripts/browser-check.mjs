@@ -40,8 +40,30 @@ try {
   });
   await command('Page.enable');
   await command('Runtime.enable');
+  await waitForApp();
 
   const results = [];
+  const scaleCheck = await command('Runtime.evaluate', {
+    expression: `(() => {
+      const update = window.__tapeReadingScale;
+      const initial = update(null, 99, 101, 0);
+      const expanded = update(initial, 94, 101, 10);
+      const candidate = update(expanded, 99, 101, 20);
+      const delayed = update(candidate, 99, 101, 1000);
+      const direct = update(candidate, 99, 101, 2720);
+      const splitA = update(candidate, 99, 101, 1520);
+      const splitB = update(splitA, 99, 101, 2720);
+      const eligiblePrices = [100, 100.01, 100.02];
+      return { expanded, delayed, direct, splitB,
+        targetMinimum: Math.min(...eligiblePrices), excludedMinimum: Math.min(...eligiblePrices, 95) };
+    })()`, returnByValue: true
+  });
+  const scale = scaleCheck.result.value;
+  if (scale.expanded.minimum !== 94 || scale.delayed.minimum !== 94 ||
+      Math.abs(scale.direct.minimum - scale.splitB.minimum) > 1e-9 ||
+      scale.targetMinimum !== 100 || scale.excludedMinimum !== 95) {
+    throw new Error(`price-scale hysteresis failed: ${JSON.stringify(scale)}`);
+  }
   for (const width of [384, 634, 902, 1372]) {
     await command('Emulation.setDeviceMetricsOverride', { width, height: 1080, deviceScaleFactor: 1, mobile: false });
     await waitForApp();

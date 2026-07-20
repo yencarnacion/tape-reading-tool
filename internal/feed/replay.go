@@ -257,9 +257,13 @@ func (r *Replay) play(ctx context.Context, generation uint64, request ReplayRequ
 		if event.Kind == "quote" {
 			r.store.UpdateQuote(request.Symbol, event.Bid, event.Ask, event.BidSize, event.AskSize)
 		} else {
+			if !event.ChartEligible {
+				r.updatePosition(generation, event)
+				continue
+			}
 			exchangeMS := event.ExchangeTimeMS
 			if exchangeMS <= 0 {
-				exchangeMS = event.EventUS / 1000
+				exchangeMS = event.MarketTimeUS / 1000
 			}
 			if event.Source == "historical" {
 				r.store.AddTrade(request.Symbol, time.UnixMilli(exchangeMS), received, event.Price, event.Size)

@@ -11,6 +11,8 @@
   const RVOL_BASELINE_BARS = 20;
   const RVOL_MIN_BASELINE_BARS = 5;
   const RVOL_EARLY_PRIOR_SECONDS = 5;
+  const SCALE_CONTRACTION_DELAY_MS = 1500;
+  const SCALE_CONTRACTION_TIME_CONSTANT_MS = 1200;
   const ET_MINUTE_PARTS = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
@@ -50,7 +52,8 @@
     prefixBase: { volume: 0, buyer: 0, seller: 0, prints: 0 }, midpoints: [],
     serverClockUS: 0, serverClockAt: 0, replay: null, replayConfig: null,
     minuteBars: [], replayChartEndUS: 0, replayChartKey: '', dirtyReplayChart: true, marketChartEnabled: false,
-    rvolWarmup: { symbol: '', ready: false, pending: false, attempt: 0, token: 0, timer: null, controller: null }
+    rvolWarmup: { symbol: '', ready: false, pending: false, attempt: 0, token: 0, timer: null, controller: null },
+    tickScale: null, minuteScale: null
   };
 
   const horizonElements = new Map(HORIZONS.map((seconds) => {
@@ -453,11 +456,11 @@
   }
 
   function addTradeToMinuteBars(trade) {
-    const receiptUS = Number(trade.r) || Number(trade.t) * 1000;
+    const marketUS = Number(trade.t) * 1000;
     const price = Number(trade.p);
     const size = Math.max(0, Number(trade.z) || 0);
-    if (!receiptUS || !Number.isFinite(price) || price <= 0) return;
-    const timeUS = Math.floor(receiptUS / 6e7) * 6e7;
+    if (!marketUS || !Number.isFinite(price) || price <= 0) return;
+    const timeUS = Math.floor(marketUS / 6e7) * 6e7;
     let bar = state.minuteBars[state.minuteBars.length - 1];
     if (!bar || bar.timeUS !== timeUS) {
       bar = { timeUS, open: price, high: price, low: price, close: price, volume: 0, dollarVolume: 0 };
@@ -480,7 +483,7 @@
     state.replayChartEndUS = Number(chartEndUS) || 0;
     // Preserve prints that arrived while the chart-history request was in flight.
     for (const trade of state.trades) {
-      if ((Number(trade.r) || 0) > state.replayChartEndUS) addTradeToMinuteBars(trade);
+      if ((Number(trade.t) * 1000 || 0) > state.replayChartEndUS) addTradeToMinuteBars(trade);
     }
     state.dirtyReplayChart = true;
   }
@@ -608,6 +611,36 @@
     }
   }
 
+  // Expand immediately so real moves are never clipped. Contract only after a
+  // stable smaller target, using elapsed-time exponential smoothing so the
+  // result does not depend on display refresh rate.
+  function updatePriceScale(previous, targetMinimum, targetMaximum, nowMS) {
+    if (!previous || !Number.isFinite(previous.minimum) || !Number.isFinite(previous.maximum)) {
+      return { minimum: targetMinimum, maximum: targetMaximum, targetMinimum, targetMaximum, lastMS: nowMS, candidateSince: nowMS, contracting: false };
+    }
+    let minimum = Math.min(previous.minimum, targetMinimum);
+    let maximum = Math.max(previous.maximum, targetMaximum);
+    const expanded = targetMinimum < previous.minimum || targetMaximum > previous.maximum;
+    const targetChanged = targetMinimum !== previous.targetMinimum || targetMaximum !== previous.targetMaximum;
+    let candidateSince = expanded || targetChanged ? nowMS : (previous.candidateSince ?? nowMS);
+    const smaller = !expanded && (targetMinimum > previous.minimum || targetMaximum < previous.maximum);
+    let contracting = smaller;
+    if (smaller && nowMS - candidateSince >= SCALE_CONTRACTION_DELAY_MS) {
+      const elapsed = Math.max(0, nowMS - (previous.lastMS ?? nowMS));
+      const alpha = 1 - Math.exp(-elapsed / SCALE_CONTRACTION_TIME_CONSTANT_MS);
+      minimum = previous.minimum + (targetMinimum - previous.minimum) * alpha;
+      maximum = previous.maximum + (targetMaximum - previous.maximum) * alpha;
+      // Floating point convergence should not keep the animation alive forever.
+      if (Math.abs(minimum - targetMinimum) < 1e-9) minimum = targetMinimum;
+      if (Math.abs(maximum - targetMaximum) < 1e-9) maximum = targetMaximum;
+      contracting = minimum !== targetMinimum || maximum !== targetMaximum;
+    }
+    return { minimum, maximum, targetMinimum, targetMaximum, lastMS: nowMS, candidateSince, contracting };
+  }
+
+  // Exposed solely for deterministic browser validation.
+  window.__tapeReadingScale = updatePriceScale;
+
   function drawChart() {
     resizeCanvas();
     const rect = elements.chart.getBoundingClientRect();
@@ -661,6 +694,8 @@
     const pricePadding = Math.max((maximum - minimum) * 0.08, maximum * 0.00008, 0.005);
     minimum -= pricePadding;
     maximum += pricePadding;
+    state.tickScale = updatePriceScale(state.tickScale, minimum, maximum, performance.now());
+    minimum = state.tickScale.minimum; maximum = state.tickScale.maximum;
     const priceY = (value) => priceBottom - (value - minimum) / (maximum - minimum) * (priceBottom - priceTop);
     const xAt = (index) => left + (index + 0.5) * step;
 
@@ -746,7 +781,7 @@
     context.fillText(formatPrice(last.close), right + 4, currentY);
 
     updateDeltaMetrics(maxDelta, minDelta);
-    state.dirtyChart = false;
+    state.dirtyChart = Boolean(state.tickScale.contracting);
 
     function drawPaneBorder(paneTop, paneBottom, label, value) {
       context.strokeStyle = '#2a3038';
@@ -828,6 +863,8 @@
     const pricePadding = Math.max((maximum - minimum) * 0.07, maximum * 0.00008, 0.005);
     minimum -= pricePadding;
     maximum += pricePadding;
+    state.minuteScale = updatePriceScale(state.minuteScale, minimum, maximum, performance.now());
+    minimum = state.minuteScale.minimum; maximum = state.minuteScale.maximum;
     const priceY = (value) => priceBottom - (value - minimum) / (maximum - minimum) * (priceBottom - top);
 
     replayContext.font = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
@@ -909,7 +946,7 @@
     replayContext.textBaseline = 'middle';
     replayContext.font = '700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     replayContext.fillText(formatPrice(last.close), right + 4, currentY);
-    state.dirtyReplayChart = false;
+    state.dirtyReplayChart = Boolean(state.minuteScale.contracting);
 
     function drawReplayIndicator(key, color, lineWidth, alpha) {
       replayContext.strokeStyle = color;

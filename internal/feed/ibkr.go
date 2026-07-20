@@ -6,6 +6,7 @@ import (
 	"log"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/scmhub/ibapi"
@@ -27,6 +28,7 @@ type IBKR struct {
 	usage       uint64
 	client      *ibapi.EClient
 	recorder    *storage.Database
+	arrivalSeq  atomic.Uint64
 
 	statsMu sync.Mutex
 	stats   map[string]*streamStats
@@ -41,6 +43,9 @@ type subscription struct {
 
 type streamStats struct {
 	trades      uint64
+	eligible    uint64
+	unreported  uint64
+	invalid     uint64
 	quotes      uint64
 	lastTradeAt time.Time
 	lastQuoteAt time.Time
@@ -247,11 +252,11 @@ func (f *IBKR) ensureSubscription(symbol string) {
 		PrimaryExchange: f.cfg.PrimaryExchange, Currency: f.cfg.Currency,
 	}
 	log.Printf(
-		"IBKR subscription request symbol=%s sec_type=%s exchange=%s primary_exchange=%q currency=%s quote_req=%d all_last_req=%d",
+		"IBKR subscription request symbol=%s sec_type=%s exchange=%s primary_exchange=%q currency=%s quote_req=%d last_req=%d",
 		symbol, contract.SecType, contract.Exchange, contract.PrimaryExchange, contract.Currency, sub.quoteID, sub.tradeID,
 	)
 	client.ReqMktData(sub.quoteID, contract, "", false, false, nil)
-	client.ReqTickByTickData(sub.tradeID, contract, "AllLast", 0, false)
+	client.ReqTickByTickData(sub.tradeID, contract, "Last", 0, false)
 }
 
 func (f *IBKR) symbolFor(reqID int64) string {
@@ -266,19 +271,46 @@ func (w *ibWrapper) TickByTickAllLast(reqID int64, tickType int64, unixTime int6
 		return
 	}
 	now := time.Now()
+	arrivalSeq := w.feed.arrivalSeq.Add(1)
 	first := w.feed.recordTrade(symbol, now)
-	trade := w.feed.store.AddTrade(symbol, time.Unix(unixTime, 0), now, price, size.Float())
+	tradeSize := size.Float()
+	eligible, exclusion := tape.ChartEligibility(tape.TradeEligibilityInput{FeedType: tape.FeedLast, Price: price, Size: tradeSize, Unreported: tickAttribLast.Unreported})
+	w.feed.recordEligibility(symbol, eligible, exclusion)
+	var trade tape.Trade
+	if eligible {
+		trade = w.feed.store.AddTrade(symbol, time.Unix(unixTime, 0), now, price, tradeSize)
+	}
 	if w.feed.recorder != nil {
+		quote := w.feed.store.Snapshot(symbol, 0).Quote
 		w.feed.recorder.RecordTrade(storage.TradeRecord{
-			Symbol: symbol, EventUS: trade.ReceivedUS, ReceivedUS: trade.ReceivedUS,
-			ExchangeTimeMS: trade.ExchangeTimeMS, Price: trade.Price, Size: trade.Size,
-			Class: trade.Class, Side: trade.Side, Bid: trade.Bid, Ask: trade.Ask,
+			Symbol: symbol, MarketTimeUS: unixTime * 1e6, SequenceID: arrivalSeq, ReceivedUS: now.UnixMicro(),
+			Price: price, Size: tradeSize, Class: trade.Class, Side: trade.Side,
+			Bid: quote.Bid, Ask: quote.Ask, FeedType: tape.FeedLast,
+			Unreported: tickAttribLast.Unreported, PastLimit: tickAttribLast.PastLimit,
+			ChartEligible: eligible, ChartExclusionReason: exclusion,
 			Exchange: exchange, Conditions: specialConditions, Source: "live",
 			Provider: "ibkr",
 		})
 	}
 	if first {
 		log.Printf("IBKR first trade symbol=%s req=%d price=%g size=%s exchange=%q tick_type=%d", symbol, reqID, price, size.String(), exchange, tickType)
+	}
+}
+
+func (f *IBKR) recordEligibility(symbol string, eligible bool, reason string) {
+	f.statsMu.Lock()
+	defer f.statsMu.Unlock()
+	s := f.stats[symbol]
+	if s == nil {
+		s = &streamStats{}
+		f.stats[symbol] = s
+	}
+	if eligible {
+		s.eligible++
+	} else if reason == tape.ExcludeUnreported {
+		s.unreported++
+	} else {
+		s.invalid++
 	}
 }
 
@@ -413,8 +445,8 @@ func (f *IBKR) logDiagnostics(client *ibapi.EClient) {
 	stats := *f.statsForLocked(symbol)
 	f.statsMu.Unlock()
 	log.Printf(
-		"IBKR heartbeat connected=%v symbol=%s bid=%g ask=%g trades=%d quotes=%d last_trade=%s last_quote=%s recorder_dropped=%d state=%s message=%q",
-		client.IsConnected(), symbol, snapshot.Quote.Bid, snapshot.Quote.Ask, stats.trades, stats.quotes,
+		"IBKR heartbeat connected=%v symbol=%s bid=%g ask=%g last_callbacks=%d chart_eligible=%d excluded_unreported=%d invalid_or_halt=%d quotes=%d last_trade=%s last_quote=%s recorder_dropped=%d state=%s message=%q",
+		client.IsConnected(), symbol, snapshot.Quote.Bid, snapshot.Quote.Ask, stats.trades, stats.eligible, stats.unreported, stats.invalid, stats.quotes,
 		formatDiagnosticTime(stats.lastTradeAt), formatDiagnosticTime(stats.lastQuoteAt), f.recorderDropped(), snapshot.Status.State, snapshot.Status.Message,
 	)
 }

@@ -78,3 +78,44 @@ func waitReplayState(t *testing.T, replay *Replay, wanted string) {
 	}
 	t.Fatalf("replay state = %q, want %q", replay.Status().State, wanted)
 }
+
+func TestReplayUsesPersistedEligibilityAndReceiptCadence(t *testing.T) {
+	cfg := config.Defaults().Storage
+	cfg.Path = filepath.Join(t.TempDir(), "replay.db")
+	database, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	base := time.Date(2026, 7, 17, 13, 30, 0, 0, time.UTC).UnixMicro()
+	if err := database.InsertTrades(context.Background(), []storage.TradeRecord{
+		{Symbol: "TEST", EventUS: base, MarketTimeUS: base, ReceivedUS: base, SequenceID: 1, Price: 100, Size: 10, ChartEligible: true, Source: "live", Provider: "ibkr"},
+		{Symbol: "TEST", EventUS: base + 1000, MarketTimeUS: base, ReceivedUS: base + 1000, SequenceID: 2, Price: 95, Size: 1000, Unreported: true, ChartExclusionReason: tape.ExcludeUnreported, Source: "live", Provider: "ibkr"},
+		{Symbol: "TEST", EventUS: base + 2000, MarketTimeUS: base, ReceivedUS: base + 2000, SequenceID: 3, Price: 100.02, Size: 20, ChartEligible: true, Source: "live", Provider: "ibkr"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store := tape.NewStore("TEST", 100, 4)
+	replay := NewReplay(database, store, "live", "ibkr", 20)
+	if err := replay.Start(ReplayRequest{Symbol: "TEST", Source: "live", Provider: "ibkr", StartUS: base, EndUS: base + 3000, Speed: 20}); err != nil {
+		t.Fatal(err)
+	}
+	waitReplayState(t, replay, "complete")
+	trades := store.Snapshot("TEST", 10).Trades
+	if len(trades) != 2 || trades[0].Price != 100 || trades[1].Price != 100.02 || trades[1].ReceivedUS != base+2000 {
+		t.Fatalf("replayed chart stream = %+v", trades)
+	}
+}
+
+func TestResetSubscriptionsRejectsStaleRequestIDs(t *testing.T) {
+	f := NewIBKR(config.Defaults().IBKR, tape.NewStore("AAPL", 10, 2), nil)
+	f.reqSymbols[41] = "AAPL"
+	f.subs["AAPL"] = &subscription{symbol: "AAPL", tradeID: 41, quoteID: 42}
+	f.resetSubscriptions()
+	if got := f.symbolFor(41); got != "" {
+		t.Fatalf("stale request mapped to %q", got)
+	}
+	if len(f.subs) != 0 {
+		t.Fatalf("subscriptions survived reconnect: %+v", f.subs)
+	}
+}

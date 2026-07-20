@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -121,5 +122,51 @@ func TestMinuteBarsRespectExactReplayPosition(t *testing.T) {
 	}
 	if len(bars) != 1 || bars[0].Open != 10 || bars[0].High != 12 || bars[0].Low != 10 || bars[0].Close != 12 || bars[0].Volume != 150 || bars[0].DollarVolume != 1600 {
 		t.Fatalf("partial minute bar = %+v", bars)
+	}
+}
+
+func TestMinuteBarsUseEligibleMarketTimeAndDeterministicOrder(t *testing.T) {
+	database := testDatabase(t)
+	ctx := context.Background()
+	minute := time.Date(2026, 7, 17, 13, 30, 0, 0, time.UTC).UnixMicro()
+	receivedNextMinute := minute + 60e6 + 50e3
+	records := []TradeRecord{
+		{Symbol: "TEST", EventUS: minute + 1e6, MarketTimeUS: minute + 59e6, ReceivedUS: receivedNextMinute, SequenceID: 1, Price: 100, Size: 10, ChartEligible: true, Source: "live", Provider: "ibkr"},
+		{Symbol: "TEST", EventUS: minute + 2e6, MarketTimeUS: minute + 59e6, ReceivedUS: receivedNextMinute + 1, SequenceID: 2, Price: 100.01, Size: 20, ChartEligible: true, Source: "live", Provider: "ibkr"},
+		{Symbol: "TEST", EventUS: minute + 3e6, MarketTimeUS: minute + 59e6, ReceivedUS: receivedNextMinute + 2, SequenceID: 3, Price: 95, Size: 1000, Unreported: true, ChartExclusionReason: tape.ExcludeUnreported, Source: "live", Provider: "ibkr"},
+		{Symbol: "TEST", EventUS: minute + 4e6, MarketTimeUS: minute + 59e6, ReceivedUS: receivedNextMinute + 3, SequenceID: 4, Price: 100.02, Size: 30, ChartEligible: true, Source: "live", Provider: "ibkr"},
+	}
+	if err := database.InsertTrades(ctx, records); err != nil {
+		t.Fatal(err)
+	}
+	bars, err := database.MinuteBars(ctx, "TEST", "live", "ibkr", minute, minute+60e6-1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bars) != 1 {
+		t.Fatalf("bars=%+v", bars)
+	}
+	b := bars[0]
+	if b.TimeUS != minute || b.Open != 100 || b.High != 100.02 || b.Low != 100 || b.Close != 100.02 || b.Volume != 60 || math.Abs(b.DollarVolume-6000.8) > 1e-9 {
+		t.Fatalf("eligible OHLCV/order = %+v", b)
+	}
+}
+
+func TestMinuteBarsRetainLargeLegitimateMovement(t *testing.T) {
+	database := testDatabase(t)
+	ctx := context.Background()
+	minute := time.Date(2026, 7, 17, 13, 30, 0, 0, time.UTC).UnixMicro()
+	if err := database.InsertTrades(ctx, []TradeRecord{
+		{Symbol: "TEST", EventUS: minute, MarketTimeUS: minute, SequenceID: 1, Price: 100, Size: 10, ChartEligible: true, Source: "live", Provider: "ibkr"},
+		{Symbol: "TEST", EventUS: minute + 1, MarketTimeUS: minute, SequenceID: 2, Price: 95, Size: 20, ChartEligible: true, Source: "live", Provider: "ibkr"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	bars, err := database.MinuteBars(ctx, "TEST", "live", "ibkr", minute, minute+59e6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bars) != 1 || bars[0].Low != 95 || bars[0].Close != 95 || bars[0].Volume != 30 {
+		t.Fatalf("legitimate move missing: %+v", bars)
 	}
 }

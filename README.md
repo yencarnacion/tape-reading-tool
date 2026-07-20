@@ -8,7 +8,7 @@ A compact tape reader for split-second scalping with IBKR or Massive market data
 
 - Connects to TWS or IB Gateway through the socket API.
 - Can alternatively use the official Massive Go client for REST backfills and a live stocks WebSocket.
-- Requests `AllLast` tick-by-tick trades and a top-of-book quote stream.
+- Requests chart-quality `Last` tick-by-tick trades and a top-of-book quote stream.
 - Aggregates `1T`, `10T`, `100T`, `1000T`, or custom tick bars in the browser.
 - Shows total, buyer, and seller volume; signed delta and delta percent; shares and prints per second; midpoint movement in ticks; and relative pace for rolling 5, 15, and 60-second horizons.
 - Treats 15 seconds as the primary tradeable pressure cycle, with 5 seconds for ignition and 60 seconds for context.
@@ -99,6 +99,8 @@ Connect to the Massive live stocks feed instead:
 
 Both live modes continuously record trades and quotes into `data/tape.db`. Recording uses a large non-blocking queue, WAL mode, and batched commits so SQLite disk I/O does not run inside the feed callback. The terminal heartbeat reports dropped recording events if the queue is ever saturated.
 
+Schema version 2 intentionally has no migration path. Delete `data/tape.db` before starting this version if a database from an earlier version exists. The program reports an error and never silently deletes it.
+
 Then open [http://localhost:8097](http://localhost:8097). `Ctrl-C` shuts down the HTTP server and IBKR connection cleanly.
 
 An alternate config or listen address can be supplied from the CLI:
@@ -141,7 +143,7 @@ Open the browser and press `REPLAY`. Pick the provider/data source, start and en
 
 On desktop, replay places the one-minute market chart beside the current tape-reading tool and keeps time and sales on the right. A prominent clock below the tick chart shows New York market time in live mode; in replay it follows the replay receipt timeline, freezes on pause, and jumps with `Go to minute`. The clock consumes space only from the tick-chart pane and is intentionally omitted from the small footer. Yellow is exact trade-weighted VWAP beginning at 09:30 ET, red is the 9-period simple moving average, blue is the 20-period simple moving average, and white is the 20-period Bollinger envelope at two population standard deviations. Volume is rendered in a dedicated pane below price. Compact screens stack the market chart above the tape tool.
 
-In both live and replay modes, `RVOL PACE` sits below TAPE and above time and sales. It compares the forming one-minute candle's projected volume with the median volume of the previous 20 completed one-minute candles. Median volume is resistant to an isolated spike. Five seconds of neutral prior pace stabilizes the estimate at candle ignition, then rapidly gives way to observed volume. The large ratio, horizontal length cue, and redundant labels classify activity as `QUIET` below 0.75×, `NORMAL` through 1.24×, `ELEVATED` through 1.99×, or `SURGE` at 2× and above. An ordered slate-to-violet palette is reserved for RVOL so activity magnitude cannot be confused with the tape's directional colors. Live and replay also share the same enlarged rolling-window typography and narrow-panel column layout. In IBKR live mode, a cached, one-off request loads the latest 40 completed IBKR one-minute `TRADES` bars to warm the baseline immediately; the forming candle and all tape horizons continue to use live microsecond receipt timestamps. This warmup runs asynchronously and does not use Massive data.
+In both live and replay modes, `RVOL PACE` sits below TAPE and above time and sales. It compares the forming one-minute candle's projected volume with the median volume of the previous 20 completed one-minute candles. Median volume is resistant to an isolated spike. Five seconds of neutral prior pace stabilizes the estimate at candle ignition, then rapidly gives way to observed volume. The large ratio, horizontal length cue, and redundant labels classify activity as `QUIET` below 0.75×, `NORMAL` through 1.24×, `ELEVATED` through 1.99×, or `SURGE` at 2× and above. An ordered slate-to-violet palette is reserved for RVOL so activity magnitude cannot be confused with the tape's directional colors. Live and replay also share the same enlarged rolling-window typography and narrow-panel column layout. In IBKR live mode, a cached, one-off request loads the latest 40 completed IBKR one-minute `TRADES` bars to warm the baseline immediately; the forming candle uses market time while the tape horizons use live microsecond receipt timestamps. This warmup runs asynchronously and does not use Massive data.
 
 `replay.chart_right_gap_bars` in `config.yaml` controls the empty space between the newest candle and the price axis. It defaults to 5 and accepts values from 5 through 100.
 
@@ -154,7 +156,7 @@ For Massive/IBKR historical records, the provider event timestamp acts as the re
 - `IBKR TCP probe succeeded`: the configured host and port are reachable.
 - `IBKR API handshake complete`: TWS/Gateway accepted the client ID and protocol handshake.
 - `next_valid_id ... API session is ready`: the API session completed startup.
-- `IBKR subscription request`: quote and `AllLast` requests were sent for the symbol.
+- `IBKR subscription request`: quote and tick-by-tick `Last` requests were sent for the symbol.
 - `IBKR first quote` and `IBKR first trade`: market data is reaching the application.
 - `IBKR heartbeat`: every five seconds, reports connection state, bid/ask, cumulative quote/trade callbacks, last-event times, and the latest IBKR status message.
 
@@ -217,7 +219,8 @@ node scripts/browser-check.mjs
 
 ## Notes
 
-- `AllLast` includes additional trade types such as combos, derivatives, and average-price trades when IBKR supplies them. This tool intentionally does not filter those prints.
-- Exchange timestamps in the IBKR tick callback have one-second resolution. Rolling horizons, tape-rate measurement, and audio scheduling use the separate server-side local receipt time recorded in microseconds; browser batch-processing time is not used.
+- IBKR charts use only the `Last` stream. `AllLast`-only average-price, derivative, combo, and other non-chart reports are not subscribed to and cannot affect tape, OHLCV, indicators, last price, or scale. The centralized eligibility policy also excludes unreported and invalid/status callbacks. Five-second heartbeats report callback, eligible, exclusion, and recorder-drop counters without logging normal prints.
+- Exchange timestamps in the IBKR tick callback have one-second resolution. They assign one-minute candles; the persisted arrival sequence deterministically orders prints within a second. Rolling horizons, replay pacing, tape-rate measurement, and audio scheduling use the separate server-side local receipt time recorded in microseconds; browser batch-processing time is not used.
+- Price scales expand immediately for genuine eligible highs/lows. Contraction waits 1.5 seconds and then eases by elapsed time, avoiding redraw-rate-dependent breathing while never clipping a new market move.
 - Massive live mode also stamps each event when the Go server receives it; neither provider's browser WebSocket batching time is used for rolling metrics.
 - The referenced `ticksonic-original` repository returned GitHub 404 during implementation. The mixer and synthesis path here were implemented directly from the requested behavior.

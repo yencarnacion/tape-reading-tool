@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS trades (
   id INTEGER PRIMARY KEY,
   symbol TEXT NOT NULL,
   event_us INTEGER NOT NULL,
+  market_time_us INTEGER NOT NULL,
+  sequence_id INTEGER NOT NULL,
   received_us INTEGER NOT NULL DEFAULT 0,
   exchange_time_ms INTEGER NOT NULL DEFAULT 0,
   price REAL NOT NULL,
@@ -33,6 +35,11 @@ CREATE TABLE IF NOT EXISTS trades (
   ask REAL NOT NULL DEFAULT 0,
   exchange TEXT NOT NULL DEFAULT '',
   conditions TEXT NOT NULL DEFAULT '',
+  feed_type TEXT NOT NULL,
+  unreported INTEGER NOT NULL,
+  past_limit INTEGER NOT NULL,
+  chart_eligible INTEGER NOT NULL,
+  chart_exclusion_reason TEXT NOT NULL,
   source TEXT NOT NULL,
   provider TEXT NOT NULL
 );
@@ -54,24 +61,31 @@ CREATE TABLE IF NOT EXISTS metadata (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO metadata(key, value) VALUES ('schema_version', '1');
+INSERT OR IGNORE INTO metadata(key, value) VALUES ('schema_version', '2');
 `
 
 type TradeRecord struct {
-	Symbol         string
-	EventUS        int64
-	ReceivedUS     int64
-	ExchangeTimeMS int64
-	Price          float64
-	Size           float64
-	Class          tape.Classification
-	Side           int8
-	Bid            float64
-	Ask            float64
-	Exchange       string
-	Conditions     string
-	Source         string
-	Provider       string
+	Symbol               string
+	EventUS              int64
+	MarketTimeUS         int64
+	SequenceID           uint64
+	ReceivedUS           int64
+	ExchangeTimeMS       int64
+	Price                float64
+	Size                 float64
+	Class                tape.Classification
+	Side                 int8
+	Bid                  float64
+	Ask                  float64
+	Exchange             string
+	Conditions           string
+	FeedType             string
+	Unreported           bool
+	PastLimit            bool
+	ChartEligible        bool
+	ChartExclusionReason string
+	Source               string
+	Provider             string
 }
 
 type QuoteRecord struct {
@@ -92,6 +106,8 @@ type Event struct {
 	Source         string
 	Provider       string
 	EventUS        int64
+	MarketTimeUS   int64
+	SequenceID     uint64
 	ReceivedUS     int64
 	ExchangeTimeMS int64
 	Price          float64
@@ -102,6 +118,7 @@ type Event struct {
 	Ask            float64
 	BidSize        float64
 	AskSize        float64
+	ChartEligible  bool
 }
 
 type Range struct {
@@ -159,6 +176,11 @@ func Open(cfg config.StorageConfig) (*Database, error) {
 			db.Close()
 			return nil, fmt.Errorf("sqlite %s: %w", pragma, err)
 		}
+	}
+	var oldVersion string
+	if err := db.QueryRow("SELECT value FROM metadata WHERE key='schema_version'").Scan(&oldVersion); err == nil && oldVersion != "2" {
+		db.Close()
+		return nil, fmt.Errorf("database schema %s is unsupported; delete %s and start with a fresh database", oldVersion, cfg.Path)
 	}
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
@@ -252,8 +274,8 @@ func (d *Database) writeBatch(ctx context.Context, items []queuedRecord) error {
 		return err
 	}
 	tradeStmt, err := tx.PrepareContext(ctx, `INSERT INTO trades
-    (symbol,event_us,received_us,exchange_time_ms,price,size,class,side,bid,ask,exchange,conditions,source,provider)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    (symbol,event_us,market_time_us,sequence_id,received_us,exchange_time_ms,price,size,class,side,bid,ask,exchange,conditions,feed_type,unreported,past_limit,chart_eligible,chart_exclusion_reason,source,provider)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -269,7 +291,8 @@ func (d *Database) writeBatch(ctx context.Context, items []queuedRecord) error {
 	for _, item := range items {
 		if item.trade != nil {
 			r := item.trade
-			if _, err := tradeStmt.ExecContext(ctx, r.Symbol, r.EventUS, r.ReceivedUS, r.ExchangeTimeMS, r.Price, r.Size, r.Class, r.Side, r.Bid, r.Ask, r.Exchange, r.Conditions, r.Source, r.Provider); err != nil {
+			normalizeTradeRecord(r)
+			if _, err := tradeStmt.ExecContext(ctx, r.Symbol, r.EventUS, r.MarketTimeUS, r.SequenceID, r.ReceivedUS, r.ExchangeTimeMS, r.Price, r.Size, r.Class, r.Side, r.Bid, r.Ask, r.Exchange, r.Conditions, r.FeedType, r.Unreported, r.PastLimit, r.ChartEligible, r.ChartExclusionReason, r.Source, r.Provider); err != nil {
 				tx.Rollback()
 				return err
 			}
@@ -345,11 +368,11 @@ func (d *Database) Events(ctx context.Context, symbol, source, provider string, 
 	if err != nil {
 		return nil, err
 	}
-	query := `SELECT id,kind,source,provider,event_us,received_us,exchange_time_ms,price,size,class,side,bid,ask,bid_size,ask_size FROM (
-	    SELECT 'trade' AS kind,source,provider,event_us,received_us,exchange_time_ms,price,size,class,side,bid,ask,0 AS bid_size,0 AS ask_size,id
+	query := `SELECT id,kind,source,provider,event_us,market_time_us,sequence_id,received_us,exchange_time_ms,price,size,class,side,bid,ask,bid_size,ask_size,chart_eligible FROM (
+	    SELECT 'trade' AS kind,source,provider,event_us,market_time_us,sequence_id,received_us,exchange_time_ms,price,size,class,side,bid,ask,0 AS bid_size,0 AS ask_size,chart_eligible,id
 	      FROM trades WHERE symbol=? AND ` + filter + ` AND event_us>=? AND event_us<=?
 	    UNION ALL
-	    SELECT 'quote' AS kind,source,provider,event_us,received_us,0 AS exchange_time_ms,0 AS price,0 AS size,'' AS class,0 AS side,bid,ask,bid_size,ask_size,id
+	    SELECT 'quote' AS kind,source,provider,event_us,event_us AS market_time_us,0 AS sequence_id,received_us,0 AS exchange_time_ms,0 AS price,0 AS size,'' AS class,0 AS side,bid,ask,bid_size,ask_size,1 AS chart_eligible,id
       FROM quotes WHERE symbol=? AND ` + filter + ` AND event_us>=? AND event_us<=?
   ) ORDER BY event_us, CASE kind WHEN 'quote' THEN 0 ELSE 1 END, id`
 	args := []any{symbol}
@@ -368,7 +391,7 @@ func (d *Database) MinuteBars(ctx context.Context, symbol, source, provider stri
 	if err != nil {
 		return nil, err
 	}
-	query := `SELECT event_us,price,size FROM trades WHERE symbol=? AND ` + filter + ` AND event_us>=? AND event_us<=? ORDER BY event_us,id`
+	query := `SELECT market_time_us,price,size FROM trades WHERE symbol=? AND ` + filter + ` AND market_time_us>=? AND market_time_us<=? AND chart_eligible=1 ORDER BY market_time_us,sequence_id,id`
 	args := []any{symbol}
 	args = append(args, filterArgs...)
 	args = append(args, startUS, endUS)
@@ -400,8 +423,29 @@ func (d *Database) MinuteBars(ctx context.Context, symbol, source, provider stri
 
 func ScanEvent(rows *sql.Rows) (Event, error) {
 	var event Event
-	err := rows.Scan(&event.ID, &event.Kind, &event.Source, &event.Provider, &event.EventUS, &event.ReceivedUS, &event.ExchangeTimeMS, &event.Price, &event.Size, &event.Class, &event.Side, &event.Bid, &event.Ask, &event.BidSize, &event.AskSize)
+	err := rows.Scan(&event.ID, &event.Kind, &event.Source, &event.Provider, &event.EventUS, &event.MarketTimeUS, &event.SequenceID, &event.ReceivedUS, &event.ExchangeTimeMS, &event.Price, &event.Size, &event.Class, &event.Side, &event.Bid, &event.Ask, &event.BidSize, &event.AskSize, &event.ChartEligible)
 	return event, err
+}
+
+func normalizeTradeRecord(r *TradeRecord) {
+	if r.MarketTimeUS <= 0 {
+		r.MarketTimeUS = r.EventUS
+	}
+	if r.ReceivedUS <= 0 {
+		r.ReceivedUS = r.EventUS
+	}
+	if r.EventUS <= 0 {
+		r.EventUS = r.ReceivedUS
+	}
+	if r.ExchangeTimeMS <= 0 {
+		r.ExchangeTimeMS = r.MarketTimeUS / 1000
+	}
+	if r.FeedType == "" {
+		r.FeedType = tape.FeedLast
+	}
+	if !r.ChartEligible && r.ChartExclusionReason == "" {
+		r.ChartEligible, r.ChartExclusionReason = tape.ChartEligibility(tape.TradeEligibilityInput{FeedType: r.FeedType, Price: r.Price, Size: r.Size, Unreported: r.Unreported})
+	}
 }
 
 func (d *Database) setError(err error) {
