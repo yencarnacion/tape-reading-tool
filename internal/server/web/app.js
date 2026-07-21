@@ -913,36 +913,48 @@
     }
 
     const regular = bars.filter((bar) => bar._dayMapMinute >= 570 && bar._dayMapMinute < 960);
-    const referenceBars = regular.length ? regular : bars;
-    const open = Number(referenceBars[0].open);
+    const priorRegularBars = state.minuteBars.filter((bar) => {
+      const parts = partsFor(bar);
+      const date = `${parts.year}-${parts.month}-${parts.day}`;
+      const minute = Number(parts.hour) * 60 + Number(parts.minute);
+      return date < sessionDate && minute >= 570 && minute < 960;
+    });
+    const usingRegularOpen = regular.length > 0;
+    const reference = usingRegularOpen ? Number(regular[0].open) : Number(priorRegularBars[priorRegularBars.length - 1]?.close);
+    const referenceLabel = usingRegularOpen ? '09:30 OPEN' : 'PREV CLOSE';
     const last = Number(bars[bars.length - 1].close);
+    const hasReference = Number.isFinite(reference) && reference > 0;
     const high = Math.max(...bars.map((bar) => Number(bar.high)));
     const low = Math.min(...bars.map((bar) => Number(bar.low)));
     const hasExtended = bars.some((bar) => bar._dayMapMinute < 570 || bar._dayMapMinute >= 960);
     const startMinute = hasExtended ? 240 : 570;
     const endMinute = hasExtended ? 1200 : 960;
-    const pad = Math.max((high - low) * .08, high * .00008, .005);
-    const minimum = low - pad;
-    const maximum = high + pad;
+    const scaleLow = hasReference ? Math.min(low, reference) : low;
+    const scaleHigh = hasReference ? Math.max(high, reference) : high;
+    const pad = Math.max((scaleHigh - scaleLow) * .08, scaleHigh * .00008, .005);
+    const minimum = scaleLow - pad;
+    const maximum = scaleHigh + pad;
     const left = 5;
     const right = width - 5;
     const top = 5;
     const bottom = height - 13;
     const xAt = (bar) => left + (bar._dayMapMinute - startMinute) / (endMinute - startMinute) * (right - left);
     const yAt = (price) => bottom - (price - minimum) / (maximum - minimum) * (bottom - top);
-    const direction = last > open ? 'above' : last < open ? 'below' : 'neutral';
+    const direction = !hasReference ? 'neutral' : last > reference ? 'above' : last < reference ? 'below' : 'neutral';
     const color = direction === 'above' ? '#00bfc4' : direction === 'below' ? '#e69f00' : '#aab2bc';
-    const change = open > 0 ? (last - open) / open * 100 : 0;
+    const change = hasReference ? (last - reference) / reference * 100 : null;
     const rangePosition = high > low ? (last - low) / (high - low) * 100 : 50;
 
     elements.dayContext.classList.toggle('above', direction === 'above');
     elements.dayContext.classList.toggle('below', direction === 'below');
     elements.dayContextSession.textContent = hasExtended ? '04:00–20:00 ET · XTD' : '09:30–16:00 ET';
-    elements.dayContextChange.textContent = `${change > 0 ? '+' : ''}${change.toFixed(2)}% OPEN`;
+    elements.dayContextChange.textContent = hasReference ? `${change > 0 ? '+' : ''}${change.toFixed(2)}% ${referenceLabel}` : '--';
     elements.dayContextHigh.textContent = formatPrice(high);
     elements.dayContextLow.textContent = formatPrice(low);
     elements.dayContextPosition.textContent = `${Math.round(rangePosition)}% OF RANGE`;
-    elements.dayContext.setAttribute('aria-label', `Day map: last ${formatPrice(last)}, ${change >= 0 ? 'above' : 'below'} open by ${Math.abs(change).toFixed(2)} percent; high ${formatPrice(high)}, low ${formatPrice(low)}, at ${Math.round(rangePosition)} percent of the day range.`);
+    elements.dayContext.setAttribute('aria-label', hasReference
+      ? `Day map: last ${formatPrice(last)}, ${change >= 0 ? 'above' : 'below'} ${referenceLabel.toLowerCase()} by ${Math.abs(change).toFixed(2)} percent; high ${formatPrice(high)}, low ${formatPrice(low)}, at ${Math.round(rangePosition)} percent of the day range.`
+      : `Day map: last ${formatPrice(last)}; previous regular-session close is unavailable; high ${formatPrice(high)}, low ${formatPrice(low)}, at ${Math.round(rangePosition)} percent of the day range.`);
 
     dayContext.lineWidth = 1;
     dayContext.strokeStyle = '#202832';
@@ -963,7 +975,9 @@
     dayContext.setLineDash([3, 3]);
     dayContext.strokeStyle = '#7d8792';
     dayContext.globalAlpha = .7;
-    dayContext.beginPath(); dayContext.moveTo(left, yAt(open)); dayContext.lineTo(right, yAt(open)); dayContext.stroke();
+    if (hasReference) {
+      dayContext.beginPath(); dayContext.moveTo(left, yAt(reference)); dayContext.lineTo(right, yAt(reference)); dayContext.stroke();
+    }
     dayContext.setLineDash([]);
     dayContext.globalAlpha = 1;
 
