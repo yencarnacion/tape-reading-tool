@@ -64,6 +64,22 @@ try {
       scale.targetMinimum !== 100 || scale.excludedMinimum !== 95) {
     throw new Error(`price-scale hysteresis failed: ${JSON.stringify(scale)}`);
   }
+  const xtraCheck = await command('Runtime.evaluate', {
+    expression: `(() => {
+      const bar = (iso, open, high, low, close) => ({ timeUS: Date.parse(iso) * 1000, open, high, low, close });
+      return window.__tapeReadingXtraLevels([
+        bar('2026-07-21T09:30:00-04:00', 100, 103, 99, 101),
+        bar('2026-07-21T15:59:00-04:00', 101, 102, 98, 102),
+        bar('2026-07-22T04:00:00-04:00', 103, 105, 97, 104),
+        bar('2026-07-22T09:30:00-04:00', 106, 107, 104, 105)
+      ], 0, false).map(({ key, price }) => [key, price]);
+    })()`, returnByValue: true
+  });
+  const xtra = Object.fromEntries(xtraCheck.result.value);
+  const expectedXtra = { PDC: 102, PDH: 103, PMH: 105, OPEN: 106, RTHH: 107, PDL: 98, RTHL: 104, PML: 97 };
+  if (Object.entries(expectedXtra).some(([key, value]) => xtra[key] !== value)) {
+    throw new Error(`xtra reference levels failed: ${JSON.stringify(xtra)}`);
+  }
   for (const width of [384, 634, 902, 1372]) {
     await command('Emulation.setDeviceMetricsOverride', { width, height: 1080, deviceScaleFactor: 1, mobile: false });
     await waitForApp();

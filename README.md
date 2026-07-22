@@ -91,6 +91,16 @@ Add the replay-style one-minute price, indicator, and volume chart to IBKR live 
 
 Without `-chart`, live mode keeps the existing compact layout.
 
+Add viewport-aware prior-day, pre-market, regular-session, and opening-price reference levels with:
+
+```bash
+./go.sh live -chart -xtra
+```
+
+`-xtra` also enables the chart when supplied without `-chart`. Reference lines are shown only while their prices fall within the visible candles' high/low range.
+Demo mode accepts the same flags and uses synthetic reference prices so the presentation can be tested without an IBKR session.
+Replay mode also accepts `-xtra` and derives available levels from its one-minute historical candles.
+
 Connect to the Massive live stocks feed instead:
 
 ```bash

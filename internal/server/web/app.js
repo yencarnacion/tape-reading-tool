@@ -54,7 +54,7 @@
     prefixBase: { volume: 0, buyer: 0, seller: 0, prints: 0 }, midpoints: [],
     serverClockUS: 0, serverClockAt: 0, replay: null, replayConfig: null,
     minuteBars: [], dailyBars: [], marketChartView: 'minute', dailyHistorySymbol: '', dailyHistoryPending: false, dirtyDailyChart: true,
-    replayChartEndUS: 0, replayChartKey: '', dirtyReplayChart: true, marketChartEnabled: false,
+    replayChartEndUS: 0, replayChartKey: '', dirtyReplayChart: true, marketChartEnabled: false, xtraEnabled: false,
     rvolWarmup: { symbol: '', ready: false, pending: false, attempt: 0, token: 0, timer: null, controller: null },
     tickScale: null, minuteScale: null
   };
@@ -290,6 +290,7 @@
       state.history = snapshot.history || [];
       state.status = snapshot.status || {};
       state.marketChartEnabled = state.status.mode === 'replay' || message.market_chart === true;
+      state.xtraEnabled = message.xtra === true;
       state.replayConfig = message.replay_config || state.replayConfig;
       if (state.replayConfig) {
         elements.replayProvider.value = state.replayConfig.provider || 'all';
@@ -580,7 +581,8 @@
     for (const bar of state.minuteBars) {
       if (Number(bar.timeUS) >= boundary) merged.set(Number(bar.timeUS), bar);
     }
-    state.minuteBars = [...merged.values()].sort((left, right) => left.timeUS - right.timeUS).slice(-2000);
+    const historyLimit = state.xtraEnabled ? 2200 : 2000;
+    state.minuteBars = [...merged.values()].sort((left, right) => left.timeUS - right.timeUS).slice(-historyLimit);
     state.dirtyReplayChart = true;
     state.dirtyDayContext = true;
   }
@@ -1030,7 +1032,8 @@
     elements.replayChartEmpty.classList.add('hidden');
 
     const indicators = calculateReplayIndicators(state.minuteBars);
-    const rightAxis = width < 360 ? 48 : 56;
+    const standardRightAxis = width < 360 ? 48 : 56;
+    const rightAxis = state.xtraEnabled ? (width < 500 ? 142 : 154) : standardRightAxis;
     const left = 7;
     const right = width - rightAxis;
     const top = 25;
@@ -1041,7 +1044,10 @@
     const volumeTop = volumeBottom - volumeHeight;
     const priceBottom = volumeTop - paneGap;
     const rightGapBars = Math.max(5, Math.min(100, Math.round(Number(state.replayConfig?.chart_right_gap_bars) || 5)));
-    const capacity = Math.max(24, Math.min(180, Math.floor((right - left) / (width < 500 ? 5 : 7)) - rightGapBars));
+    // Keep the same candle count with or without xtra. The wider xtra axis
+    // compresses candle spacing but must not silently remove market context.
+    const capacityRight = width - standardRightAxis;
+    const capacity = Math.max(24, Math.min(180, Math.floor((capacityRight - left) / (width < 500 ? 5 : 7)) - rightGapBars));
     const start = Math.max(0, state.minuteBars.length - capacity);
     const visible = state.minuteBars.slice(start);
     const visibleIndicators = indicators.slice(start);
@@ -1112,6 +1118,13 @@
     drawReplayIndicator('sma9', '#ff4d5e', 2.2, 1);
     drawReplayIndicator('vwap', '#ffd447', 2.6, 1);
 
+    if (state.xtraEnabled) {
+      const candleMinimum = Math.min(...visible.map((bar) => bar.low));
+      const candleMaximum = Math.max(...visible.map((bar) => bar.high));
+      const levels = calculateXtraLevels(state.minuteBars).filter((level) => level.price >= candleMinimum && level.price <= candleMaximum);
+      drawXtraLevels(levels, priceY, left, right, rightAxis, top, priceBottom);
+    }
+
     replayContext.strokeStyle = '#3a424c';
     replayContext.beginPath(); replayContext.moveTo(left, volumeTop); replayContext.lineTo(width, volumeTop); replayContext.stroke();
     replayContext.fillStyle = '#8d96a2';
@@ -1172,6 +1185,108 @@
       replayContext.globalAlpha = 1;
     }
   }
+
+  function calculateXtraLevels(bars, quotedPreviousClose = Number(state.quote.previous_close), useDemo = String(state.status?.mode || '').toLowerCase() === 'demo') {
+    if (!Array.isArray(bars) || !bars.length) return [];
+    if (useDemo) return calculateDemoXtraLevels(bars);
+    const sessions = new Map();
+    for (const bar of bars) {
+      const parts = easternMinuteParts(bar.timeUS);
+      if (!parts || !Number.isFinite(bar.open) || !Number.isFinite(bar.high) || !Number.isFinite(bar.low) || !Number.isFinite(bar.close)) continue;
+      const session = sessions.get(parts.day) || { premarket: [], regular: [] };
+      if (parts.minute >= 240 && parts.minute < 570) session.premarket.push(bar);
+      if (parts.minute >= 570 && parts.minute < 960) session.regular.push(bar);
+      sessions.set(parts.day, session);
+    }
+    const days = [...sessions.keys()].sort();
+    if (!days.length) return [];
+    const currentDay = easternMinuteParts(bars[bars.length - 1].timeUS)?.day;
+    const current = sessions.get(currentDay);
+    const priorDay = days.filter((day) => day < currentDay && sessions.get(day).regular.length).at(-1);
+    const prior = priorDay ? sessions.get(priorDay).regular : [];
+    const previousClose = Number(quotedPreviousClose) > 0 ? Number(quotedPreviousClose) : prior.at(-1)?.close;
+    const definitions = [
+      { key: 'PDC', price: previousClose, color: '#E69F00', dash: [7, 3] },
+      { key: 'PDH', price: prior.length ? Math.max(...prior.map((bar) => bar.high)) : NaN, color: '#56B4E9', dash: [2, 3] },
+      { key: 'PMH', price: current?.premarket.length ? Math.max(...current.premarket.map((bar) => bar.high)) : NaN, color: '#009E73', dash: [9, 3, 2, 3] },
+      { key: 'OPEN', price: current?.regular[0]?.open, color: '#F0E442', dash: [1, 3] },
+      { key: 'RTHH', price: current?.regular.length ? Math.max(...current.regular.map((bar) => bar.high)) : NaN, color: '#00E5FF', dash: [12, 3, 3, 3] },
+      { key: 'PDL', price: prior.length ? Math.min(...prior.map((bar) => bar.low)) : NaN, color: '#D55E00', dash: [4, 3] },
+      { key: 'RTHL', price: current?.regular.length ? Math.min(...current.regular.map((bar) => bar.low)) : NaN, color: '#FF6B6B', dash: [6, 2, 1, 2] },
+      { key: 'PML', price: current?.premarket.length ? Math.min(...current.premarket.map((bar) => bar.low)) : NaN, color: '#CC79A7', dash: [10, 3] }
+    ];
+    return definitions.filter((level) => Number.isFinite(level.price) && level.price > 0);
+  }
+
+  function calculateDemoXtraLevels(bars) {
+    const minimum = Math.min(...bars.map((bar) => Number(bar.low)).filter(Number.isFinite));
+    const maximum = Math.max(...bars.map((bar) => Number(bar.high)).filter(Number.isFinite));
+    if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || maximum <= minimum) return [];
+    const at = (fraction) => minimum + (maximum - minimum) * fraction;
+    return [
+      { key: 'PDC', price: at(0.48), color: '#E69F00', dash: [7, 3] },
+      { key: 'PDH', price: at(0.92), color: '#56B4E9', dash: [2, 3] },
+      { key: 'PMH', price: at(0.68), color: '#009E73', dash: [9, 3, 2, 3] },
+      { key: 'OPEN', price: at(0.56), color: '#F0E442', dash: [1, 3] },
+      { key: 'RTHH', price: at(0.80), color: '#00E5FF', dash: [12, 3, 3, 3] },
+      { key: 'PDL', price: at(0.08), color: '#D55E00', dash: [4, 3] },
+      { key: 'RTHL', price: at(0.20), color: '#FF6B6B', dash: [6, 2, 1, 2] },
+      { key: 'PML', price: at(0.32), color: '#CC79A7', dash: [10, 3] }
+    ];
+  }
+
+  function easternMinuteParts(timeUS) {
+    const values = {};
+    for (const part of ET_MINUTE_PARTS.formatToParts(new Date(Number(timeUS) / 1000))) {
+      if (part.type !== 'literal') values[part.type] = part.value;
+    }
+    const hour = Number(values.hour);
+    const minute = Number(values.minute);
+    if (!values.year || !values.month || !values.day || !Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+    return { day: `${values.year}-${values.month}-${values.day}`, minute: hour * 60 + minute };
+  }
+
+  function drawXtraLevels(levels, priceY, left, right, rightAxis, top, bottom) {
+    if (!levels.length) return;
+    const placed = levels.map((level) => ({ ...level, lineY: priceY(level.price), labelY: priceY(level.price) })).sort((a, b) => a.labelY - b.labelY);
+    const gap = 23;
+    for (let index = 1; index < placed.length; index++) placed[index].labelY = Math.max(placed[index].labelY, placed[index - 1].labelY + gap);
+    const overflow = placed.at(-1).labelY - (bottom - 11);
+    if (overflow > 0) for (const level of placed) level.labelY -= overflow;
+    for (let index = placed.length - 2; index >= 0; index--) placed[index].labelY = Math.min(placed[index].labelY, placed[index + 1].labelY - gap);
+    const underflow = top + 11 - placed[0].labelY;
+    if (underflow > 0) for (const level of placed) level.labelY += underflow;
+
+    replayContext.save();
+    replayContext.font = '700 18px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    replayContext.textAlign = 'left';
+    replayContext.textBaseline = 'middle';
+    for (const level of placed) {
+      replayContext.strokeStyle = level.color;
+      replayContext.lineWidth = 1;
+      replayContext.globalAlpha = 0.58;
+      replayContext.setLineDash(level.dash);
+      replayContext.beginPath();
+      replayContext.moveTo(left, level.lineY);
+      replayContext.lineTo(right, level.lineY);
+      replayContext.stroke();
+      replayContext.setLineDash([]);
+      replayContext.globalAlpha = 0.9;
+      replayContext.beginPath();
+      replayContext.moveTo(right, level.lineY);
+      replayContext.lineTo(right + 4, level.labelY);
+      replayContext.stroke();
+      replayContext.fillStyle = 'rgba(12,15,19,.92)';
+      replayContext.fillRect(right + 4, level.labelY - 11, rightAxis - 4, 22);
+      replayContext.fillStyle = level.color;
+      replayContext.globalAlpha = 1;
+      replayContext.fillText(`${level.key} ${formatPrice(level.price)}`, right + 6, level.labelY);
+    }
+    replayContext.restore();
+  }
+
+  // Exposed solely for deterministic browser validation.
+  window.__tapeReadingXtraLevels = calculateXtraLevels;
 
   function drawDailyChart() {
     const canvas = elements.dailyChart;

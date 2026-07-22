@@ -47,6 +47,7 @@ func run() error {
 	providerFlag := fs.String("provider", "", "data provider: ibkr, massive, or all (replay only)")
 	speedFlag := fs.Float64("speed", 0, "default replay speed")
 	chartFlag := fs.Bool("chart", false, "show the one-minute market chart in live mode")
+	xtraFlag := fs.Bool("xtra", false, "show prior-session, pre-market, RTH, and opening levels on the one-minute chart")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -153,7 +154,9 @@ func run() error {
 	go source.Run(ctx)
 
 	fmt.Printf("%s %s: http://localhost%s\n", cfg.App.Name, mode, displayAddr(cfg.App.Addr))
-	return server.New(cfg, store, source, mode == "live" && *chartFlag).Serve(ctx)
+	chartMode := mode == "live" || mode == "demo"
+	xtra := (chartMode || mode == "replay") && *xtraFlag
+	return server.New(cfg, store, source, chartMode && (*chartFlag || xtra), xtra).Serve(ctx)
 }
 
 func parseDateTime(value string, location *time.Location) (time.Time, error) {

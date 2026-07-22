@@ -35,6 +35,7 @@ type Server struct {
 	dailyCache     map[string]dailyHistoryCache
 	now            func() time.Time
 	liveChart      bool
+	liveXtra       bool
 }
 
 type rvolHistoryCache struct {
@@ -61,6 +62,7 @@ type streamMessage struct {
 	Dropped      uint64                `json:"dropped,omitempty"`
 	ServerTimeMS int64                 `json:"server_time_ms,omitempty"`
 	MarketChart  bool                  `json:"market_chart,omitempty"`
+	Xtra         bool                  `json:"xtra,omitempty"`
 }
 
 func New(cfg config.Config, store *tape.Store, source feed.Feed, liveChart ...bool) *Server {
@@ -73,6 +75,7 @@ func New(cfg config.Config, store *tape.Store, source feed.Feed, liveChart ...bo
 		},
 	}
 	server.liveChart = len(liveChart) > 0 && liveChart[0]
+	server.liveXtra = len(liveChart) > 1 && liveChart[1]
 	if source, ok := source.(interface {
 		RVOLMinuteBars(context.Context, string, time.Time, int) ([]storage.MinuteBar, error)
 	}); ok {
@@ -159,7 +162,13 @@ func (s *Server) handleRVOLHistory(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		// Keep enough one-minute history for both the RVOL baseline and the
 		// compact full-session day map in the tape chart.
-		bars, err := s.rvolMinuteBars(ctx, symbol, through, 960)
+		limit := 960
+		if s.liveXtra {
+			// A full current extended session plus the complete prior session is
+			// needed for the optional chart reference levels.
+			limit = 2200
+		}
+		bars, err := s.rvolMinuteBars(ctx, symbol, through, limit)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
@@ -450,7 +459,7 @@ func (s *Server) writeSnapshot(conn *websocket.Conn, symbol string) (uint64, err
 	message := streamMessage{
 		Type: "snapshot", Symbol: symbol, Snapshot: &snapshot,
 		Display: &s.cfg.Display, Audio: &s.cfg.Audio, ReplayConfig: &s.cfg.Replay,
-		ServerTimeMS: s.streamTimeMS(), MarketChart: s.liveChart,
+		ServerTimeMS: s.streamTimeMS(), MarketChart: s.liveChart, Xtra: s.liveXtra,
 	}
 	if err := writeWebSocketJSON(conn, message); err != nil {
 		return 0, err

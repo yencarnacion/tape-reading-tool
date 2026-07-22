@@ -23,11 +23,13 @@ func (f *stubFeed) SetSymbol(symbol string) { f.symbol = symbol }
 
 type stubLiveBarFeed struct {
 	stubFeed
-	calls int
+	calls     int
+	lastLimit int
 }
 
-func (f *stubLiveBarFeed) RVOLMinuteBars(_ context.Context, _ string, end time.Time, _ int) ([]storage.MinuteBar, error) {
+func (f *stubLiveBarFeed) RVOLMinuteBars(_ context.Context, _ string, end time.Time, limit int) ([]storage.MinuteBar, error) {
 	f.calls++
+	f.lastLimit = limit
 	return []storage.MinuteBar{{TimeUS: end.Add(-time.Minute).UnixMicro(), Close: 10, Volume: 100}}, nil
 }
 
@@ -99,6 +101,27 @@ func TestRVOLHistoryUsesAndCachesIBKRLiveBars(t *testing.T) {
 	}
 	if source.calls != 1 {
 		t.Fatalf("IBKR history calls = %d, want 1", source.calls)
+	}
+	if source.lastLimit != 960 {
+		t.Fatalf("IBKR history limit = %d, want 960", source.lastLimit)
+	}
+}
+
+func TestRVOLHistoryLoadsTwoSessionsForXtraChart(t *testing.T) {
+	store := tape.NewStore("AAPL", 100, 4)
+	store.SetStatus(tape.FeedStatus{Mode: "live", State: "live", Connected: true})
+	source := &stubLiveBarFeed{}
+	server := New(config.Defaults(), store, source, true, true)
+	server.now = func() time.Time { return time.Date(2026, time.July, 22, 14, 0, 0, 0, time.UTC) }
+	request := httptest.NewRequest(http.MethodGet, "/api/rvol-history?symbol=AAPL", nil)
+	response := httptest.NewRecorder()
+
+	server.handleRVOLHistory(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if source.lastLimit != 2200 {
+		t.Fatalf("IBKR xtra history limit = %d, want 2200", source.lastLimit)
 	}
 }
 
