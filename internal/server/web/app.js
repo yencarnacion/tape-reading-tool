@@ -266,7 +266,16 @@
         applyLayout();
       }
       const snapshot = message.snapshot;
-      state.symbol = snapshot.symbol || message.symbol;
+      const nextSymbol = snapshot.symbol || message.symbol;
+      const symbolChanged = nextSymbol !== state.symbol;
+      state.symbol = nextSymbol;
+      // A scale from the previous ticker makes the new chart appear to ease or
+      // animate into place. Start the new ticker from its own range so its
+      // first rendered frame is already final.
+      if (symbolChanged) {
+        state.tickScale = null;
+        state.minuteScale = null;
+      }
       if (state.dailyHistorySymbol !== state.symbol) {
         state.dailyBars = [];
         state.dailyHistorySymbol = '';
