@@ -1131,18 +1131,27 @@
 
     replayContext.strokeStyle = '#3a424c';
     replayContext.beginPath(); replayContext.moveTo(left, volumeTop); replayContext.lineTo(width, volumeTop); replayContext.stroke();
-    replayContext.fillStyle = '#8d96a2';
-    replayContext.textAlign = 'left';
-    replayContext.textBaseline = 'top';
-    replayContext.fillText('VOLUME', left + 2, volumeTop + 3);
-    replayContext.textAlign = 'left';
-    replayContext.fillText(formatSize(maxVolume), right + 5, volumeTop + 7);
     const volumeUsable = volumeHeight - 15;
     visible.forEach((bar, index) => {
       const heightValue = maxVolume ? bar.volume / maxVolume * volumeUsable : 0;
       replayContext.fillStyle = bar.close >= bar.open ? 'rgba(52,199,217,.68)' : 'rgba(255,77,94,.68)';
       replayContext.fillRect(xAt(index) - bodyWidth / 2, volumeBottom - heightValue, bodyWidth, heightValue);
     });
+
+    const last = visible[visible.length - 1];
+    const currentVolume = formatCandleVolume(last.volume);
+    replayContext.textAlign = 'left';
+    replayContext.textBaseline = 'top';
+    replayContext.font = '800 24px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    const currentVolumeWidth = replayContext.measureText(currentVolume).width;
+    replayContext.fillStyle = 'rgba(12,15,19,.88)';
+    replayContext.fillRect(left, volumeTop + 14, currentVolumeWidth + 8, 29);
+    replayContext.fillStyle = '#f2f5f7';
+    replayContext.fillText(currentVolume, left + 2, volumeTop + 13);
+    replayContext.font = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    replayContext.fillStyle = '#8d96a2';
+    replayContext.fillText('VOLUME', left + 2, volumeTop + 3);
+    replayContext.fillText(formatSize(maxVolume), right + 5, volumeTop + 7);
 
     const labelIndexes = visible.length < 3 ? [0] : [0, Math.floor((visible.length - 1) / 2), visible.length - 1];
     replayContext.fillStyle = '#78818c';
@@ -1152,7 +1161,6 @@
       replayContext.fillText(formatTime(visible[index].timeUS / 1000).slice(0, 5), xAt(index), height - 2);
     });
 
-    const last = visible[visible.length - 1];
     const currentY = priceY(last.close);
     replayContext.setLineDash([2, 3]);
     replayContext.strokeStyle = '#d8dde2';
@@ -2046,6 +2054,18 @@
     return Math.round(number).toString();
   }
 
+  function formatCandleVolume(value) {
+    const number = Math.max(0, Number(value) || 0);
+    const units = [[1e9, 'B'], [1e6, 'M'], [1e3, 'K']];
+    for (const [divisor, suffix] of units) {
+      if (number < divisor) continue;
+      const scaled = number / divisor;
+      const decimals = scaled < 10 ? 2 : 1;
+      return `${scaled.toFixed(decimals).replace(/\.0+$|(?<=\.[0-9])0$/, '')}${suffix}`;
+    }
+    return Math.round(number).toLocaleString('en-US');
+  }
+
   function formatSigned(value) {
     const number = Number(value) || 0;
     return `${number > 0 ? '+' : number < 0 ? '-' : ''}${formatSize(number)}`;
@@ -2086,6 +2106,7 @@
     }).format(new Date(timestamp));
   }
 
+  window.__tapeReadingCandleVolume = formatCandleVolume;
   bindControls();
   new ResizeObserver(() => { state.dirtyChart = true; state.dirtyReplayChart = true; state.dirtyDayContext = true; state.dirtyDailyChart = true; }).observe(elements.visualStack);
   connect();

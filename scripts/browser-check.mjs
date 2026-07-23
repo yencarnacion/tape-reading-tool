@@ -96,6 +96,14 @@ try {
   if (JSON.stringify(dayMapCorners) !== JSON.stringify(expectedDayMapCorners)) {
     throw new Error(`day-map corner cycle failed: ${JSON.stringify(dayMapCorners)}`);
   }
+  const candleVolumeCheck = await command('Runtime.evaluate', {
+    expression: `[999, 1300, 100100, 1120000].map(window.__tapeReadingCandleVolume)`, returnByValue: true
+  });
+  const candleVolumes = candleVolumeCheck.result.value;
+  const expectedCandleVolumes = ['999', '1.3K', '100.1K', '1.12M'];
+  if (JSON.stringify(candleVolumes) !== JSON.stringify(expectedCandleVolumes)) {
+    throw new Error(`candle-volume formatting failed: ${JSON.stringify(candleVolumes)}`);
+  }
   for (const width of [384, 634, 902, 1372]) {
     await command('Emulation.setDeviceMetricsOverride', { width, height: 1080, deviceScaleFactor: 1, mobile: false });
     await waitForApp();
