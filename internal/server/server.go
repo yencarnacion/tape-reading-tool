@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -94,6 +95,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/ticker", s.handleTicker)
 	mux.HandleFunc("/api/replay", s.handleReplay)
+	mux.HandleFunc("/api/render", s.handleRender)
 	mux.HandleFunc("/api/rvol-history", s.handleRVOLHistory)
 	mux.HandleFunc("/api/daily-history", s.handleDailyHistory)
 	mux.HandleFunc("/ws", s.handleWebSocket)
@@ -128,6 +130,100 @@ func (s *Server) Serve(ctx context.Context) error {
 		}
 		return err
 	}
+}
+
+func (s *Server) handleRender(w http.ResponseWriter, r *http.Request) {
+	replay, ok := s.feed.(*feed.Replay)
+	if !ok {
+		http.Error(w, "start the application in render mode", http.StatusConflict)
+		return
+	}
+	if r.Method == http.MethodGet {
+		query := r.URL.Query()
+		if query.Get("kind") == "config" {
+			writeJSON(w, http.StatusOK, map[string]any{"audio": s.cfg.Audio, "display": s.cfg.Display})
+			return
+		}
+		if query.Get("kind") != "audio" {
+			http.Error(w, "unknown render resource", http.StatusBadRequest)
+			return
+		}
+		startUS, err := parseInt64Query(query.Get("start_us"))
+		if err != nil {
+			http.Error(w, "invalid start_us", http.StatusBadRequest)
+			return
+		}
+		endUS, err := parseInt64Query(query.Get("end_us"))
+		if err != nil {
+			http.Error(w, "invalid end_us", http.StatusBadRequest)
+			return
+		}
+		events, err := replay.RenderAudioEvents(
+			r.Context(), query.Get("symbol"), strings.ToLower(query.Get("source")),
+			strings.ToLower(query.Get("provider")), startUS, endUS,
+		)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"events": events})
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	defer r.Body.Close()
+	var request struct {
+		Action   string  `json:"action"`
+		Symbol   string  `json:"symbol"`
+		Source   string  `json:"source"`
+		Provider string  `json:"provider"`
+		StartUS  int64   `json:"start_us"`
+		EndUS    int64   `json:"end_us"`
+		WarmupUS int64   `json:"warmup_us"`
+		TargetUS int64   `json:"target_us"`
+		Speed    float64 `json:"speed"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	var (
+		lastSeq uint64
+		err     error
+	)
+	switch strings.ToLower(request.Action) {
+	case "prepare":
+		err = replay.PrepareRender(feed.ReplayRequest{
+			Symbol: request.Symbol, Source: request.Source, Provider: request.Provider,
+			StartUS: request.StartUS, EndUS: request.EndUS, Speed: request.Speed,
+		}, request.WarmupUS)
+		if err == nil {
+			snapshot := s.store.Snapshot(request.Symbol, 1)
+			if len(snapshot.Trades) > 0 {
+				lastSeq = snapshot.Trades[len(snapshot.Trades)-1].Seq
+			}
+		}
+	case "step":
+		lastSeq, err = replay.StepRender(request.TargetUS)
+	default:
+		err = fmt.Errorf("unknown render action %q", request.Action)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	snapshot := s.store.Snapshot(s.store.Active(), 1)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"last_seq": lastSeq, "replay": replay.Status(), "quote": snapshot.Quote,
+	})
+}
+
+func parseInt64Query(value string) (int64, error) {
+	return strconv.ParseInt(value, 10, 64)
 }
 
 func (s *Server) handleRVOLHistory(w http.ResponseWriter, r *http.Request) {

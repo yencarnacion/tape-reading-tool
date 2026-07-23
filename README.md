@@ -159,6 +159,31 @@ In both live and replay modes, `RVOL PACE` sits below TAPE and above time and sa
 
 For Massive/IBKR historical records, the provider event timestamp acts as the replay receipt clock because no downloader can recover the original local arrival time. Live recordings preserve and replay the actual microsecond server receipt timestamp.
 
+## Deterministic MP4 render
+
+Render a replay directly from recorded events:
+
+```bash
+./go.sh render -symbol IREN -date 2026-07-22 -start 09:27 -end 10:10
+```
+
+Render mode defaults to Massive historical data, a full same-day session warmup, 1920×1080 at 30 fps, H.264 video, and AAC audio. It processes the warmup without recording, advances the replay with an exact frame clock, renders the UI in headless Chrome, synthesizes the configured print cues and tape-rate sound from the same event timeline, and writes `exports/IREN-2026-07-22-0927-1010.mp4`. Chrome, Node.js, and FFmpeg must be installed. An existing output file is never overwritten.
+
+While it runs, the command reports warmup and audio stages plus frame percentage, render throughput, replay time, and a rolling ETA. Deterministic frame capture can take longer than the replay's displayed duration, especially at 1080p/30 fps.
+
+Useful overrides:
+
+```bash
+./go.sh render \
+  -symbol IREN -provider massive -source historical \
+  -date 2026-07-22 -start 09:27 -end 10:10 \
+  -warmup session -resolution 1920x1080 -fps 30 \
+  -codec h265 -quality 25 \
+  -output exports/IREN-open.mp4
+```
+
+`-warmup` also accepts a duration such as `20m`. `-codec` accepts `h264`, `h265`, or `av1`. Higher CRF `-quality` values make smaller, lower-quality files. `-speed 2` maps two seconds of replay time into each output second while retaining deterministic frame and audio timing.
+
 ## Live diagnostics
 
 `./go.sh live` prints bounded diagnostics to the terminal. The important stages are:

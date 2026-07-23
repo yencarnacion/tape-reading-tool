@@ -56,7 +56,7 @@
     minuteBars: [], dailyBars: [], marketChartView: 'minute', dailyHistorySymbol: '', dailyHistoryPending: false, dirtyDailyChart: true,
     replayChartEndUS: 0, replayChartKey: '', dirtyReplayChart: true, marketChartEnabled: false, xtraEnabled: false,
     rvolWarmup: { symbol: '', ready: false, pending: false, attempt: 0, token: 0, timer: null, controller: null },
-    tickScale: null, minuteScale: null
+    tickScale: null, minuteScale: null, renderNowMS: null, renderInitialized: false
   };
   const DAY_MAP_CORNERS = ['', 'day-map-lower-left', 'day-map-lower-right', 'day-map-upper-right'];
   const DAY_MAP_CORNER_NAMES = ['upper-left', 'lower-left', 'lower-right', 'upper-right'];
@@ -437,9 +437,14 @@
   }
 
   function serverNowUS(now) {
+    if (Number.isFinite(state.renderNowMS)) return state.serverClockUS;
     if (state.status?.mode === 'replay' && state.status?.state === 'paused') return state.serverClockUS;
     if (state.serverClockUS > 0) return state.serverClockUS + Math.max(0, now - state.serverClockAt) * 1000;
     return Number(state.trades[state.trades.length - 1]?.r) || 0;
+  }
+
+  function visualNowMS() {
+    return Number.isFinite(state.renderNowMS) ? state.renderNowMS : performance.now();
   }
 
   function rebuildBars() {
@@ -770,7 +775,7 @@
     const pricePadding = Math.max((maximum - minimum) * 0.08, maximum * 0.00008, 0.005);
     minimum -= pricePadding;
     maximum += pricePadding;
-    state.tickScale = updatePriceScale(state.tickScale, minimum, maximum, performance.now());
+    state.tickScale = updatePriceScale(state.tickScale, minimum, maximum, visualNowMS());
     minimum = state.tickScale.minimum; maximum = state.tickScale.maximum;
     const priceY = (value) => priceBottom - (value - minimum) / (maximum - minimum) * (priceBottom - priceTop);
     const xAt = (index) => left + (index + 0.5) * step;
@@ -1077,7 +1082,7 @@
     const pricePadding = Math.max((maximum - minimum) * 0.07, maximum * 0.00008, 0.005);
     minimum -= pricePadding;
     maximum += pricePadding;
-    state.minuteScale = updatePriceScale(state.minuteScale, minimum, maximum, performance.now());
+    state.minuteScale = updatePriceScale(state.minuteScale, minimum, maximum, visualNowMS());
     minimum = state.minuteScale.minimum; maximum = state.minuteScale.maximum;
     const priceY = (value) => priceBottom - (value - minimum) / (maximum - minimum) * (priceBottom - top);
 
@@ -2107,6 +2112,57 @@
   }
 
   window.__tapeReadingCandleVolume = formatCandleVolume;
+  window.__tapeReadingRender = {
+    ready() {
+      return Boolean(state.settings && state.ws?.readyState === WebSocket.OPEN);
+    },
+    async frame(targetUS) {
+      const target = Number(targetUS);
+      if (!Number.isFinite(target) || target <= 0) throw new Error('invalid render timestamp');
+      const response = await fetch('/api/render', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'step', target_us: Math.round(target) })
+      });
+      if (!response.ok) throw new Error((await response.text()).trim());
+      const payload = await response.json();
+      const expected = Number(payload.last_seq) || 0;
+      const deadline = performance.now() + 10000;
+      while ((Number(state.trades[state.trades.length - 1]?.s) || 0) < expected) {
+        if (performance.now() > deadline) throw new Error(`browser did not receive replay sequence ${expected}`);
+        await new Promise((resolve) => setTimeout(resolve, 4));
+      }
+      if (payload.quote) state.quote = payload.quote;
+      state.replay = payload.replay;
+      state.status = { ...state.status, mode: 'replay', state: 'replaying', connected: true, message: 'deterministic render' };
+      setConnection(state.status);
+      state.serverClockUS = target;
+      state.serverClockAt = performance.now();
+      state.renderNowMS = target / 1000;
+      if (!state.renderInitialized) {
+        await document.fonts.ready;
+        await refreshReplayRange(false);
+        state.renderInitialized = true;
+      }
+      state.dirtyChart = true;
+      state.dirtyReplayChart = true;
+      state.dirtyDayContext = true;
+      state.dirtyTape = true;
+      drawReplayChart();
+      drawChart();
+      drawDayContext();
+      renderTape();
+      updateLiveMetrics(performance.now());
+      updateQuoteText();
+      elements.soundButton.textContent = state.settings.audio.enabled ? 'SOUND ON' : 'SOUND OFF';
+      elements.soundButton.className = `sound-button ${state.settings.audio.enabled ? 'active' : 'muted'}`;
+      return {
+        target_us: target,
+        sequence: expected,
+        clock: elements.marketClockTime.textContent,
+        trades: state.trades.length
+      };
+    }
+  };
   bindControls();
   new ResizeObserver(() => { state.dirtyChart = true; state.dirtyReplayChart = true; state.dirtyDayContext = true; state.dirtyDailyChart = true; }).observe(elements.visualStack);
   connect();

@@ -32,6 +32,12 @@ type ReplayState struct {
 	Message    string  `json:"message,omitempty"`
 }
 
+type RenderAudioEvent struct {
+	TimeUS int64   `json:"time_us"`
+	Side   int8    `json:"side"`
+	Size   float64 `json:"size"`
+}
+
 type replayCursor struct {
 	eventUS int64
 	kind    string
@@ -50,6 +56,9 @@ type Replay struct {
 	resumeUS   int64
 	cancel     context.CancelFunc
 	generation uint64
+
+	renderEvents []storage.Event
+	renderIndex  int
 }
 
 func NewReplay(database *storage.Database, store *tape.Store, source, provider string, speed float64) *Replay {
@@ -92,6 +101,30 @@ func (r *Replay) MinuteBars(ctx context.Context, symbol, source, provider string
 	return r.database.MinuteBars(ctx, symbol, source, provider, startUS, endUS)
 }
 
+func (r *Replay) RenderAudioEvents(ctx context.Context, symbol, source, provider string, startUS, endUS int64) ([]RenderAudioEvent, error) {
+	rows, err := r.database.Events(ctx, tape.NormalizeSymbol(symbol), source, provider, startUS, endUS)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events := make([]RenderAudioEvent, 0, 32768)
+	for rows.Next() {
+		event, scanErr := storage.ScanEvent(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		if event.Kind != "trade" || !event.ChartEligible {
+			continue
+		}
+		receivedUS := event.ReceivedUS
+		if receivedUS <= 0 || event.Source == "historical" {
+			receivedUS = event.EventUS
+		}
+		events = append(events, RenderAudioEvent{TimeUS: receivedUS, Side: event.Side, Size: event.Size})
+	}
+	return events, rows.Err()
+}
+
 func (r *Replay) Status() ReplayState {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -123,6 +156,118 @@ func (r *Replay) Start(request ReplayRequest) error {
 	r.store.Clear(request.Symbol)
 	r.launch(request, request.StartUS, replayCursor{}, "replaying")
 	return nil
+}
+
+// PrepareRender builds replay state synchronously from warmupUS through the
+// first output timestamp. Unlike interactive replay, render mode never reads
+// the wall clock; the caller explicitly advances it with StepRender.
+func (r *Replay) PrepareRender(request ReplayRequest, warmupUS int64) error {
+	request.Symbol = tape.NormalizeSymbol(request.Symbol)
+	if request.Symbol == "" || request.StartUS <= 0 || request.EndUS <= request.StartUS {
+		return fmt.Errorf("symbol and a valid start/end range are required")
+	}
+	if request.Source != "live" && request.Source != "historical" && request.Source != "all" {
+		return fmt.Errorf("source must be live, historical, or all")
+	}
+	if request.Provider != "ibkr" && request.Provider != "massive" && request.Provider != "all" {
+		return fmt.Errorf("provider must be ibkr, massive, or all")
+	}
+	if warmupUS <= 0 || warmupUS > request.StartUS {
+		warmupUS = request.StartUS
+	}
+	rows, err := r.database.Events(context.Background(), request.Symbol, request.Source, request.Provider, warmupUS, request.EndUS)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	events := make([]storage.Event, 0, 65536)
+	for rows.Next() {
+		event, scanErr := storage.ScanEvent(rows)
+		if scanErr != nil {
+			return scanErr
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(events) == 0 {
+		return fmt.Errorf("no %s/%s events for %s in that range", request.Provider, request.Source, request.Symbol)
+	}
+
+	r.mu.Lock()
+	if r.cancel != nil {
+		r.cancel()
+		r.cancel = nil
+	}
+	r.generation++
+	r.request = request
+	r.renderEvents = events
+	r.renderIndex = 0
+	r.cursor = replayCursor{}
+	r.resumeUS = request.StartUS
+	r.state = ReplayState{
+		State: "paused", Symbol: request.Symbol, Source: request.Source, Provider: request.Provider,
+		StartUS: request.StartUS, EndUS: request.EndUS, PositionUS: warmupUS,
+		Speed: request.Speed, Message: fmt.Sprintf("deterministic render %s/%s", request.Provider, request.Source),
+	}
+	r.mu.Unlock()
+
+	r.store.Activate(request.Symbol)
+	r.store.Clear(request.Symbol)
+	r.setFeedStatus("paused", "deterministic render")
+	_, err = r.StepRender(request.StartUS)
+	return err
+}
+
+// StepRender applies all recorded events through targetUS and returns the
+// newest browser trade sequence. Calls must be monotonic.
+func (r *Replay) StepRender(targetUS int64) (uint64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.state.Message == "" || r.renderEvents == nil {
+		return 0, fmt.Errorf("render is not prepared")
+	}
+	if targetUS < r.state.PositionUS || targetUS > r.request.EndUS {
+		return 0, fmt.Errorf("render timestamp is outside the prepared range")
+	}
+	for r.renderIndex < len(r.renderEvents) && r.renderEvents[r.renderIndex].EventUS <= targetUS {
+		event := r.renderEvents[r.renderIndex]
+		r.applyEvent(r.request, event)
+		r.cursor = replayCursor{eventUS: event.EventUS, kind: event.Kind, id: event.ID, valid: true}
+		r.renderIndex++
+	}
+	r.resumeUS = targetUS
+	r.state.PositionUS = targetUS
+	snapshot := r.store.Snapshot(r.request.Symbol, 1)
+	if len(snapshot.Trades) == 0 {
+		return 0, nil
+	}
+	return snapshot.Trades[len(snapshot.Trades)-1].Seq, nil
+}
+
+func (r *Replay) applyEvent(request ReplayRequest, event storage.Event) {
+	receivedUS := event.ReceivedUS
+	if receivedUS <= 0 || event.Source == "historical" {
+		receivedUS = event.EventUS
+	}
+	received := time.UnixMicro(receivedUS)
+	if event.Kind == "quote" {
+		r.store.UpdateQuote(request.Symbol, event.Bid, event.Ask, event.BidSize, event.AskSize)
+		return
+	}
+	if !event.ChartEligible {
+		return
+	}
+	exchangeMS := event.ExchangeTimeMS
+	if exchangeMS <= 0 {
+		exchangeMS = event.MarketTimeUS / 1000
+	}
+	if event.Source == "historical" {
+		r.store.AddTrade(request.Symbol, time.UnixMilli(exchangeMS), received, event.Price, event.Size)
+		return
+	}
+	r.store.AddRecordedTrade(request.Symbol, time.UnixMilli(exchangeMS), received, event.Price, event.Size, event.Class, event.Side, event.Bid, event.Ask)
 }
 
 func (r *Replay) Pause() error {
@@ -246,31 +391,7 @@ func (r *Replay) play(ctx context.Context, generation uint64, request ReplayRequ
 		if err := waitUntil(ctx, due); err != nil {
 			return
 		}
-		receivedUS := event.ReceivedUS
-		if receivedUS <= 0 {
-			// Historical APIs do not expose our original local receipt time. Their
-			// precise event time is the closest replay clock; live recordings keep
-			// the actual server-side microsecond receipt timestamp.
-			receivedUS = event.EventUS
-		}
-		received := time.UnixMicro(receivedUS)
-		if event.Kind == "quote" {
-			r.store.UpdateQuote(request.Symbol, event.Bid, event.Ask, event.BidSize, event.AskSize)
-		} else {
-			if !event.ChartEligible {
-				r.updatePosition(generation, event)
-				continue
-			}
-			exchangeMS := event.ExchangeTimeMS
-			if exchangeMS <= 0 {
-				exchangeMS = event.MarketTimeUS / 1000
-			}
-			if event.Source == "historical" {
-				r.store.AddTrade(request.Symbol, time.UnixMilli(exchangeMS), received, event.Price, event.Size)
-			} else {
-				r.store.AddRecordedTrade(request.Symbol, time.UnixMilli(exchangeMS), received, event.Price, event.Size, event.Class, event.Side, event.Bid, event.Ask)
-			}
-		}
+		r.applyEvent(request, event)
 		r.updatePosition(generation, event)
 	}
 	if err := rows.Err(); err != nil && !errorsIsCancellation(err) {

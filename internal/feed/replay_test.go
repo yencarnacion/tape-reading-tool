@@ -107,6 +107,54 @@ func TestReplayUsesPersistedEligibilityAndReceiptCadence(t *testing.T) {
 	}
 }
 
+func TestDeterministicRenderWarmsAndStepsWithoutWallClock(t *testing.T) {
+	cfg := config.Defaults().Storage
+	cfg.Path = filepath.Join(t.TempDir(), "render.db")
+	database, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	base := time.Date(2026, 7, 22, 13, 0, 0, 0, time.UTC).UnixMicro()
+	if err := database.InsertTrades(context.Background(), []storage.TradeRecord{
+		{Symbol: "IREN", EventUS: base, MarketTimeUS: base, Price: 40, Size: 10, ChartEligible: true, Source: "historical", Provider: "massive"},
+		{Symbol: "IREN", EventUS: base + 30e6, MarketTimeUS: base + 30e6, Price: 40.01, Size: 20, ChartEligible: true, Source: "historical", Provider: "massive"},
+		{Symbol: "IREN", EventUS: base + 61e6, MarketTimeUS: base + 61e6, Price: 40.02, Size: 30, ChartEligible: true, Source: "historical", Provider: "massive"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store := tape.NewStore("IREN", 100, 4)
+	replay := NewReplay(database, store, "historical", "massive", 1)
+	request := ReplayRequest{
+		Symbol: "IREN", Source: "historical", Provider: "massive",
+		StartUS: base + 60e6, EndUS: base + 120e6, Speed: 1,
+	}
+	if err := replay.PrepareRender(request, base); err != nil {
+		t.Fatal(err)
+	}
+	warmed := store.Snapshot("IREN", 10).Trades
+	if len(warmed) != 2 || warmed[0].Price != 40 || warmed[1].Price != 40.01 {
+		t.Fatalf("warmup trades = %+v", warmed)
+	}
+	if got := replay.Status().PositionUS; got != request.StartUS {
+		t.Fatalf("render position = %d, want %d", got, request.StartUS)
+	}
+	sequence, err := replay.StepRender(base + 62e6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sequence == 0 {
+		t.Fatal("render step returned no browser sequence")
+	}
+	trades := store.Snapshot("IREN", 10).Trades
+	if len(trades) != 3 || trades[2].Price != 40.02 {
+		t.Fatalf("stepped trades = %+v", trades)
+	}
+	if _, err := replay.StepRender(base + 61e6); err == nil {
+		t.Fatal("backward render step succeeded")
+	}
+}
+
 func TestResetSubscriptionsRejectsStaleRequestIDs(t *testing.T) {
 	f := NewIBKR(config.Defaults().IBKR, tape.NewStore("AAPL", 10, 2), nil)
 	f.reqSymbols[41] = "AAPL"
