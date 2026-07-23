@@ -49,7 +49,7 @@
   const state = {
     symbol: 'AAPL', trades: [], bars: [], quote: {}, history: [], status: {},
     defaults: null, settings: null, ws: null, reconnectTimer: null, reconnectDelay: 500,
-    tapePool: [], dropped: 0, dirtyChart: true, dirtyDayContext: true, dirtyTape: true,
+    tapePool: [], dropped: 0, dirtyChart: true, dirtyDayContext: true, dirtyTape: true, dayMapCorner: 0,
     navSymbols: [], navIndex: -1, lastMetricUpdate: 0,
     prefixBase: { volume: 0, buyer: 0, seller: 0, prints: 0 }, midpoints: [],
     serverClockUS: 0, serverClockAt: 0, replay: null, replayConfig: null,
@@ -58,6 +58,8 @@
     rvolWarmup: { symbol: '', ready: false, pending: false, attempt: 0, token: 0, timer: null, controller: null },
     tickScale: null, minuteScale: null
   };
+  const DAY_MAP_CORNERS = ['', 'day-map-lower-left', 'day-map-lower-right', 'day-map-upper-right'];
+  const DAY_MAP_CORNER_NAMES = ['upper-left', 'lower-left', 'lower-right', 'upper-right'];
 
   const horizonElements = new Map(HORIZONS.map((seconds) => {
     const row = elements.rollingPanel.querySelector(`[data-horizon="${seconds}"]`);
@@ -1043,6 +1045,8 @@
     const volumeBottom = height - axisBottom;
     const volumeTop = volumeBottom - volumeHeight;
     const priceBottom = volumeTop - paneGap;
+    elements.dayContext.style.setProperty('--day-map-bottom', `${height - priceBottom + 8}px`);
+    elements.dayContext.style.setProperty('--day-map-right', `${rightAxis + 8}px`);
     const rightGapBars = Math.max(5, Math.min(100, Math.round(Number(state.replayConfig?.chart_right_gap_bars) || 5)));
     // Keep the same candle count with or without xtra. The wider xtra axis
     // compresses candle spacing but must not silently remove market context.
@@ -1597,6 +1601,19 @@
   }
 
   function bindControls() {
+    const moveDayMap = () => {
+      elements.dayContext.classList.remove(...DAY_MAP_CORNERS.filter(Boolean));
+      state.dayMapCorner = (state.dayMapCorner + 1) % DAY_MAP_CORNERS.length;
+      const cornerClass = DAY_MAP_CORNERS[state.dayMapCorner];
+      if (cornerClass) elements.dayContext.classList.add(cornerClass);
+      elements.dayContext.dataset.corner = DAY_MAP_CORNER_NAMES[state.dayMapCorner];
+    };
+    elements.dayContext.addEventListener('click', moveDayMap);
+    elements.dayContext.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      moveDayMap();
+    });
     elements.minuteChartTab.addEventListener('click', () => selectMarketChart('minute'));
     elements.dailyChartTab.addEventListener('click', () => selectMarketChart('daily'));
     elements.tickerForm.addEventListener('submit', (event) => {

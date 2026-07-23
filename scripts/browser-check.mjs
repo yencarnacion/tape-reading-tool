@@ -80,6 +80,22 @@ try {
   if (Object.entries(expectedXtra).some(([key, value]) => xtra[key] !== value)) {
     throw new Error(`xtra reference levels failed: ${JSON.stringify(xtra)}`);
   }
+  const dayMapCheck = await command('Runtime.evaluate', {
+    expression: `(() => {
+      const map = document.querySelector('#dayContext');
+      const corners = [map.dataset.corner];
+      for (let index = 0; index < 4; index++) {
+        map.click();
+        corners.push(map.dataset.corner);
+      }
+      return corners;
+    })()`, returnByValue: true
+  });
+  const dayMapCorners = dayMapCheck.result.value;
+  const expectedDayMapCorners = ['upper-left', 'lower-left', 'lower-right', 'upper-right', 'upper-left'];
+  if (JSON.stringify(dayMapCorners) !== JSON.stringify(expectedDayMapCorners)) {
+    throw new Error(`day-map corner cycle failed: ${JSON.stringify(dayMapCorners)}`);
+  }
   for (const width of [384, 634, 902, 1372]) {
     await command('Emulation.setDeviceMetricsOverride', { width, height: 1080, deviceScaleFactor: 1, mobile: false });
     await waitForApp();

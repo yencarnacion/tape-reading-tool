@@ -187,6 +187,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 #chartCanvas { display: block; width: 100%; height: 100%; }
 .day-context {
   --day-direction: var(--muted);
+  --day-map-bottom: 120px;
+  --day-map-right: 64px;
   position: absolute;
   z-index: 4;
   top: 62px;
@@ -202,8 +204,14 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   background: rgba(8, 11, 15, .94);
   box-shadow: 0 5px 18px rgba(0, 0, 0, .5);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  pointer-events: none;
+  cursor: pointer;
+  pointer-events: auto;
+  user-select: none;
 }
+.day-context.day-map-lower-left { top: auto; right: auto; bottom: var(--day-map-bottom); left: 8px; }
+.day-context.day-map-lower-right { top: auto; right: var(--day-map-right); bottom: var(--day-map-bottom); left: auto; }
+.day-context.day-map-upper-right { top: 62px; right: var(--day-map-right); bottom: auto; left: auto; }
+.day-context:focus-visible { outline: 2px solid var(--yellow); outline-offset: 2px; }
 .day-context.above { --day-direction: var(--price-up); }
 .day-context.below { --day-direction: var(--price-down); }
 .day-context[hidden], .replay-chart-empty[hidden] { display: none; }
