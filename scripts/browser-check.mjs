@@ -104,6 +104,117 @@ try {
   if (JSON.stringify(candleVolumes) !== JSON.stringify(expectedCandleVolumes)) {
     throw new Error(`candle-volume formatting failed: ${JSON.stringify(candleVolumes)}`);
   }
+  // Live Rewind. The pane must never move, resize, or cover the live tick
+  // chart, the live rolling horizons, or live time and sales, and it must not
+  // force the live canvas to redraw.
+  await command('Emulation.setDeviceMetricsOverride', { width: 1372, height: 1080, deviceScaleFactor: 1, mobile: false });
+  await waitForApp();
+  const rewindAvailable = (await command('Runtime.evaluate', {
+    expression: `Boolean(window.__tapeReadingRewind?.state().available)`, returnByValue: true
+  })).result.value;
+  if (rewindAvailable) {
+    // The buffer starts empty on every snapshot, so wait until it holds more
+    // than the depth being tested; otherwise the seek correctly clamps to the
+    // floor and the pane has a single bar to show.
+    for (let attempt = 0; attempt < 60; attempt++) {
+      const retained = (await command('Runtime.evaluate', {
+        expression: `window.__tapeReadingRewind.state().retainedSeconds`, returnByValue: true
+      })).result.value;
+      if (retained >= 8) break;
+      await sleep(500);
+    }
+    const rewindReport = await command('Runtime.evaluate', {
+      expression: `(async () => {
+        const api = window.__tapeReadingRewind;
+        const rects = () => ({
+          chart: document.querySelector('#chartPanel').getBoundingClientRect().toJSON(),
+          rolling: document.querySelector('#rollingPanel').getBoundingClientRect().toJSON(),
+          tape: document.querySelector('#tapePanel').getBoundingClientRect().toJSON()
+        });
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        // Count live-canvas paints to compare live-only against rewound.
+        const context = document.querySelector('#chartCanvas').getContext('2d');
+        let paints = 0;
+        const original = context.fillRect.bind(context);
+        context.fillRect = (...args) => { paints++; return original(...args); };
+        const before = rects();
+        paints = 0; await sleep(1500); const liveOnlyPaints = paints;
+        const retainedBefore = api.state().retainedSeconds;
+        await api.enter(5);
+        await sleep(600);
+        const during = rects();
+        const rewound = api.state();
+        const fine = rewound.bars;
+        document.querySelector('#rewindTicks').value = '100';
+        document.querySelector('#rewindTicks').dispatchEvent(new Event('change'));
+        await sleep(400);
+        const coarse = api.state();
+        const steppedFrom = api.state().targetSeq;
+        api.step(-1); api.step(-1); const back = api.state().targetSeq;
+        api.step(1); const forward = api.state().targetSeq;
+        api.toggle(); await sleep(500); const playing = api.state();
+        api.toggle();
+        paints = 0; await sleep(1500); const rewoundPaints = paints;
+        const chrome = getComputedStyle(document.querySelector('#rewindChrome'));
+        const badge = document.querySelector('#rewindBadge').textContent;
+        const rewindRows = [...document.querySelectorAll('#rewindRollingPanel .rolling-row')].length;
+        const covered = document.querySelector('#rewindPanel').getBoundingClientRect().toJSON();
+        api.exit();
+        await sleep(300);
+        return {
+          before, during, after: rects(), covered,
+          paneHiddenAfterExit: document.querySelector('#rewindPanel').hidden,
+          activeAfterExit: api.state().active,
+          badge, rewindRows, fineBars: fine, coarseBars: coarse.bars, retainedBefore,
+          fineTick: rewound.tickSize, coarseTick: coarse.tickSize, liveTick: document.querySelector('#tickSelect').value,
+          steppedFrom, back, forward, playedPast: playing.targetSeq, playing: playing.playing,
+          behindSeconds: rewound.behindSeconds, buffered: rewound.buffered, bufferBytes: rewound.bufferBytes,
+          frameStyle: chrome.borderStyle, frameColor: chrome.borderColor,
+          liveOnlyPaints, rewoundPaints
+        };
+      })()`, returnByValue: true, awaitPromise: true
+    }, 30000);
+    const rewind = rewindReport.result.value;
+    console.error('rewind check:', JSON.stringify(rewind));
+    for (const pane of ['chart', 'rolling', 'tape']) {
+      for (const edge of ['x', 'y', 'width', 'height']) {
+        if (Math.abs(rewind.before[pane][edge] - rewind.during[pane][edge]) > 0.01 ||
+            Math.abs(rewind.before[pane][edge] - rewind.after[pane][edge]) > 0.01) {
+          throw new Error(`rewind moved the live ${pane} pane: ${JSON.stringify(rewind)}`);
+        }
+      }
+    }
+    if (rewind.covered.left < rewind.before.chart.right - 0.01 === false) {
+      throw new Error(`the rewind pane overlaps the live tick chart: ${JSON.stringify(rewind)}`);
+    }
+    if (!/^REWIND −\d+\.\d+s$/.test(rewind.badge) || !(rewind.behindSeconds >= 4.5)) {
+      throw new Error(`rewind badge = ${rewind.badge} at ${rewind.behindSeconds}s behind`);
+    }
+    if (rewind.retainedBefore < 8) throw new Error(`the buffer never filled: ${rewind.retainedBefore}s`);
+    if (rewind.rewindRows !== 3) throw new Error(`rewind rolling rows = ${rewind.rewindRows}`);
+    if (rewind.frameStyle !== 'dashed' || rewind.frameColor !== 'rgb(255, 192, 46)') {
+      throw new Error(`rewind chrome is not the reserved dashed amber: ${rewind.frameStyle} ${rewind.frameColor}`);
+    }
+    // Independent granularity: the same window, re-aggregated more coarsely.
+    if (rewind.coarseTick !== 100 || rewind.liveTick !== '1' || rewind.coarseBars >= rewind.fineBars) {
+      throw new Error(`rewind granularity is not independent of live: ${JSON.stringify(rewind)}`);
+    }
+    if (rewind.back !== rewind.steppedFrom - 2 || rewind.forward !== rewind.back + 1) {
+      throw new Error(`print stepping failed: ${JSON.stringify(rewind)}`);
+    }
+    if (!(rewind.playedPast > rewind.forward)) throw new Error(`playback did not advance: ${JSON.stringify(rewind)}`);
+    if (!rewind.paneHiddenAfterExit || rewind.activeAfterExit) {
+      throw new Error(`returning to live left the pane up: ${JSON.stringify(rewind)}`);
+    }
+    // Rewind must not add live redraws. Both windows are frame-capped, so a
+    // rewound window must not paint materially more than a live-only one.
+    if (rewind.rewoundPaints > rewind.liveOnlyPaints * 1.15 + 50) {
+      throw new Error(`rewind forced extra live redraws: ${rewind.liveOnlyPaints} -> ${rewind.rewoundPaints}`);
+    }
+  } else {
+    console.error('rewind check: skipped, the rewind pane is not reserved in this mode');
+  }
+
   for (const width of [384, 634, 902, 1372]) {
     await command('Emulation.setDeviceMetricsOverride', { width, height: 1080, deviceScaleFactor: 1, mobile: false });
     await waitForApp();
@@ -170,8 +281,8 @@ try {
           replayRvolVisible: getComputedStyle(document.querySelector('#relativeVolume')).display !== 'none',
           replayRvolFontSize: parseFloat(getComputedStyle(document.querySelector('#relativeVolumeValue')).fontSize),
           lastPriceFontSize: parseFloat(getComputedStyle(document.querySelector('#lastPrice')).fontSize),
-          rollingValueFontSize: parseFloat(getComputedStyle(document.querySelector('.rolling-row.primary .metric-cell output')).fontSize),
-          rollingWindowFontSize: parseFloat(getComputedStyle(document.querySelector('.rolling-row.primary .window-cell strong')).fontSize),
+          rollingValueFontSize: parseFloat(getComputedStyle(document.querySelector('#rollingPanel .rolling-row.primary .metric-cell output')).fontSize),
+          rollingWindowFontSize: parseFloat(getComputedStyle(document.querySelector('#rollingPanel .rolling-row.primary .window-cell strong')).fontSize),
           marketClock: document.querySelector('#marketClockTime')?.textContent,
           marketClockLabel: document.querySelector('#marketClockLabel')?.textContent,
           marketClockVisible: getComputedStyle(document.querySelector('#marketClock')).display !== 'none',
@@ -183,6 +294,10 @@ try {
           visibleTapeRows: rows.length,
           coloredCanvasSamples: colored,
           replayChartVisible: !document.querySelector('#replayMarketPanel')?.hidden,
+          // The REPLAY control is shown only in replay mode. The pane slot beside
+          // the tape tool is not a proxy for it any more: Live Rewind reserves
+          // that slot in live and demo mode too.
+          replayMode: !document.querySelector('#replayButton')?.hidden,
           replayChartWidth: replayCanvas?.clientWidth,
           replayChartHeight: replayCanvas?.clientHeight,
           replayColoredCanvasSamples: replayColored,
@@ -190,7 +305,9 @@ try {
           soundState: document.querySelector('#soundButton')?.textContent,
           tapeRateSound: document.querySelector('#tapeRateEnabled')?.checked,
           tapeRateVolume: document.querySelector('#tapeRateVolume')?.value,
-          horizons: [...document.querySelectorAll('.rolling-row')].map(row => ({
+          // Scoped to the live panel: the Live Rewind pane holds its own copy of
+          // these rows, earlier in the document.
+          horizons: [...document.querySelectorAll('#rollingPanel .rolling-row')].map(row => ({
             seconds: row.dataset.horizon,
             volume: row.querySelector('.volume')?.textContent,
             buyer: row.querySelector('.buyer-volume')?.textContent,
@@ -230,7 +347,7 @@ try {
     if (checked.rollingValueFontSize < expectedRollingFontSize || checked.rollingWindowFontSize < (checked.rollingPanelClientWidth > 430 ? 21 : 17)) {
       throw new Error(`rolling typography is too small at ${width}px: ${JSON.stringify(checked)}`);
     }
-    const expectedClockLabel = checked.replayChartVisible ? 'REPLAY TIME' : 'MARKET TIME';
+    const expectedClockLabel = checked.replayMode ? 'REPLAY TIME' : 'MARKET TIME';
     if (!checked.marketClockVisible || !/^\d{2}:\d{2}:\d{2}$/.test(checked.marketClock) || checked.marketClockLabel !== expectedClockLabel ||
         checked.marketClockFontSize < checked.lastPriceFontSize || checked.footerClockPresent || Math.abs(checked.marketClockRect.height - 54) > 0.5 ||
         Math.abs(checked.marketClockRect.bottom - checked.chartPanelRect.bottom) > 0.5 || checked.marketClockRect.top <= checked.rollingPanelBottom) {

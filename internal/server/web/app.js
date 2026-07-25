@@ -1,8 +1,9 @@
 import {
-  HORIZONS, BALANCE_DEADBAND_PERCENT, appendMinuteBar, appendTickBar,
+  HORIZONS, BALANCE_DEADBAND_PERCENT, aggregateTickBars, appendMinuteBar, appendTickBar,
   calculateCandleRVOL, computeHorizon, computeTapeRate, lowerBound, updatePriceScale
 } from './tape-model.js';
 import { createStreamSource, prefixFromTrade } from './tape-source.js';
+import { RewindBuffer, createRewindSource } from './tape-rewind.js';
 
 (() => {
   'use strict';
@@ -39,6 +40,12 @@ import { createStreamSource, prefixFromTrade } from './tape-source.js';
     buyPitch: $('buyPitch'), buyPitchValue: $('buyPitchValue'),
     sellPitch: $('sellPitch'), sellPitchValue: $('sellPitchValue'), soundDuration: $('soundDuration'), durationValue: $('durationValue'),
     largeSize: $('largeSize'), largeBoost: $('largeBoost'), largeBoostValue: $('largeBoostValue'), maxVoices: $('maxVoices'),
+    rewindPanel: $('rewindPanel'), rewindCanvas: $('rewindCanvas'), rewindBadge: $('rewindBadge'),
+    rewindTicks: $('rewindTicks'), rewindSpeed: $('rewindSpeed'), rewindPlay: $('rewindPlay'),
+    rewindStepBack: $('rewindStepBack'), rewindStepForward: $('rewindStepForward'), rewindExit: $('rewindExit'),
+    rewindLast: $('rewindLast'), rewindMaxDelta: $('rewindMaxDelta'), rewindMinDelta: $('rewindMinDelta'),
+    rewindRate: $('rewindRate'), rewindBid: $('rewindBid'), rewindAsk: $('rewindAsk'),
+    rewindNotice: $('rewindNotice'), rewindClockTime: $('rewindClockTime'),
     replayDialog: $('replayDialog'), replayProvider: $('replayProvider'), replaySource: $('replaySource'),
     replayStart: $('replayStart'), replayEnd: $('replayEnd'), replaySpeed: $('replaySpeed'), replaySeek: $('replaySeek'),
     replaySeekButton: $('replaySeekButton'), replayStatus: $('replayStatus'), replayStop: $('replayStop'),
@@ -55,7 +62,13 @@ import { createStreamSource, prefixFromTrade } from './tape-source.js';
     minuteBars: [], dailyBars: [], marketChartView: 'minute', dailyHistorySymbol: '', dailyHistoryPending: false, dirtyDailyChart: true,
     replayChartEndUS: 0, replayChartKey: '', dirtyReplayChart: true, marketChartEnabled: false, xtraEnabled: false,
     rvolWarmup: { symbol: '', ready: false, pending: false, attempt: 0, token: 0, timer: null, controller: null },
-    tickScale: null, minuteScale: null, renderNowMS: null, renderInitialized: false
+    tickScale: null, minuteScale: null, renderNowMS: null, renderInitialized: false,
+    rewindConfig: null, rewindPaneAvailable: false,
+    rewind: {
+      active: false, playing: false, buffer: null, source: null, targetSeq: 0, targetUS: 0,
+      speed: 1, tickSize: 1, bars: [], scale: null, dirty: false, notice: '',
+      lastInteractionMS: 0, lastFrameMS: 0, token: 0
+    }
   };
   // The live and replay panes read every panel through this source. Live Rewind
   // adds a second source over the same aggregation code, never a second copy.
@@ -63,8 +76,8 @@ import { createStreamSource, prefixFromTrade } from './tape-source.js';
   const DAY_MAP_CORNERS = ['', 'day-map-lower-left', 'day-map-lower-right', 'day-map-upper-right'];
   const DAY_MAP_CORNER_NAMES = ['upper-left', 'lower-left', 'lower-right', 'upper-right'];
 
-  const horizonElements = new Map(HORIZONS.map((seconds) => {
-    const row = elements.rollingPanel.querySelector(`[data-horizon="${seconds}"]`);
+  const collectHorizonElements = (panel) => new Map(HORIZONS.map((seconds) => {
+    const row = panel.querySelector(`[data-horizon="${seconds}"]`);
     return [seconds, {
       row, winner: row.querySelector('.winner'), volume: row.querySelector('.volume'),
       buyerVolume: row.querySelector('.buyer-volume'), sellerVolume: row.querySelector('.seller-volume'),
@@ -73,6 +86,14 @@ import { createStreamSource, prefixFromTrade } from './tape-source.js';
       relativePace: row.querySelector('.relative-pace')
     }];
   }));
+  const horizonElements = collectHorizonElements(elements.rollingPanel);
+  // The rewind pane reuses the live rolling-panel markup so its rows can never
+  // drift from the live rows in structure, columns, or typography.
+  const rewindRollingPanel = elements.rollingPanel.cloneNode(true);
+  rewindRollingPanel.id = 'rewindRollingPanel';
+  rewindRollingPanel.setAttribute('aria-label', 'Rewound tape pressure by horizon');
+  elements.rewindPanel.append(rewindRollingPanel);
+  const rewindHorizonElements = collectHorizonElements(rewindRollingPanel);
 
   class TapeAudio {
     constructor() {
@@ -295,6 +316,19 @@ import { createStreamSource, prefixFromTrade } from './tape-source.js';
       state.status = snapshot.status || {};
       state.marketChartEnabled = state.status.mode === 'replay' || message.market_chart === true;
       state.xtraEnabled = message.xtra === true;
+      state.rewindConfig = message.rewind || state.rewindConfig;
+      // Live Rewind is an IBKR-live feature; demo mode is for development. The
+      // pane slot is reserved from startup so entering a rewind never reflows.
+      const feedMode = String(state.status.mode || '').toLowerCase();
+      state.rewindPaneAvailable = Boolean(state.rewindConfig?.enabled)
+        && (feedMode === 'live' || feedMode === 'demo')
+        && (message.rewind_pane === true || message.market_chart === true);
+      // A snapshot means the delivered sequence is starting over: on a symbol
+      // switch, a reconnect, or a server restart. Rewind history cannot be
+      // assumed to continue across any of those.
+      returnToLive();
+      discardRewindBuffer();
+      feedRewindBuffer(state.trades);
       state.replayConfig = message.replay_config || state.replayConfig;
       if (state.replayConfig) {
         elements.replayProvider.value = state.replayConfig.provider || 'all';
@@ -366,6 +400,9 @@ import { createStreamSource, prefixFromTrade } from './tape-source.js';
       if (firstRetainedMidpoint > 0) state.midpoints.splice(0, firstRetainedMidpoint);
     }
     audio.push(trades);
+    // Read-only mirror of events that have already been delivered. The rewind
+    // pane never feeds the audio worklet.
+    feedRewindBuffer(trades);
     state.dirtyChart = true;
     state.dirtyReplayChart = true;
     state.dirtyDayContext = true;
@@ -645,29 +682,34 @@ import { createStreamSource, prefixFromTrade } from './tape-source.js';
     state.dirtyTape = false;
   }
 
-  function resizeCanvas() {
-    const rect = elements.chart.getBoundingClientRect();
+  function resizeCanvas(target) {
+    const rect = target.canvas.getBoundingClientRect();
     const ratio = Math.min(2, window.devicePixelRatio || 1);
     const width = Math.max(1, Math.round(rect.width * ratio));
     const height = Math.max(1, Math.round(rect.height * ratio));
-    if (elements.chart.width !== width || elements.chart.height !== height) {
-      elements.chart.width = width;
-      elements.chart.height = height;
-      state.dirtyChart = true;
+    if (target.canvas.width !== width || target.canvas.height !== height) {
+      target.canvas.width = width;
+      target.canvas.height = height;
+      target.setDirty(true);
     }
   }
 
   // Exposed solely for deterministic browser validation.
   window.__tapeReadingScale = updatePriceScale;
 
-  function drawChart() {
-    resizeCanvas();
-    const rect = elements.chart.getBoundingClientRect();
+  // One tick-chart renderer, two render targets. The live pane and the Live
+  // Rewind pane pass different bars, tick sizes, scales, and panels; nothing
+  // about the drawing itself is duplicated or forked.
+  function drawTickChart(target) {
+    resizeCanvas(target);
+    const context = target.context;
+    const bars = target.bars();
+    const rect = target.canvas.getBoundingClientRect();
     const width = rect.width;
     const height = rect.height;
     const ratio = Math.min(2, window.devicePixelRatio || 1);
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    context.fillStyle = '#0c0f13';
+    context.fillStyle = target.background;
     context.fillRect(0, 0, width, height);
     const rightAxis = width < 250 ? 46 : 52;
     const left = 6;
@@ -688,14 +730,14 @@ import { createStreamSource, prefixFromTrade } from './tape-source.js';
     const rollingBottom = rollingTop + rollingPaneHeight;
     const priceTop = rollingBottom + paneGap;
     const priceBottom = plotBottom - bottom;
-    positionRollingPanel(rollingTop, rollingBottom);
-    if (width < 80 || height < 120 || !state.bars.length) {
-      elements.chartEmpty.classList.toggle('hidden', state.bars.length > 0);
-      state.dirtyChart = false;
+    target.layoutRolling(rollingTop, rollingBottom);
+    if (width < 80 || height < 120 || !bars.length) {
+      target.empty?.classList.toggle('hidden', bars.length > 0);
+      target.setDirty(false);
       return;
     }
-    elements.chartEmpty.classList.add('hidden');
-    const visible = state.bars.slice(-state.settings.visibleBars);
+    target.empty?.classList.add('hidden');
+    const visible = bars.slice(-target.visibleBars());
     const step = (right - left) / visible.length;
 
     let minimum = Infinity;
@@ -713,8 +755,9 @@ import { createStreamSource, prefixFromTrade } from './tape-source.js';
     const pricePadding = Math.max((maximum - minimum) * 0.08, maximum * 0.00008, 0.005);
     minimum -= pricePadding;
     maximum += pricePadding;
-    state.tickScale = updatePriceScale(state.tickScale, minimum, maximum, visualNowMS());
-    minimum = state.tickScale.minimum; maximum = state.tickScale.maximum;
+    const scale = updatePriceScale(target.getScale(), minimum, maximum, visualNowMS());
+    target.setScale(scale);
+    minimum = scale.minimum; maximum = scale.maximum;
     const priceY = (value) => priceBottom - (value - minimum) / (maximum - minimum) * (priceBottom - priceTop);
     const xAt = (index) => left + (index + 0.5) * step;
 
@@ -799,8 +842,9 @@ import { createStreamSource, prefixFromTrade } from './tape-source.js';
     context.font = '700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     context.fillText(formatPrice(last.close), right + 4, currentY);
 
-    updateDeltaMetrics(maxDelta, minDelta);
-    state.dirtyChart = Boolean(state.tickScale.contracting);
+    target.setDeltaMetrics(maxDelta, minDelta);
+    target.onDrawn?.(visible[visible.length - 1]);
+    target.setDirty(Boolean(scale.contracting));
 
     function drawPaneBorder(paneTop, paneBottom, label, value) {
       context.strokeStyle = '#2a3038';
@@ -816,6 +860,40 @@ import { createStreamSource, prefixFromTrade } from './tape-source.js';
       context.textBaseline = 'middle';
     }
   }
+
+  const liveChartTarget = {
+    canvas: elements.chart, context, empty: elements.chartEmpty, background: '#0c0f13',
+    bars: () => state.bars,
+    visibleBars: () => state.settings.visibleBars,
+    getScale: () => state.tickScale,
+    setScale: (value) => { state.tickScale = value; },
+    setDirty: (value) => { state.dirtyChart = value; },
+    layoutRolling: (top, bottom) => positionRollingPanel(elements.rollingPanel, top, bottom),
+    setDeltaMetrics: (maximum, minimum) => {
+      elements.maxDelta.textContent = formatSigned(maximum);
+      elements.minDelta.textContent = formatSigned(minimum);
+    }
+  };
+
+  function drawChart() {
+    drawTickChart(liveChartTarget);
+  }
+
+  const rewindChartTarget = {
+    canvas: elements.rewindCanvas,
+    context: elements.rewindCanvas.getContext('2d', { alpha: false, desynchronized: true }),
+    empty: null, background: '#080a0d',
+    bars: () => state.rewind.bars,
+    visibleBars: () => state.settings?.visibleBars || 360,
+    getScale: () => state.rewind.scale,
+    setScale: (value) => { state.rewind.scale = value; },
+    setDirty: (value) => { state.rewind.dirty = value; },
+    layoutRolling: (top, bottom) => positionRollingPanel(rewindRollingPanel, top, bottom),
+    setDeltaMetrics: (maximum, minimum) => {
+      elements.rewindMaxDelta.textContent = formatSigned(maximum);
+      elements.rewindMinDelta.textContent = formatSigned(minimum);
+    }
+  };
 
   function resizeReplayCanvas() {
     const rect = elements.replayChart.getBoundingClientRect();
@@ -1401,14 +1479,9 @@ import { createStreamSource, prefixFromTrade } from './tape-source.js';
     return result;
   }
 
-  function positionRollingPanel(top, bottom) {
-    elements.rollingPanel.style.top = `${Math.max(0, top)}px`;
-    elements.rollingPanel.style.height = `${Math.max(0, bottom - top)}px`;
-  }
-
-  function updateDeltaMetrics(maximum, minimum) {
-    elements.maxDelta.textContent = formatSigned(maximum);
-    elements.minDelta.textContent = formatSigned(minimum);
+  function positionRollingPanel(panel, top, bottom) {
+    panel.style.top = `${Math.max(0, top)}px`;
+    panel.style.height = `${Math.max(0, bottom - top)}px`;
   }
 
   function setConnection(status) {
@@ -1422,8 +1495,11 @@ import { createStreamSource, prefixFromTrade } from './tape-source.js';
     const relativeVolumeMode = ['live', 'massive', 'demo', 'replay'].includes(String(status?.mode || '').toLowerCase());
     elements.replayButton.hidden = !replayMode;
     elements.relativeVolume.hidden = !relativeVolumeMode;
-    const marketChartMode = replayMode || state.marketChartEnabled;
+    // The rewind pane lives in this slot, so the slot is present for the whole
+    // session rather than appearing when a rewind starts.
+    const marketChartMode = replayMode || state.marketChartEnabled || state.rewindPaneAvailable;
     elements.replayMarketPanel.hidden = !marketChartMode;
+    applyRewindSlot();
     elements.replayMarketPanel.setAttribute('aria-label', `${replayMode ? 'Replay' : 'Live'} one-minute price and volume chart`);
     elements.replayChartEmpty.textContent = replayMode ? 'START REPLAY TO BUILD THE CHART' : 'WAITING FOR LIVE MINUTE BARS';
     elements.workspace.classList.toggle('replay-mode', replayMode);
@@ -1452,6 +1528,8 @@ import { createStreamSource, prefixFromTrade } from './tape-source.js';
       return;
     }
     elements.tickerInput.value = symbol;
+    // Never leave the trader looking at another symbol's past.
+    returnToLive('symbol change');
     if (record) pushNavigation(symbol, true);
     try {
       const response = await fetch('/api/ticker', {
@@ -1596,6 +1674,7 @@ import { createStreamSource, prefixFromTrade } from './tape-source.js';
       } else {
         state.settings.tickSize = Number(elements.tickSelect.value);
         commitSettings(true);
+        postUIEvent('tick_size', state.settings.tickSize);
       }
     });
     elements.soundButton.addEventListener('click', async () => {
@@ -1642,6 +1721,7 @@ import { createStreamSource, prefixFromTrade } from './tape-source.js';
       state.settings.tickSize = state.settings.customTicks;
       elements.tickSelect.value = ['1', '10', '100', '1000'].includes(String(state.settings.tickSize)) ? String(state.settings.tickSize) : 'custom';
       commitSettings(true);
+      postUIEvent('tick_size', state.settings.tickSize);
     });
     elements.visibleBars.addEventListener('change', () => {
       state.settings.visibleBars = clampInt(elements.visibleBars.value, 20, 4000, 360);
@@ -1673,12 +1753,68 @@ import { createStreamSource, prefixFromTrade } from './tape-source.js';
         commitSettings(false);
       });
     }
+    elements.rewindTicks.addEventListener('change', () => {
+      // The rewind pane's granularity is independent of live: re-aggregating the
+      // same seconds more finely is the point of the feature.
+      state.rewind.tickSize = clampInt(elements.rewindTicks.value, 1, 100000, 1);
+      state.rewind.scale = null;
+      state.rewind.dirty = true;
+      markRewindInteraction();
+    });
+    elements.rewindSpeed.addEventListener('change', () => {
+      state.rewind.speed = clampNumber(elements.rewindSpeed.value, 0.25, 2, 1);
+      markRewindInteraction();
+    });
+    elements.rewindPlay.addEventListener('click', toggleRewindPlayback);
+    elements.rewindStepBack.addEventListener('click', () => stepRewind(-1));
+    elements.rewindStepForward.addEventListener('click', () => stepRewind(1));
+    elements.rewindExit.addEventListener('click', () => returnToLive('exit'));
+    elements.rewindPanel.addEventListener('pointerdown', markRewindInteraction);
+
     document.addEventListener('keydown', (event) => {
-      if (event.key === '/' && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName || '')) {
+      const editing = /INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName || '');
+      if (event.key === '/' && !editing) {
         event.preventDefault();
         elements.tickerInput.focus();
+        return;
+      }
+      // Every shortcut stays inert while an input or select has focus.
+      if (editing || event.altKey || event.metaKey) return;
+      if (event.key === 'Escape') {
+        if (state.rewind.active) {
+          event.preventDefault();
+          returnToLive('escape');
+        }
+        return;
+      }
+      if (event.key === 'ArrowLeft') {
+        if (!rewindEnabled()) return;
+        event.preventDefault();
+        const depth = event.ctrlKey ? REWIND_DEPTHS.ctrl : event.shiftKey ? REWIND_DEPTHS.shift : REWIND_DEPTHS.plain;
+        void enterRewind(depth);
+        return;
+      }
+      if (!state.rewind.active) return;
+      if (event.key === ' ') {
+        event.preventDefault();
+        toggleRewindPlayback();
+        return;
+      }
+      if (event.key === ',' || event.key === '.') {
+        event.preventDefault();
+        stepRewind(event.key === ',' ? -1 : 1);
       }
     });
+  }
+
+  // Fire and forget: a display change is recorded on the receipt timeline so a
+  // later rewind or replay can restore the view the trader was looking at.
+  function postUIEvent(kind, value) {
+    if (!['live'].includes(String(state.status?.mode || '').toLowerCase())) return;
+    void fetch('/api/ui-event', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, symbol: state.symbol, value: Number(value) || 0 })
+    }).catch(() => {});
   }
 
   async function refreshReplayRange(updateRangeInputs = true) {
@@ -1780,25 +1916,44 @@ import { createStreamSource, prefixFromTrade } from './tape-source.js';
   function updateRollingPanel(nowUS) {
     if (!nowUS) return;
     for (const seconds of HORIZONS) {
-      const metric = computeHorizon(liveSource, seconds, nowUS);
-      const cells = horizonElements.get(seconds);
-      const magnitude = Math.abs(metric.deltaPercent);
-      const direction = magnitude < BALANCE_DEADBAND_PERCENT ? 'balanced' : metric.deltaPercent > 0 ? 'buyer' : 'seller';
-      cells.row.classList.remove('buyer', 'seller', 'balanced');
-      cells.row.classList.add(direction);
-      cells.row.style.setProperty('--pressure-width', `${Math.min(50, magnitude / 2)}%`);
-      cells.winner.textContent = direction === 'buyer' ? 'BUY ▶' : direction === 'seller' ? '◀ SELL' : 'BALANCED';
-      cells.volume.textContent = formatSize(metric.volume);
-      cells.buyerVolume.textContent = `B ${formatSize(metric.buyer)}`;
-      cells.sellerVolume.textContent = `S ${formatSize(metric.seller)}`;
-      cells.deltaPercent.textContent = formatSignedPercent(metric.deltaPercent);
-      cells.signedDelta.textContent = `Δ ${formatSigned(metric.delta)}`;
-      cells.sharesRate.textContent = formatRate(metric.sharesRate);
-      cells.printsRate.textContent = formatRate(metric.printsRate);
-      cells.midChange.textContent = formatTickChange(metric.midTicks);
-      cells.relativePace.textContent = formatRelativePace(metric.relativePace);
-      cells.row.setAttribute('aria-label', `${seconds} seconds: ${formatSize(metric.volume)} total volume; ${formatSize(metric.buyer)} buyer initiated; ${formatSize(metric.seller)} seller initiated; delta ${formatSigned(metric.delta)}, ${formatSignedPercent(metric.deltaPercent)}; ${formatRate(metric.sharesRate)} shares per second; ${formatRate(metric.printsRate)} prints per second; midpoint ${formatTickChange(metric.midTicks)}; pace ${formatRelativePace(metric.relativePace)} versus the preceding ${seconds} seconds.`);
+      renderHorizonRow(horizonElements.get(seconds), seconds, computeHorizon(liveSource, seconds, nowUS));
     }
+  }
+
+  // `blankWhenTruncated` is set only by the rewind pane. A window that reaches
+  // past the buffer floor would otherwise display an understated volume, which
+  // reads as a real drop in pressure.
+  function renderHorizonRow(cells, seconds, metric, blankWhenTruncated = false) {
+    if (blankWhenTruncated && metric.truncated) {
+      cells.row.classList.remove('buyer', 'seller');
+      cells.row.classList.add('balanced');
+      cells.row.style.setProperty('--pressure-width', '0%');
+      cells.winner.textContent = 'NO DATA';
+      for (const cell of [cells.volume, cells.deltaPercent, cells.sharesRate, cells.printsRate, cells.midChange, cells.relativePace]) {
+        cell.textContent = '--';
+      }
+      cells.buyerVolume.textContent = 'B --';
+      cells.sellerVolume.textContent = 'S --';
+      cells.signedDelta.textContent = 'Δ --';
+      cells.row.setAttribute('aria-label', `${seconds} seconds: outside the retained rewind buffer.`);
+      return;
+    }
+    const magnitude = Math.abs(metric.deltaPercent);
+    const direction = magnitude < BALANCE_DEADBAND_PERCENT ? 'balanced' : metric.deltaPercent > 0 ? 'buyer' : 'seller';
+    cells.row.classList.remove('buyer', 'seller', 'balanced');
+    cells.row.classList.add(direction);
+    cells.row.style.setProperty('--pressure-width', `${Math.min(50, magnitude / 2)}%`);
+    cells.winner.textContent = direction === 'buyer' ? 'BUY ▶' : direction === 'seller' ? '◀ SELL' : 'BALANCED';
+    cells.volume.textContent = formatSize(metric.volume);
+    cells.buyerVolume.textContent = `B ${formatSize(metric.buyer)}`;
+    cells.sellerVolume.textContent = `S ${formatSize(metric.seller)}`;
+    cells.deltaPercent.textContent = formatSignedPercent(metric.deltaPercent);
+    cells.signedDelta.textContent = `Δ ${formatSigned(metric.delta)}`;
+    cells.sharesRate.textContent = formatRate(metric.sharesRate);
+    cells.printsRate.textContent = formatRate(metric.printsRate);
+    cells.midChange.textContent = formatTickChange(metric.midTicks);
+    cells.relativePace.textContent = formatRelativePace(metric.relativePace);
+    cells.row.setAttribute('aria-label', `${seconds} seconds: ${formatSize(metric.volume)} total volume; ${formatSize(metric.buyer)} buyer initiated; ${formatSize(metric.seller)} seller initiated; delta ${formatSigned(metric.delta)}, ${formatSignedPercent(metric.deltaPercent)}; ${formatRate(metric.sharesRate)} shares per second; ${formatRate(metric.printsRate)} prints per second; midpoint ${formatTickChange(metric.midTicks)}; pace ${formatRelativePace(metric.relativePace)} versus the preceding ${seconds} seconds.`);
   }
 
   function updateRelativeVolume(nowUS) {
@@ -1847,7 +2002,223 @@ import { createStreamSource, prefixFromTrade } from './tape-source.js';
     elements.marketClock.setAttribute('aria-label', `${replayMode ? 'Replay' : 'New York market'} time ${displayedClock} Eastern Time`);
   }
 
+  // ------------------------------------------------------------- Live Rewind
+  //
+  // Chase play: reading behind the write head while the write continues. The
+  // live tape, its rolling horizons, RVOL, the audio worklet, the SQLite
+  // recorder, and the IBKR subscription are all untouched while this runs.
+  //
+  // The rewind pane emits no audio at all, deliberately. The AudioWorklet is a
+  // live-state signal: mixing replayed prints into it during a spike would
+  // corrupt the trader's real-time read of the market. The intended ergonomic is
+  // ears live, eyes rewound.
+
+  const REWIND_DEPTHS = { plain: 5, shift: 15, ctrl: 30 };
+
+  function rewindEnabled() {
+    return Boolean(state.rewindConfig?.enabled) && state.rewindPaneAvailable;
+  }
+
+  function ensureRewindBuffer() {
+    if (state.rewind.buffer || !state.rewindConfig?.enabled) return state.rewind.buffer;
+    state.rewind.buffer = new RewindBuffer({
+      bufferSeconds: Number(state.rewindConfig.buffer_seconds) || 180,
+      maxPrintsPerSecond: Number(state.rewindConfig.max_prints_per_second) || 2000
+    });
+    state.rewind.source = createRewindSource(state.rewind.buffer, {
+      symbol: () => state.symbol,
+      fetchRange: async (symbol, fromSeq, toSeq) => {
+        const query = new URLSearchParams({ symbol, seq_from: String(fromSeq), seq_to: String(toSeq) });
+        const response = await fetch(`/api/tape/range?${query}`);
+        if (!response.ok) throw new Error((await response.text()).trim());
+        return response.json();
+      }
+    });
+    return state.rewind.buffer;
+  }
+
+  // Called from the delivery path. One bounded write per print, no allocation,
+  // and no interaction with the live history the tape renders from.
+  function feedRewindBuffer(trades) {
+    const buffer = ensureRewindBuffer();
+    if (!buffer) return;
+    for (const trade of trades) buffer.push(trade);
+  }
+
+  function discardRewindBuffer() {
+    state.rewind.buffer?.reset();
+    state.rewind.notice = '';
+  }
+
+  async function enterRewind(seconds) {
+    if (!rewindEnabled()) return;
+    const buffer = ensureRewindBuffer();
+    if (!buffer || buffer.count === 0) return;
+    const rewind = state.rewind;
+    const fromUS = rewind.active && rewind.targetUS ? rewind.targetUS : buffer.lastReceivedUS();
+    const targetUS = Math.max(buffer.firstReceivedUS(), fromUS - seconds * 1e6);
+    if (!rewind.active) {
+      rewind.active = true;
+      rewind.speed = Number(elements.rewindSpeed.value) || 1;
+      rewind.tickSize = Number(elements.rewindTicks.value) || state.settings?.tickSize || 1;
+      rewind.scale = null;
+      elements.rewindPanel.hidden = false;
+      elements.workspace.classList.add('rewind-active');
+    }
+    rewind.playing = false;
+    markRewindInteraction();
+    await seekRewind(targetUS);
+  }
+
+  async function seekRewind(targetUS) {
+    const rewind = state.rewind;
+    const buffer = rewind.buffer;
+    if (!rewind.active || !buffer || buffer.count === 0) return;
+    const clamped = Math.min(Math.max(targetUS, buffer.firstReceivedUS()), buffer.lastReceivedUS());
+    rewind.targetUS = clamped;
+    rewind.targetSeq = rewind.source.seqAtOrBefore(clamped);
+    // Only the window actually being read is backfilled. The deepest metric is
+    // the 60-second pace baseline, which reaches twice its horizon behind.
+    const windowStartUS = clamped - 2 * 60 * 1e6;
+    const fromSeq = rewind.source.seqAtOrBefore(windowStartUS) || buffer.firstSeq();
+    const token = ++rewind.token;
+    const contiguous = await rewind.source.ensure(fromSeq, rewind.targetSeq);
+    if (token !== rewind.token || !rewind.active) return;
+    rewind.notice = contiguous ? '' : 'GAP IN THE REWIND RANGE COULD NOT BE BACKFILLED';
+    rewind.dirty = true;
+  }
+
+  function stepRewind(delta) {
+    const rewind = state.rewind;
+    if (!rewind.active || !rewind.source) return;
+    const nextSeq = rewind.targetSeq + delta;
+    const receipt = rewind.source.receivedUSAt(nextSeq);
+    if (!receipt) {
+      // Sequences are dense in the buffer, so a miss means an edge was reached.
+      if (delta > 0) returnToLive('caught the live edge');
+      return;
+    }
+    rewind.playing = false;
+    rewind.targetSeq = nextSeq;
+    rewind.targetUS = receipt;
+    rewind.dirty = true;
+    markRewindInteraction();
+  }
+
+  function toggleRewindPlayback() {
+    const rewind = state.rewind;
+    if (!rewind.active) return;
+    rewind.playing = !rewind.playing;
+    rewind.lastFrameMS = performance.now();
+    elements.rewindPlay.textContent = rewind.playing ? 'PAUSE' : 'PLAY';
+    elements.rewindPlay.classList.toggle('active', rewind.playing);
+    markRewindInteraction();
+    rewind.dirty = true;
+  }
+
+  function markRewindInteraction() {
+    state.rewind.lastInteractionMS = performance.now();
+  }
+
+  // A trader stranded in the past while the market moves is a real financial
+  // risk, so every exit path leads back to live.
+  function returnToLive(reason = '') {
+    const rewind = state.rewind;
+    if (!rewind.active) return;
+    rewind.active = false;
+    rewind.playing = false;
+    rewind.targetSeq = 0;
+    rewind.targetUS = 0;
+    rewind.token++;
+    rewind.notice = '';
+    elements.rewindPanel.hidden = true;
+    elements.rewindPlay.textContent = 'PLAY';
+    elements.rewindPlay.classList.remove('active');
+    elements.workspace.classList.remove('rewind-active');
+    elements.rewindNotice.hidden = true;
+    if (reason) elements.rewindBadge.textContent = 'LIVE';
+    updateRewindIdleHint();
+  }
+
+  function advanceRewindPlayback(nowMS) {
+    const rewind = state.rewind;
+    if (!rewind.active || !rewind.playing) return;
+    const elapsedMS = Math.max(0, nowMS - (rewind.lastFrameMS || nowMS));
+    rewind.lastFrameMS = nowMS;
+    const advanced = rewind.targetUS + elapsedMS * 1000 * rewind.speed;
+    if (advanced >= rewind.buffer.lastReceivedUS()) {
+      returnToLive('caught the live edge');
+      return;
+    }
+    rewind.targetUS = advanced;
+    rewind.targetSeq = rewind.source.seqAtOrBefore(advanced) || rewind.targetSeq;
+    rewind.dirty = true;
+  }
+
+  function drawRewindPane() {
+    const rewind = state.rewind;
+    if (!rewind.active || !rewind.source || !rewind.targetSeq) return;
+    const source = rewind.source;
+    const nowUS = rewind.targetUS;
+    // Bars are anchored on a live bar boundary at or before the window, so the
+    // pane reproduces the live bar phase whenever the tick sizes agree.
+    const visibleBars = state.settings?.visibleBars || 360;
+    const span = Math.max(1, visibleBars * rewind.tickSize);
+    const fromSeq = Math.max(source.firstSeq(), rewind.targetSeq - span + 1);
+    rewind.bars = aggregateTickBars(source, fromSeq, rewind.targetSeq, rewind.tickSize);
+    drawTickChart(rewindChartTarget);
+
+    for (const seconds of HORIZONS) {
+      renderHorizonRow(rewindHorizonElements.get(seconds), seconds, computeHorizon(source, seconds, nowUS), true);
+    }
+    const behindSeconds = (source.lastReceivedUS() - nowUS) / 1e6;
+    elements.rewindBadge.textContent = `REWIND −${behindSeconds.toFixed(1)}s`;
+    elements.rewindBadge.setAttribute('aria-label', `Rewound ${behindSeconds.toFixed(1)} seconds behind live`);
+    elements.rewindRate.textContent = `${formatRate(computeTapeRate(source, nowUS))}/s`;
+    const quote = source.quoteAt(rewind.targetSeq);
+    elements.rewindBid.textContent = quote.bid > 0 ? formatPrice(quote.bid) : '--';
+    elements.rewindAsk.textContent = quote.ask > 0 ? formatPrice(quote.ask) : '--';
+    const event = source.at(rewind.targetSeq);
+    elements.rewindLast.textContent = event ? formatPrice(event.p) : '--';
+    elements.rewindClockTime.textContent = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+    }).format(new Date(nowUS / 1000));
+    const retained = source.retainedSeconds();
+    const shortfall = retained + 1 < (Number(state.rewindConfig?.buffer_seconds) || 180);
+    const notice = rewind.notice || (shortfall ? `REWIND BUFFER ${retained.toFixed(0)}s` : '');
+    elements.rewindNotice.textContent = notice;
+    elements.rewindNotice.hidden = !notice;
+  }
+
+  // When the slot is reserved for rewind alone, the one-minute chart furniture
+  // stays out of it and the empty state explains the shortcuts instead.
+  function applyRewindSlot() {
+    const rewindOnly = state.rewindPaneAvailable && !state.marketChartEnabled;
+    elements.replayChart.hidden = rewindOnly || state.marketChartView === 'daily';
+    elements.dailyChart.hidden = rewindOnly || state.marketChartView !== 'daily';
+    elements.dayContext.hidden = rewindOnly || state.marketChartView === 'daily';
+    document.querySelector('.market-chart-tabs').hidden = rewindOnly;
+    document.querySelector('.replay-chart-legend').hidden = rewindOnly;
+    if (rewindOnly) updateRewindIdleHint();
+  }
+
+  function updateRewindIdleHint() {
+    if (!rewindEnabled() || state.marketChartEnabled) return;
+    elements.replayChartEmpty.textContent = 'LIVE REWIND READY · ← 5s · SHIFT+← 15s · CTRL+← 30s';
+    elements.replayChartEmpty.classList.remove('hidden');
+    elements.replayChartEmpty.hidden = false;
+  }
+
   function animationLoop(now) {
+    // Rewind is stepped first and drawn on its own dirty flag. It never sets a
+    // live dirty flag, so the live canvas keeps its redraw-only-on-change
+    // behavior while a rewind is on screen.
+    advanceRewindPlayback(now);
+    if (state.rewind.active) {
+      const autoReturnMS = (Number(state.rewindConfig?.auto_return_seconds) || 20) * 1000;
+      if (now - state.rewind.lastInteractionMS > autoReturnMS) returnToLive('inactivity');
+      else if (state.rewind.dirty) drawRewindPane();
+    }
     if (state.dirtyReplayChart && (state.status?.mode === 'replay' || state.marketChartEnabled) && state.settings?.showChart) drawReplayChart();
     if (state.dirtyChart && state.settings?.showChart) drawChart();
     if (state.dirtyDayContext && state.settings?.showChart) drawDayContext();
@@ -1952,6 +2323,24 @@ import { createStreamSource, prefixFromTrade } from './tape-source.js';
   }
 
   window.__tapeReadingCandleVolume = formatCandleVolume;
+  // Exposed solely for deterministic browser validation.
+  window.__tapeReadingRewind = {
+    state() {
+      const rewind = state.rewind;
+      return {
+        available: rewindEnabled(), active: rewind.active, playing: rewind.playing,
+        targetSeq: rewind.targetSeq, targetUS: rewind.targetUS, tickSize: rewind.tickSize,
+        speed: rewind.speed, bars: rewind.bars.length, notice: rewind.notice,
+        buffered: rewind.buffer?.count || 0, retainedSeconds: rewind.buffer?.retainedSeconds() || 0,
+        bufferBytes: rewind.buffer?.bytes || 0, gaps: rewind.buffer?.gapList.length || 0,
+        behindSeconds: rewind.active ? (rewind.source.lastReceivedUS() - rewind.targetUS) / 1e6 : 0
+      };
+    },
+    enter: (seconds) => enterRewind(seconds),
+    step: (delta) => stepRewind(delta),
+    toggle: () => toggleRewindPlayback(),
+    exit: () => returnToLive('validation')
+  };
   window.__tapeReadingRender = {
     ready() {
       return Boolean(state.settings && state.ws?.readyState === WebSocket.OPEN);

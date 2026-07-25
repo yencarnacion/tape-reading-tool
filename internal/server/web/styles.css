@@ -24,6 +24,14 @@
   --rvol-elevated: #b98be6;
   --rvol-surge: #df9cff;
   --focus: #f0a83b;
+  /* Reserved for Live Rewind chrome and used for nothing else. The amber band is
+     already occupied by --seller, --price-down, and --focus, so hue alone cannot
+     carry "this is not live": the pane is identified by a dashed frame, which no
+     live element uses, a recessed background, and a literal text badge. Amber
+     never colors a price, a size, or a delta inside the rewind pane. */
+  --rewind: #ffc02e;
+  --rewind-ink: #120c00;
+  --rewind-surface: #080a0d;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -182,6 +190,26 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .legend-bollinger { color: #f2f5f7; }
 .replay-chart-empty { position: absolute; inset: 0; display: grid; place-items: center; color: #606975; font-size: 11px; font-weight: 800; pointer-events: none; }
 .replay-chart-empty.hidden { display: none; }
+
+.rewind-panel { position: absolute; z-index: 6; inset: 0; overflow: hidden; background: var(--rewind-surface); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.rewind-panel[hidden] { display: none; }
+#rewindCanvas { display: block; width: 100%; height: 100%; }
+/* The frame is dashed and inset so it cannot be mistaken for the solid 2px
+   focus outline, and drawn over the canvas without taking layout from it. */
+.rewind-chrome { position: absolute; z-index: 8; inset: 0; border: 2px dashed var(--rewind); pointer-events: none; }
+.rewind-toolbar { position: absolute; z-index: 2; top: 5px; left: 7px; right: 7px; display: flex; flex-wrap: wrap; gap: 3px; align-items: center; }
+.rewind-toolbar select, .rewind-toolbar button { min-height: 21px; height: 21px; padding: 0 6px; border-radius: 2px; font: 850 9px/19px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.rewind-toolbar button.active { color: var(--rewind-ink); border-color: var(--rewind); background: var(--rewind); }
+#rewindExit { margin-left: auto; }
+.rewind-badge { padding: 0 7px; color: var(--rewind-ink); background: var(--rewind); border-radius: 2px; font: 900 12px/21px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .02em; white-space: nowrap; }
+/* Sits in the empty left half of the pane's own clock bar, so it costs no plot
+   height and never overlaps the time axis. */
+.rewind-readout { position: absolute; z-index: 4; bottom: 8px; left: 8px; display: grid; grid-template-columns: repeat(3, auto); gap: 1px 12px; color: var(--muted); font-size: 9px; font-weight: 800; white-space: nowrap; }
+.rewind-readout b { color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; }
+.rewind-notice { position: absolute; z-index: 3; top: 32px; left: 7px; right: 7px; padding: 3px 6px; color: var(--rewind); background: rgba(8, 10, 13, .94); border: 1px solid var(--rewind); font-size: 10px; font-weight: 800; }
+.rewind-notice[hidden] { display: none; }
+.rewind-clock { z-index: 3; background: #0b0e12; }
+.rewind-clock strong { color: var(--rewind); }
 
 .chart-panel { container-type: inline-size; position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #0c0f13; }
 #chartCanvas { display: block; width: 100%; height: 100%; }

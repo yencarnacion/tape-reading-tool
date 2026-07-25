@@ -91,6 +91,46 @@
           </section>
           <div id="dailyChartEmpty" class="replay-chart-empty" hidden>SELECT 90 DAY TO LOAD DAILY BARS</div>
           <div id="replayChartEmpty" class="replay-chart-empty">START REPLAY TO BUILD THE CHART</div>
+          <!-- Live Rewind covers this pane's own rect only. It never replaces,
+               covers, or resizes the live tick chart, the rolling horizons, or
+               live time and sales, all of which keep running at full speed. -->
+          <section id="rewindPanel" class="rewind-panel" aria-label="Live rewind" hidden>
+            <canvas id="rewindCanvas"></canvas>
+            <div id="rewindChrome" class="rewind-chrome" aria-hidden="true"></div>
+            <div class="rewind-toolbar">
+              <output id="rewindBadge" class="rewind-badge" aria-live="off">REWIND 0.0s</output>
+              <select id="rewindTicks" aria-label="Rewind ticks per bar" title="Rewind ticks per bar">
+                <option value="1">1T</option>
+                <option value="10">10T</option>
+                <option value="100">100T</option>
+                <option value="1000">1000T</option>
+              </select>
+              <select id="rewindSpeed" aria-label="Rewind playback speed" title="Rewind playback speed">
+                <option value="0.25">0.25×</option>
+                <option value="0.5">0.5×</option>
+                <option value="1" selected>1×</option>
+                <option value="2">2×</option>
+              </select>
+              <button id="rewindPlay" type="button" title="Play or pause (Space)">PLAY</button>
+              <button id="rewindStepBack" type="button" title="Step one print back (,)">◂</button>
+              <button id="rewindStepForward" type="button" title="Step one print forward (.)">▸</button>
+              <button id="rewindExit" type="button" title="Return to live (Esc)">LIVE</button>
+            </div>
+            <div class="rewind-readout">
+              <span>LAST <b id="rewindLast">--</b></span>
+              <span>Δ MAX <b id="rewindMaxDelta">0</b></span>
+              <span>BID <b id="rewindBid">--</b></span>
+              <span>TAPE <b id="rewindRate">0/s</b></span>
+              <span>Δ MIN <b id="rewindMinDelta">0</b></span>
+              <span>ASK <b id="rewindAsk">--</b></span>
+            </div>
+            <output id="rewindNotice" class="rewind-notice" hidden></output>
+            <div id="rewindClock" class="market-clock rewind-clock">
+              <span>REWIND TIME</span>
+              <strong id="rewindClockTime">--:--:--</strong>
+              <small>ET</small>
+            </div>
+          </section>
         </section>
         <section id="chartPanel" class="chart-panel" aria-label="Volume delta, rolling tape pressure, and tick chart">
         <canvas id="chartCanvas"></canvas>
