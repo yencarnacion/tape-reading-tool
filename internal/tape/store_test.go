@@ -104,6 +104,46 @@ func TestQuoteReadsTopOfBookWithoutCopyingTheRing(t *testing.T) {
 	}
 }
 
+func TestRangeServesResidentSequencesAndReportsTheRingExtent(t *testing.T) {
+	store := NewStore("IREN", 4, 4)
+	now := time.Unix(1_700_000_000, 0)
+	for i := 0; i < 6; i++ {
+		store.AddTrade("IREN", now, now.Add(time.Duration(i)*time.Millisecond), 10+float64(i), 100)
+	}
+
+	// Sequences 1 and 2 have been overwritten; the ring holds 3..6.
+	trades, _, oldest, newest, more := store.Range("IREN", 1, 6, 100)
+	if oldest != 3 || newest != 6 || more {
+		t.Fatalf("extent = %d..%d more=%v", oldest, newest, more)
+	}
+	if len(trades) != 4 || trades[0].Seq != 3 || trades[3].Seq != 6 {
+		t.Fatalf("resident trades = %+v", trades)
+	}
+
+	middle, _, _, _, _ := store.Range("IREN", 4, 5, 100)
+	if len(middle) != 2 || middle[0].Seq != 4 || middle[1].Seq != 5 || middle[0].Price != 13 {
+		t.Fatalf("interior range = %+v", middle)
+	}
+
+	bounded, _, _, _, more := store.Range("IREN", 3, 6, 2)
+	if len(bounded) != 2 || bounded[0].Seq != 3 || !more {
+		t.Fatalf("bounded range = %+v more=%v", bounded, more)
+	}
+
+	// A window entirely below the ring floor yields nothing but still reports the
+	// floor, so the caller knows exactly what to request from storage.
+	evicted, _, oldest, _, _ := store.Range("IREN", 1, 2, 100)
+	if len(evicted) != 0 || oldest != 3 {
+		t.Fatalf("evicted window = %+v oldest=%d", evicted, oldest)
+	}
+	if future, _, _, _, _ := store.Range("IREN", 7, 9, 100); len(future) != 0 {
+		t.Fatalf("range beyond the newest sequence = %+v", future)
+	}
+	if empty, _, oldest, newest, _ := store.Range("MISSING", 1, 5, 100); empty != nil || oldest != 0 || newest != 0 {
+		t.Fatalf("unknown symbol range = %+v %d %d", empty, oldest, newest)
+	}
+}
+
 func TestActivateMaintainsMRUHistory(t *testing.T) {
 	store := NewStore("AAPL", 100, 3)
 	for _, symbol := range []string{"MSFT", "NVDA", "AAPL", "TSLA"} {

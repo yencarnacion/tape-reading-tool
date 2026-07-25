@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS trades (
   sequence_id INTEGER NOT NULL,
   received_us INTEGER NOT NULL DEFAULT 0,
   exchange_time_ms INTEGER NOT NULL DEFAULT 0,
+  ring_seq INTEGER NOT NULL DEFAULT 0,
   price REAL NOT NULL,
   size REAL NOT NULL,
   class TEXT NOT NULL DEFAULT 'mid',
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS trades (
   provider TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS trades_replay_idx ON trades(symbol, source, provider, event_us, id);
+CREATE INDEX IF NOT EXISTS trades_rewind_idx ON trades(symbol, source, provider, ring_seq);
 CREATE TABLE IF NOT EXISTS quotes (
   id INTEGER PRIMARY KEY,
   symbol TEXT NOT NULL,
@@ -57,18 +59,39 @@ CREATE TABLE IF NOT EXISTS quotes (
   provider TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS quotes_replay_idx ON quotes(symbol, source, provider, event_us, id);
+CREATE TABLE IF NOT EXISTS ui_events (
+  id INTEGER PRIMARY KEY,
+  symbol TEXT NOT NULL,
+  event_us INTEGER NOT NULL,
+  received_us INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  value_num REAL NOT NULL DEFAULT 0,
+  value_text TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL,
+  provider TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ui_events_idx ON ui_events(symbol, received_us);
 CREATE TABLE IF NOT EXISTS metadata (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO metadata(key, value) VALUES ('schema_version', '2');
+INSERT OR IGNORE INTO metadata(key, value) VALUES ('schema_version', '3');
 `
 
+// SchemaVersion is the only database layout this build reads or writes. There
+// is deliberately no migration path: an older file is reported as an error and
+// never deleted or rewritten.
+const SchemaVersion = "3"
+
 type TradeRecord struct {
-	Symbol               string
-	EventUS              int64
-	MarketTimeUS         int64
-	SequenceID           uint64
+	Symbol       string
+	EventUS      int64
+	MarketTimeUS int64
+	SequenceID   uint64
+	// RingSeq is the browser-visible sequence the in-memory tape ring assigned
+	// to this print, or zero when the print never entered the ring. Live Rewind
+	// backfill addresses events by this sequence, so it has to survive the ring.
+	RingSeq              uint64
 	ReceivedUS           int64
 	ExchangeTimeMS       int64
 	Price                float64
@@ -99,6 +122,24 @@ type QuoteRecord struct {
 	Source     string
 	Provider   string
 }
+
+// UIEventRecord puts a display change on the same receipt timeline as the tape
+// so a later rewind or replay can restore the view the trader was looking at.
+type UIEventRecord struct {
+	Symbol     string
+	EventUS    int64
+	ReceivedUS int64
+	Kind       string
+	ValueNum   float64
+	ValueText  string
+	Source     string
+	Provider   string
+}
+
+const (
+	UIEventSymbol   = "symbol"
+	UIEventTickSize = "tick_size"
+)
 
 type Event struct {
 	ID             int64
@@ -142,8 +183,9 @@ type MinuteBar struct {
 }
 
 type queuedRecord struct {
-	trade *TradeRecord
-	quote *QuoteRecord
+	trade   *TradeRecord
+	quote   *QuoteRecord
+	uiEvent *UIEventRecord
 }
 
 type Database struct {
@@ -157,6 +199,10 @@ type Database struct {
 	dropped atomic.Uint64
 	errMu   sync.RWMutex
 	lastErr error
+
+	readerOnce sync.Once
+	reader     *sql.DB
+	readerErr  error
 }
 
 func Open(cfg config.StorageConfig) (*Database, error) {
@@ -178,7 +224,7 @@ func Open(cfg config.StorageConfig) (*Database, error) {
 		}
 	}
 	var oldVersion string
-	if err := db.QueryRow("SELECT value FROM metadata WHERE key='schema_version'").Scan(&oldVersion); err == nil && oldVersion != "2" {
+	if err := db.QueryRow("SELECT value FROM metadata WHERE key='schema_version'").Scan(&oldVersion); err == nil && oldVersion != SchemaVersion {
 		db.Close()
 		return nil, fmt.Errorf("database schema %s is unsupported; delete %s and start with a fresh database", oldVersion, cfg.Path)
 	}
@@ -223,6 +269,20 @@ func (d *Database) RecordQuote(record QuoteRecord) bool {
 	}
 }
 
+// RecordUIEvent shares the non-blocking queue and batched writer the tape uses,
+// so capturing a display change cannot add disk I/O to any feed callback.
+func (d *Database) RecordUIEvent(record UIEventRecord) bool {
+	record.Source = normalizeSource(record.Source)
+	record.Provider = normalizeProvider(record.Provider)
+	select {
+	case d.queue <- queuedRecord{uiEvent: &record}:
+		return true
+	default:
+		d.dropped.Add(1)
+		return false
+	}
+}
+
 func (d *Database) Dropped() uint64 { return d.dropped.Load() }
 
 func (d *Database) LastError() error {
@@ -233,7 +293,67 @@ func (d *Database) LastError() error {
 
 func (d *Database) Close() error {
 	d.close.Do(func() { close(d.queue); <-d.done })
-	return errors.Join(d.LastError(), d.db.Close())
+	errs := []error{d.LastError(), d.db.Close()}
+	if d.reader != nil {
+		errs = append(errs, d.reader.Close())
+	}
+	return errors.Join(errs...)
+}
+
+// readOnly returns a connection pool that is separate from the recording pool.
+// Live Rewind backfill reads must never compete with the batched writer for the
+// recording connections, and WAL makes the concurrent read safe.
+func (d *Database) readOnly() (*sql.DB, error) {
+	d.readerOnce.Do(func() {
+		reader, err := sql.Open("sqlite", "file:"+d.path+"?mode=ro")
+		if err != nil {
+			d.readerErr = err
+			return
+		}
+		reader.SetMaxOpenConns(2)
+		if _, err := reader.Exec("PRAGMA busy_timeout=2000"); err != nil {
+			reader.Close()
+			d.readerErr = err
+			return
+		}
+		d.reader = reader
+	})
+	if d.readerErr != nil {
+		return nil, d.readerErr
+	}
+	return d.reader, nil
+}
+
+// TradesByRingSeq serves the Live Rewind backfill range that the in-memory ring
+// has already overwritten. Rows are matched on the persisted ring sequence and
+// restricted to receipts from the running process, because the ring restarts its
+// numbering when the program restarts.
+func (d *Database) TradesByRingSeq(ctx context.Context, symbol string, fromSeq, toSeq uint64, minReceivedUS int64, limit int) ([]tape.Trade, error) {
+	if symbol == "" || fromSeq == 0 || toSeq < fromSeq || limit < 1 {
+		return nil, fmt.Errorf("invalid ring sequence range")
+	}
+	reader, err := d.readOnly()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := reader.QueryContext(ctx, `SELECT ring_seq,exchange_time_ms,received_us,price,size,class,side,bid,ask
+	  FROM trades WHERE symbol=? AND source='live' AND provider='ibkr'
+	    AND ring_seq>=? AND ring_seq<=? AND received_us>=? AND chart_eligible=1
+	  ORDER BY ring_seq LIMIT ?`, symbol, fromSeq, toSeq, minReceivedUS, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	trades := make([]tape.Trade, 0, min(limit, 4096))
+	for rows.Next() {
+		var trade tape.Trade
+		if err := rows.Scan(&trade.Seq, &trade.ExchangeTimeMS, &trade.ReceivedUS, &trade.Price,
+			&trade.Size, &trade.Class, &trade.Side, &trade.Bid, &trade.Ask); err != nil {
+			return nil, err
+		}
+		trades = append(trades, trade)
+	}
+	return trades, rows.Err()
 }
 
 func (d *Database) writeLoop() {
@@ -274,8 +394,8 @@ func (d *Database) writeBatch(ctx context.Context, items []queuedRecord) error {
 		return err
 	}
 	tradeStmt, err := tx.PrepareContext(ctx, `INSERT INTO trades
-    (symbol,event_us,market_time_us,sequence_id,received_us,exchange_time_ms,price,size,class,side,bid,ask,exchange,conditions,feed_type,unreported,past_limit,chart_eligible,chart_exclusion_reason,source,provider)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    (symbol,event_us,market_time_us,sequence_id,ring_seq,received_us,exchange_time_ms,price,size,class,side,bid,ask,exchange,conditions,feed_type,unreported,past_limit,chart_eligible,chart_exclusion_reason,source,provider)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -288,11 +408,19 @@ func (d *Database) writeBatch(ctx context.Context, items []queuedRecord) error {
 		return err
 	}
 	defer quoteStmt.Close()
+	// Display changes are rare next to prints, so their statement is prepared
+	// only for the batches that actually contain one.
+	var uiStmt *sql.Stmt
+	defer func() {
+		if uiStmt != nil {
+			uiStmt.Close()
+		}
+	}()
 	for _, item := range items {
 		if item.trade != nil {
 			r := item.trade
 			normalizeTradeRecord(r)
-			if _, err := tradeStmt.ExecContext(ctx, r.Symbol, r.EventUS, r.MarketTimeUS, r.SequenceID, r.ReceivedUS, r.ExchangeTimeMS, r.Price, r.Size, r.Class, r.Side, r.Bid, r.Ask, r.Exchange, r.Conditions, r.FeedType, r.Unreported, r.PastLimit, r.ChartEligible, r.ChartExclusionReason, r.Source, r.Provider); err != nil {
+			if _, err := tradeStmt.ExecContext(ctx, r.Symbol, r.EventUS, r.MarketTimeUS, r.SequenceID, r.RingSeq, r.ReceivedUS, r.ExchangeTimeMS, r.Price, r.Size, r.Class, r.Side, r.Bid, r.Ask, r.Exchange, r.Conditions, r.FeedType, r.Unreported, r.PastLimit, r.ChartEligible, r.ChartExclusionReason, r.Source, r.Provider); err != nil {
 				tx.Rollback()
 				return err
 			}
@@ -300,6 +428,21 @@ func (d *Database) writeBatch(ctx context.Context, items []queuedRecord) error {
 		if item.quote != nil {
 			r := item.quote
 			if _, err := quoteStmt.ExecContext(ctx, r.Symbol, r.EventUS, r.ReceivedUS, r.Bid, r.Ask, r.BidSize, r.AskSize, r.Source, r.Provider); err != nil {
+				tx.Rollback()
+				return err
+			}
+		}
+		if item.uiEvent != nil {
+			r := item.uiEvent
+			if uiStmt == nil {
+				uiStmt, err = tx.PrepareContext(ctx, `INSERT INTO ui_events
+	    (symbol,event_us,received_us,kind,value_num,value_text,source,provider) VALUES (?,?,?,?,?,?,?,?)`)
+				if err != nil {
+					tx.Rollback()
+					return err
+				}
+			}
+			if _, err := uiStmt.ExecContext(ctx, r.Symbol, r.EventUS, r.ReceivedUS, r.Kind, r.ValueNum, r.ValueText, r.Source, r.Provider); err != nil {
 				tx.Rollback()
 				return err
 			}

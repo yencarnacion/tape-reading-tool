@@ -283,7 +283,7 @@ func (w *ibWrapper) TickByTickAllLast(reqID int64, tickType int64, unixTime int6
 	if w.feed.recorder != nil {
 		quote := w.feed.store.Quote(symbol)
 		w.feed.recorder.RecordTrade(storage.TradeRecord{
-			Symbol: symbol, MarketTimeUS: unixTime * 1e6, SequenceID: arrivalSeq, ReceivedUS: now.UnixMicro(),
+			Symbol: symbol, MarketTimeUS: unixTime * 1e6, SequenceID: arrivalSeq, RingSeq: trade.Seq, ReceivedUS: now.UnixMicro(),
 			Price: price, Size: tradeSize, Class: trade.Class, Side: trade.Side,
 			Bid: quote.Bid, Ask: quote.Ask, FeedType: tape.FeedLast,
 			Unreported: tickAttribLast.Unreported, PastLimit: tickAttribLast.PastLimit,

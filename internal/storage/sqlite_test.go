@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"math"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -168,5 +169,111 @@ func TestMinuteBarsRetainLargeLegitimateMovement(t *testing.T) {
 	}
 	if len(bars) != 1 || bars[0].Low != 95 || bars[0].Close != 95 || bars[0].Volume != 30 {
 		t.Fatalf("legitimate move missing: %+v", bars)
+	}
+}
+
+func TestTradesByRingSeqServesOverwrittenRewindRange(t *testing.T) {
+	database := testDatabase(t)
+	ctx := context.Background()
+	base := time.Date(2026, 7, 22, 13, 30, 0, 0, time.UTC).UnixMicro()
+	records := []TradeRecord{
+		{Symbol: "IREN", EventUS: base, ReceivedUS: base, RingSeq: 1, ExchangeTimeMS: base / 1000, Price: 10, Size: 100, Class: tape.AtAsk, Side: 1, Bid: 9.99, Ask: 10, ChartEligible: true, Source: "live", Provider: "ibkr"},
+		{Symbol: "IREN", EventUS: base + 1, ReceivedUS: base + 1, RingSeq: 2, ExchangeTimeMS: base / 1000, Price: 9.99, Size: 200, Class: tape.AtBid, Side: -1, Bid: 9.99, Ask: 10, ChartEligible: true, Source: "live", Provider: "ibkr"},
+		{Symbol: "IREN", EventUS: base + 2, ReceivedUS: base + 2, RingSeq: 3, ExchangeTimeMS: base / 1000, Price: 10.01, Size: 300, Class: tape.AboveAsk, Side: 1, Bid: 9.99, Ask: 10, ChartEligible: true, Source: "live", Provider: "ibkr"},
+		// Never entered the ring, so it must never appear in a rewind range.
+		{Symbol: "IREN", EventUS: base + 3, ReceivedUS: base + 3, RingSeq: 0, Price: 50, Size: 1, Unreported: true, ChartExclusionReason: tape.ExcludeUnreported, Source: "live", Provider: "ibkr"},
+		// A different symbol, and a Massive row, must both be excluded.
+		{Symbol: "AAPL", EventUS: base + 4, ReceivedUS: base + 4, RingSeq: 2, Price: 200, Size: 5, ChartEligible: true, Source: "live", Provider: "ibkr"},
+		{Symbol: "IREN", EventUS: base + 5, ReceivedUS: base + 5, RingSeq: 2, Price: 77, Size: 7, ChartEligible: true, Source: "live", Provider: "massive"},
+	}
+	if err := database.InsertTrades(ctx, records); err != nil {
+		t.Fatal(err)
+	}
+
+	trades, err := database.TradesByRingSeq(ctx, "IREN", 1, 3, base, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(trades) != 3 {
+		t.Fatalf("trades = %+v", trades)
+	}
+	for i, want := range []uint64{1, 2, 3} {
+		if trades[i].Seq != want {
+			t.Fatalf("trade %d sequence = %d, want %d", i, trades[i].Seq, want)
+		}
+	}
+	if trades[1].Price != 9.99 || trades[1].Size != 200 || trades[1].Class != tape.AtBid || trades[1].Side != -1 || trades[1].Bid != 9.99 || trades[1].Ask != 10 {
+		t.Fatalf("classified trade did not round-trip: %+v", trades[1])
+	}
+
+	middle, err := database.TradesByRingSeq(ctx, "IREN", 2, 2, base, 100)
+	if err != nil || len(middle) != 1 || middle[0].Seq != 2 || middle[0].Price != 9.99 {
+		t.Fatalf("single-sequence range = %+v, err = %v", middle, err)
+	}
+	bounded, err := database.TradesByRingSeq(ctx, "IREN", 1, 3, base, 2)
+	if err != nil || len(bounded) != 2 {
+		t.Fatalf("limit was not honored: %+v, err = %v", bounded, err)
+	}
+	// Receipts from an earlier process run reuse ring sequences and must not leak.
+	stale, err := database.TradesByRingSeq(ctx, "IREN", 1, 3, base+3, 100)
+	if err != nil || len(stale) != 0 {
+		t.Fatalf("stale process rows leaked: %+v, err = %v", stale, err)
+	}
+	if _, err := database.TradesByRingSeq(ctx, "IREN", 0, 3, base, 100); err == nil {
+		t.Fatal("zero sequence should be rejected")
+	}
+}
+
+func TestUIEventsRecordOnTheReceiptTimeline(t *testing.T) {
+	database := testDatabase(t)
+	received := time.Date(2026, 7, 22, 13, 31, 0, 0, time.UTC).UnixMicro()
+	if !database.RecordUIEvent(UIEventRecord{Symbol: "IREN", EventUS: received, ReceivedUS: received, Kind: UIEventTickSize, ValueNum: 100, Source: "live", Provider: "ibkr"}) {
+		t.Fatal("unexpected queue drop")
+	}
+	if !database.RecordUIEvent(UIEventRecord{Symbol: "IREN", EventUS: received + 5, ReceivedUS: received + 5, Kind: UIEventSymbol, ValueText: "IREN", Source: "live", Provider: "ibkr"}) {
+		t.Fatal("unexpected queue drop")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var count int
+		if err := database.db.QueryRow("SELECT COUNT(*) FROM ui_events WHERE symbol='IREN'").Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("ui_events rows = %d, want 2", count)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	var kind string
+	var value float64
+	if err := database.db.QueryRow("SELECT kind, value_num FROM ui_events WHERE symbol='IREN' ORDER BY received_us LIMIT 1").Scan(&kind, &value); err != nil {
+		t.Fatal(err)
+	}
+	if kind != UIEventTickSize || value != 100 {
+		t.Fatalf("first ui event = %s/%v", kind, value)
+	}
+}
+
+func TestOpenRejectsOlderSchemaWithoutDeletingIt(t *testing.T) {
+	cfg := config.Defaults().Storage
+	cfg.Path = filepath.Join(t.TempDir(), "tape.db")
+	database, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.db.Exec("UPDATE metadata SET value='2' WHERE key='schema_version'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(cfg); err == nil {
+		t.Fatal("an older schema version must be reported as an error")
+	}
+	if _, err := os.Stat(cfg.Path); err != nil {
+		t.Fatalf("the older database must never be deleted: %v", err)
 	}
 }

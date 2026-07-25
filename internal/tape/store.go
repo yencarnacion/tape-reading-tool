@@ -266,6 +266,21 @@ func (s *Store) Since(symbol string, seq uint64, limit int) (trades []Trade, quo
 	return tape.since(seq, limit)
 }
 
+// Range serves an explicit sequence window for Live Rewind backfill. The read is
+// bounded by limit and reports the ring's own extent so the caller knows which
+// part of the requested window has to come from durable storage instead. Holding
+// the read lock for a bounded copy keeps this identical in character to the
+// WebSocket Since path, so a rewind cannot stall the feed callback.
+func (s *Store) Range(symbol string, fromSeq, toSeq uint64, limit int) (trades []Trade, quote Quote, oldest, newest uint64, more bool) {
+	s.mu.RLock()
+	tape := s.tapes[symbol]
+	s.mu.RUnlock()
+	if tape == nil {
+		return nil, Quote{}, 0, 0, false
+	}
+	return tape.rangeSeq(fromSeq, toSeq, limit)
+}
+
 func (s *Store) getOrCreate(symbol string) *symbolTape {
 	symbol = NormalizeSymbol(symbol)
 	if symbol == "" {
@@ -382,6 +397,33 @@ func (t *symbolTape) since(seq uint64, limit int) ([]Trade, Quote, uint64, bool)
 		result[i] = t.items[(t.start+offset+i)%len(t.items)]
 	}
 	return result, t.quote, dropped, available > count
+}
+
+func (t *symbolTape) rangeSeq(fromSeq, toSeq uint64, limit int) ([]Trade, Quote, uint64, uint64, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.count == 0 {
+		return nil, t.quote, 0, 0, false
+	}
+	oldest := t.items[t.start].Seq
+	newest := t.nextSeq - 1
+	if fromSeq < oldest {
+		fromSeq = oldest
+	}
+	if toSeq > newest {
+		toSeq = newest
+	}
+	if limit <= 0 || fromSeq > toSeq {
+		return nil, t.quote, oldest, newest, false
+	}
+	available := int(toSeq - fromSeq + 1)
+	count := min(available, limit)
+	result := make([]Trade, count)
+	offset := int(fromSeq - oldest)
+	for i := range result {
+		result[i] = t.items[(t.start+offset+i)%len(t.items)]
+	}
+	return result, t.quote, oldest, newest, available > count
 }
 
 func classify(price, bid, ask float64) Classification {
