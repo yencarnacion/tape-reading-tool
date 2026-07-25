@@ -19,6 +19,7 @@ type Config struct {
 	Audio   AudioConfig   `yaml:"audio" json:"audio"`
 	Storage StorageConfig `yaml:"storage" json:"storage"`
 	Replay  ReplayConfig  `yaml:"replay" json:"replay"`
+	Rewind  RewindConfig  `yaml:"rewind" json:"rewind"`
 	Massive MassiveConfig `yaml:"massive" json:"massive"`
 }
 
@@ -90,6 +91,22 @@ type ReplayConfig struct {
 	ChartRightGapBars int     `yaml:"chart_right_gap_bars" json:"chart_right_gap_bars"`
 }
 
+// RewindConfig sizes the browser's Live Rewind buffer. Retention is bounded by
+// receipt time rather than by print count, because the count-bounded server ring
+// collapses to a few seconds exactly when a rewind is most wanted.
+type RewindConfig struct {
+	Enabled           bool `yaml:"enabled" json:"enabled"`
+	BufferSeconds     int  `yaml:"buffer_seconds" json:"buffer_seconds"`
+	AutoReturnSeconds int  `yaml:"auto_return_seconds" json:"auto_return_seconds"`
+	// MaxPrintsPerSecond sizes the fixed columnar ring:
+	// buffer_seconds x max_prints_per_second slots at 82 bytes each.
+	MaxPrintsPerSecond int `yaml:"max_prints_per_second" json:"max_prints_per_second"`
+}
+
+// rewindBytesPerEvent is the columnar ring's per-event footprint: ten Float64
+// columns plus a signed side byte and a classification byte.
+const rewindBytesPerEvent = 82
+
 type MassiveConfig struct {
 	APIKey string `yaml:"api_key" json:"-"`
 	Feed   string `yaml:"feed" json:"feed"`
@@ -120,7 +137,10 @@ func Defaults() Config {
 			Enabled: true, Path: "data/tape.db", QueueSize: 262144,
 			BatchSize: 2048, FlushInterval: "50ms", HistoricalRequestInterval: "11s",
 		},
-		Replay:  ReplayConfig{Source: "live", Provider: "all", Speed: 1, ChartRightGapBars: 5},
+		Replay: ReplayConfig{Source: "live", Provider: "all", Speed: 1, ChartRightGapBars: 5},
+		// 180 seconds keeps every rolling horizon valid at the deepest 30-second
+		// rewind: the 60-second window plus its own 60-second pace baseline.
+		Rewind:  RewindConfig{Enabled: true, BufferSeconds: 180, AutoReturnSeconds: 20, MaxPrintsPerSecond: 2000},
 		Massive: MassiveConfig{Feed: "realtime"},
 	}
 }
@@ -211,10 +231,28 @@ func (c Config) Validate() error {
 	if c.Replay.ChartRightGapBars < 5 || c.Replay.ChartRightGapBars > 100 {
 		return errors.New("replay.chart_right_gap_bars must be between 5 and 100")
 	}
+	if c.Rewind.BufferSeconds < 5 || c.Rewind.BufferSeconds > 600 {
+		return errors.New("rewind.buffer_seconds must be between 5 and 600")
+	}
+	if c.Rewind.AutoReturnSeconds < 3 || c.Rewind.AutoReturnSeconds > 300 {
+		return errors.New("rewind.auto_return_seconds must be between 3 and 300")
+	}
+	if c.Rewind.MaxPrintsPerSecond < 100 || c.Rewind.MaxPrintsPerSecond > 20000 {
+		return errors.New("rewind.max_prints_per_second must be between 100 and 20000")
+	}
+	if bytes := c.RewindBufferBytes(); bytes > 64<<20 {
+		return fmt.Errorf("rewind buffer would reserve %d MB; reduce buffer_seconds or max_prints_per_second", bytes>>20)
+	}
 	if c.Massive.Feed != "realtime" && c.Massive.Feed != "delayed" {
 		return errors.New("massive.feed must be realtime or delayed")
 	}
 	return nil
+}
+
+// RewindBufferBytes is the worst-case footprint the browser reserves once, at
+// the configured sustained print rate. It never grows during a session.
+func (c Config) RewindBufferBytes() int {
+	return c.Rewind.BufferSeconds * c.Rewind.MaxPrintsPerSecond * rewindBytesPerEvent
 }
 
 func LoadDotEnv(path string) error {

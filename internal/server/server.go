@@ -37,6 +37,12 @@ type Server struct {
 	now            func() time.Time
 	liveChart      bool
 	liveXtra       bool
+
+	recorder       *storage.Database
+	rewindPane     bool
+	processStartUS int64
+	uiEventMu      sync.Mutex
+	uiEventAt      map[string]time.Time
 }
 
 type rvolHistoryCache struct {
@@ -64,12 +70,15 @@ type streamMessage struct {
 	ServerTimeMS int64                 `json:"server_time_ms,omitempty"`
 	MarketChart  bool                  `json:"market_chart,omitempty"`
 	Xtra         bool                  `json:"xtra,omitempty"`
+	Rewind       *config.RewindConfig  `json:"rewind,omitempty"`
+	RewindPane   bool                  `json:"rewind_pane,omitempty"`
 }
 
 func New(cfg config.Config, store *tape.Store, source feed.Feed, liveChart ...bool) *Server {
 	server := &Server{
 		cfg: cfg, store: store, feed: source,
 		rvolCache: make(map[string]rvolHistoryCache), dailyCache: make(map[string]dailyHistoryCache), now: time.Now,
+		uiEventAt: make(map[string]time.Time), processStartUS: time.Now().UnixMicro(),
 		upgrader: websocket.Upgrader{
 			ReadBufferSize: 4096, WriteBufferSize: 64 * 1024,
 			CheckOrigin: sameOrigin,
@@ -90,10 +99,25 @@ func New(cfg config.Config, store *tape.Store, source feed.Feed, liveChart ...bo
 	return server
 }
 
+// AttachRecorder wires the recording database so Live Rewind can backfill a
+// sequence range the in-memory ring has overwritten, and so display changes are
+// captured on the receipt timeline. Reads use their own connection pool.
+func (s *Server) AttachRecorder(recorder *storage.Database) {
+	s.recorder = recorder
+}
+
+// ReserveRewindPane keeps the second pane slot present from startup so entering
+// a rewind never reflows the live tape, rolling rows, or time and sales.
+func (s *Server) ReserveRewindPane(reserve bool) {
+	s.rewindPane = reserve && s.cfg.Rewind.Enabled
+}
+
 func (s *Server) Serve(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/ticker", s.handleTicker)
+	mux.HandleFunc("/api/tape/range", s.handleTapeRange)
+	mux.HandleFunc("/api/ui-event", s.handleUIEvent)
 	mux.HandleFunc("/api/replay", s.handleReplay)
 	mux.HandleFunc("/api/render", s.handleRender)
 	mux.HandleFunc("/api/rvol-history", s.handleRVOLHistory)
@@ -344,7 +368,159 @@ func (s *Server) handleTicker(w http.ResponseWriter, r *http.Request) {
 	}
 	s.store.Activate(symbol)
 	s.feed.SetSymbol(symbol)
+	s.recordUIEvent(storage.UIEventRecord{Symbol: symbol, Kind: storage.UIEventSymbol, ValueText: symbol})
 	writeJSON(w, http.StatusOK, map[string]any{"symbol": symbol, "history": s.store.Symbols()})
+}
+
+// handleTapeRange answers the Live Rewind buffer's gap requests. A client that
+// fell behind the ring reports LAGGED, which would otherwise leave a hole in the
+// rewind buffer during exactly the spike worth rewinding into. The ring answers
+// whatever it still holds under one bounded read; storage answers the rest.
+func (s *Server) handleTapeRange(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.cfg.Rewind.Enabled {
+		http.Error(w, "live rewind is disabled", http.StatusConflict)
+		return
+	}
+	mode := strings.ToLower(s.store.Status().Mode)
+	if mode != "live" && mode != "demo" {
+		http.Error(w, "live rewind is available only for the IBKR live feed", http.StatusConflict)
+		return
+	}
+	query := r.URL.Query()
+	symbol := tape.NormalizeSymbol(query.Get("symbol"))
+	if symbol == "" {
+		symbol = s.store.Active()
+	}
+	seqFrom, fromErr := strconv.ParseUint(query.Get("seq_from"), 10, 64)
+	seqTo, toErr := strconv.ParseUint(query.Get("seq_to"), 10, 64)
+	if fromErr != nil || toErr != nil || seqFrom < 1 || seqTo < seqFrom {
+		http.Error(w, "seq_from and seq_to must describe an ascending range starting at 1", http.StatusBadRequest)
+		return
+	}
+	// One response stays within the batch bound the WebSocket path already uses;
+	// the client pages through anything larger.
+	limit := s.cfg.Tape.WebSocketMaxBatch
+	requestedTo := seqTo
+	if seqTo-seqFrom+1 > uint64(limit) {
+		seqTo = seqFrom + uint64(limit) - 1
+	}
+
+	residentFrom := seqFrom
+	ring, quote, oldest, newest, more := s.store.Range(symbol, seqFrom, seqTo, limit)
+	if oldest > residentFrom {
+		residentFrom = oldest
+	}
+	trades := ring
+	served := "ring"
+	// Anything below the ring floor has to come from the recording. Demo mode
+	// keeps no recording, so it is ring-only by construction.
+	if residentFrom > seqFrom && s.recorder != nil {
+		storedTo := residentFrom - 1
+		if storedTo > seqTo {
+			storedTo = seqTo
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		stored, err := s.recorder.TradesByRingSeq(ctx, symbol, seqFrom, storedTo, s.processStartUS, limit)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		served = "database"
+		if len(ring) > 0 {
+			served = "mixed"
+		}
+		trades = append(stored, ring...)
+		if len(trades) > limit {
+			trades = trades[:limit]
+		}
+	}
+	if trades == nil {
+		trades = []tape.Trade{}
+	}
+	lastSeq := seqTo
+	if count := len(trades); count > 0 {
+		lastSeq = trades[count-1].Seq
+	}
+	// Completeness is judged against what the client asked for, not against the
+	// batch-bounded window this response was able to cover.
+	complete := !more && lastSeq >= requestedTo
+	payload := map[string]any{
+		"type": "trades", "symbol": symbol, "trades": trades, "quote": quote,
+		"seq_from": seqFrom, "seq_to": lastSeq, "ring_oldest": oldest, "ring_newest": newest,
+		"served": served, "complete": complete,
+	}
+	if !complete {
+		payload["next_seq_from"] = lastSeq + 1
+	}
+	writeJSON(w, http.StatusOK, payload)
+}
+
+// handleUIEvent records a display change the browser owns. Symbol changes are
+// recorded where they arrive, in handleTicker.
+func (s *Server) handleUIEvent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	defer r.Body.Close()
+	var request struct {
+		Kind   string  `json:"kind"`
+		Symbol string  `json:"symbol"`
+		Value  float64 `json:"value"`
+		Text   string  `json:"text"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if request.Kind != storage.UIEventTickSize {
+		http.Error(w, "kind must be tick_size", http.StatusBadRequest)
+		return
+	}
+	symbol := tape.NormalizeSymbol(request.Symbol)
+	if symbol == "" {
+		symbol = s.store.Active()
+	}
+	// A dragged control must not turn into a write storm.
+	if !s.allowUIEvent(request.Kind) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	s.recordUIEvent(storage.UIEventRecord{
+		Symbol: symbol, Kind: request.Kind, ValueNum: request.Value, ValueText: request.Text,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"recorded": s.recorder != nil})
+}
+
+func (s *Server) allowUIEvent(kind string) bool {
+	now := s.now()
+	s.uiEventMu.Lock()
+	defer s.uiEventMu.Unlock()
+	if last, ok := s.uiEventAt[kind]; ok && now.Sub(last) < 250*time.Millisecond {
+		return false
+	}
+	s.uiEventAt[kind] = now
+	return true
+}
+
+func (s *Server) recordUIEvent(record storage.UIEventRecord) {
+	// Only the live IBKR session owns this timeline. Replay and render read it.
+	if s.recorder == nil || strings.ToLower(s.store.Status().Mode) != "live" {
+		return
+	}
+	receivedUS := s.now().UnixMicro()
+	record.EventUS = receivedUS
+	record.ReceivedUS = receivedUS
+	record.Source = "live"
+	record.Provider = "ibkr"
+	s.recorder.RecordUIEvent(record)
 }
 
 func (s *Server) handleReplay(w http.ResponseWriter, r *http.Request) {
@@ -556,6 +732,7 @@ func (s *Server) writeSnapshot(conn *websocket.Conn, symbol string) (uint64, err
 		Type: "snapshot", Symbol: symbol, Snapshot: &snapshot,
 		Display: &s.cfg.Display, Audio: &s.cfg.Audio, ReplayConfig: &s.cfg.Replay,
 		ServerTimeMS: s.streamTimeMS(), MarketChart: s.liveChart, Xtra: s.liveXtra,
+		Rewind: &s.cfg.Rewind, RewindPane: s.rewindPane,
 	}
 	if err := writeWebSocketJSON(conn, message); err != nil {
 		return 0, err

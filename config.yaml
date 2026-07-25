@@ -59,6 +59,12 @@ replay:
   speed: 1
   chart_right_gap_bars: 5
 
+rewind:
+  enabled: true
+  buffer_seconds: 180
+  auto_return_seconds: 20
+  max_prints_per_second: 2000
+
 massive:
   # Keep the key in MASSIVE_API_KEY in .env, not in this file.
   api_key: ""

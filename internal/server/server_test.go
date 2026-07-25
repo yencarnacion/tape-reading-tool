@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -137,5 +138,191 @@ func TestRVOLHistoryDoesNotUseMassiveForLiveFallback(t *testing.T) {
 	server.handleRVOLHistory(response, request)
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func liveStore(t *testing.T, ringSize int, prints int) *tape.Store {
+	t.Helper()
+	store := tape.NewStore("IREN", ringSize, 4)
+	store.SetStatus(tape.FeedStatus{Mode: "live", State: "live", Connected: true})
+	store.UpdateQuote("IREN", 9.99, 10, 100, 200)
+	base := time.Date(2026, 7, 22, 13, 30, 0, 0, time.UTC)
+	for i := 0; i < prints; i++ {
+		store.AddTrade("IREN", base, base.Add(time.Duration(i)*time.Millisecond), 10, 100)
+	}
+	return store
+}
+
+func tapeRange(t *testing.T, server *Server, query string) (int, map[string]any) {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet, "/api/tape/range?"+query, nil)
+	response := httptest.NewRecorder()
+	server.handleTapeRange(response, request)
+	payload := map[string]any{}
+	if response.Code == http.StatusOK {
+		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return response.Code, payload
+}
+
+func TestTapeRangeServesResidentSequencesFromTheRing(t *testing.T) {
+	server := New(config.Defaults(), liveStore(t, 1000, 40), &stubFeed{})
+	code, payload := tapeRange(t, server, "symbol=IREN&seq_from=10&seq_to=20")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	trades, _ := payload["trades"].([]any)
+	if len(trades) != 11 || payload["served"] != "ring" || payload["complete"] != true {
+		t.Fatalf("payload = %+v", payload)
+	}
+	first, _ := trades[0].(map[string]any)
+	if first["s"].(float64) != 10 {
+		t.Fatalf("first sequence = %v", first["s"])
+	}
+	if payload["type"] != "trades" || payload["quote"] == nil {
+		t.Fatalf("wire shape does not match a WebSocket batch: %+v", payload)
+	}
+}
+
+func TestTapeRangePagesWithinTheWebSocketBatchBound(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Tape.WebSocketMaxBatch = 8
+	server := New(cfg, liveStore(t, 1000, 40), &stubFeed{})
+	code, payload := tapeRange(t, server, "seq_from=1&seq_to=40")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	trades, _ := payload["trades"].([]any)
+	if len(trades) != 8 || payload["complete"] != false || payload["next_seq_from"].(float64) != 9 {
+		t.Fatalf("payload = %+v", payload)
+	}
+}
+
+func TestTapeRangeReportsTheRingFloorWhenNoRecorderIsAttached(t *testing.T) {
+	// Demo mode keeps no recording, so an overwritten range is ring-only.
+	store := liveStore(t, 8, 40)
+	store.SetStatus(tape.FeedStatus{Mode: "demo", State: "live", Connected: true})
+	server := New(config.Defaults(), store, &stubFeed{})
+	code, payload := tapeRange(t, server, "seq_from=1&seq_to=40")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	if payload["ring_oldest"].(float64) != 33 || payload["served"] != "ring" {
+		t.Fatalf("payload = %+v", payload)
+	}
+	trades, _ := payload["trades"].([]any)
+	if len(trades) != 8 {
+		t.Fatalf("resident trades = %d, want 8", len(trades))
+	}
+}
+
+func TestTapeRangeFillsTheLaggedHoleFromStorage(t *testing.T) {
+	store := liveStore(t, 8, 40)
+	server := New(config.Defaults(), store, &stubFeed{})
+	cfg := config.Defaults().Storage
+	cfg.Path = filepath.Join(t.TempDir(), "tape.db")
+	recorder, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recorder.Close()
+	server.AttachRecorder(recorder)
+	server.processStartUS = 0
+
+	base := time.Date(2026, 7, 22, 13, 30, 0, 0, time.UTC).UnixMicro()
+	records := make([]storage.TradeRecord, 0, 32)
+	for seq := 1; seq <= 32; seq++ {
+		records = append(records, storage.TradeRecord{
+			Symbol: "IREN", EventUS: base + int64(seq), ReceivedUS: base + int64(seq), RingSeq: uint64(seq),
+			Price: 10, Size: 100, Class: tape.AtBid, Side: -1, Bid: 9.99, Ask: 10,
+			ChartEligible: true, Source: "live", Provider: "ibkr",
+		})
+	}
+	if err := recorder.InsertTrades(context.Background(), records); err != nil {
+		t.Fatal(err)
+	}
+
+	code, payload := tapeRange(t, server, "seq_from=25&seq_to=40")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	if payload["served"] != "mixed" || payload["complete"] != true {
+		t.Fatalf("payload = %+v", payload)
+	}
+	trades, _ := payload["trades"].([]any)
+	if len(trades) != 16 {
+		t.Fatalf("gap-free range = %d trades, want 16", len(trades))
+	}
+	// The reassembled range must be contiguous across the ring floor at 33.
+	for i, item := range trades {
+		trade, _ := item.(map[string]any)
+		if want := float64(25 + i); trade["s"].(float64) != want {
+			t.Fatalf("trade %d sequence = %v, want %v", i, trade["s"], want)
+		}
+	}
+}
+
+func TestTapeRangeRejectsBadRequestsAndNonLiveModes(t *testing.T) {
+	server := New(config.Defaults(), liveStore(t, 100, 10), &stubFeed{})
+	for _, query := range []string{"seq_from=0&seq_to=5", "seq_from=9&seq_to=4", "seq_from=x&seq_to=4"} {
+		if code, _ := tapeRange(t, server, query); code != http.StatusBadRequest {
+			t.Fatalf("%q status = %d, want 400", query, code)
+		}
+	}
+
+	disabled := config.Defaults()
+	disabled.Rewind.Enabled = false
+	if code, _ := tapeRange(t, New(disabled, liveStore(t, 100, 10), &stubFeed{}), "seq_from=1&seq_to=5"); code != http.StatusConflict {
+		t.Fatalf("disabled rewind status = %d, want 409", code)
+	}
+
+	replayStore := liveStore(t, 100, 10)
+	replayStore.SetStatus(tape.FeedStatus{Mode: "replay", State: "replaying"})
+	if code, _ := tapeRange(t, New(config.Defaults(), replayStore, &stubFeed{}), "seq_from=1&seq_to=5"); code != http.StatusConflict {
+		t.Fatalf("replay status = %d, want 409", code)
+	}
+}
+
+func TestUIEventCoalescesAndOnlyAcceptsKnownKinds(t *testing.T) {
+	server := New(config.Defaults(), liveStore(t, 100, 4), &stubFeed{})
+	now := time.Date(2026, 7, 22, 13, 30, 0, 0, time.UTC)
+	server.now = func() time.Time { return now }
+
+	post := func(body string) int {
+		request := httptest.NewRequest(http.MethodPost, "/api/ui-event", bytes.NewBufferString(body))
+		response := httptest.NewRecorder()
+		server.handleUIEvent(response, request)
+		return response.Code
+	}
+	if code := post(`{"kind":"tick_size","symbol":"IREN","value":100}`); code != http.StatusOK {
+		t.Fatalf("first tick_size status = %d", code)
+	}
+	if code := post(`{"kind":"tick_size","symbol":"IREN","value":1000}`); code != http.StatusNoContent {
+		t.Fatalf("coalesced status = %d, want 204", code)
+	}
+	now = now.Add(time.Second)
+	if code := post(`{"kind":"tick_size","symbol":"IREN","value":1000}`); code != http.StatusOK {
+		t.Fatalf("status after the coalescing window = %d", code)
+	}
+	if code := post(`{"kind":"symbol","symbol":"IREN"}`); code != http.StatusBadRequest {
+		t.Fatalf("symbol kind status = %d, want 400", code)
+	}
+}
+
+func TestSnapshotAdvertisesRewindConfiguration(t *testing.T) {
+	cfg := config.Defaults()
+	server := New(cfg, liveStore(t, 100, 4), &stubFeed{})
+	server.ReserveRewindPane(true)
+	if !server.rewindPane {
+		t.Fatal("pane reservation was not applied")
+	}
+	disabled := config.Defaults()
+	disabled.Rewind.Enabled = false
+	off := New(disabled, liveStore(t, 100, 4), &stubFeed{})
+	off.ReserveRewindPane(true)
+	if off.rewindPane {
+		t.Fatal("a disabled rewind must never reserve the pane")
 	}
 }

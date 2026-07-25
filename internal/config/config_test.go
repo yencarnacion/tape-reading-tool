@@ -75,6 +75,44 @@ func TestReplayChartRightGapBars(t *testing.T) {
 	}
 }
 
+func TestRewindDefaultsAndBounds(t *testing.T) {
+	cfg := Defaults()
+	if !cfg.Rewind.Enabled || cfg.Rewind.BufferSeconds != 180 || cfg.Rewind.AutoReturnSeconds != 20 || cfg.Rewind.MaxPrintsPerSecond != 2000 {
+		t.Fatalf("rewind defaults = %+v", cfg.Rewind)
+	}
+	// 180s x 2000 prints/s x 82 bytes is the documented worst-case footprint.
+	if bytes := cfg.RewindBufferBytes(); bytes != 180*2000*82 {
+		t.Fatalf("rewind buffer bytes = %d", bytes)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("rewind defaults should be valid: %v", err)
+	}
+
+	for _, invalid := range []RewindConfig{
+		{Enabled: true, BufferSeconds: 4, AutoReturnSeconds: 20, MaxPrintsPerSecond: 2000},
+		{Enabled: true, BufferSeconds: 601, AutoReturnSeconds: 20, MaxPrintsPerSecond: 2000},
+		{Enabled: true, BufferSeconds: 180, AutoReturnSeconds: 2, MaxPrintsPerSecond: 2000},
+		{Enabled: true, BufferSeconds: 180, AutoReturnSeconds: 301, MaxPrintsPerSecond: 2000},
+		{Enabled: true, BufferSeconds: 180, AutoReturnSeconds: 20, MaxPrintsPerSecond: 99},
+		{Enabled: true, BufferSeconds: 180, AutoReturnSeconds: 20, MaxPrintsPerSecond: 20001},
+		// Individually in range, but together they would reserve about 492 MB.
+		{Enabled: true, BufferSeconds: 600, AutoReturnSeconds: 20, MaxPrintsPerSecond: 10000},
+	} {
+		cfg = Defaults()
+		cfg.Rewind = invalid
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("rewind %+v should be invalid", invalid)
+		}
+	}
+
+	// Disabling rewind must not require a valid buffer to be configured.
+	cfg = Defaults()
+	cfg.Rewind.Enabled = false
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("disabled rewind should validate: %v", err)
+	}
+}
+
 func TestValidateAudioGainRanges(t *testing.T) {
 	cfg := Defaults()
 	cfg.Audio.MasterVolume = 2

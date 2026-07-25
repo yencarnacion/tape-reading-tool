@@ -52,6 +52,7 @@ func run() error {
 	speedFlag := fs.Float64("speed", 0, "default replay speed")
 	chartFlag := fs.Bool("chart", false, "show the one-minute market chart in live mode")
 	xtraFlag := fs.Bool("xtra", false, "show prior-session, pre-market, RTH, and opening levels on the one-minute chart")
+	rewindFlag := fs.Bool("rewind", false, "reserve the Live Rewind pane in live mode without the one-minute chart")
 	dateFlag := fs.String("date", "", "render date in YYYY-MM-DD")
 	outputFlag := fs.String("output", "", "render MP4 output path")
 	warmupFlag := fs.String("warmup", "session", "render warmup: session or a duration such as 20m")
@@ -179,6 +180,18 @@ func run() error {
 	chartMode := mode == "live" || mode == "demo"
 	xtra := (chartMode || mode == "replay" || mode == "render") && *xtraFlag
 	appServer := server.New(cfg, store, source, chartMode && (*chartFlag || xtra), xtra)
+	appServer.AttachRecorder(database)
+	// Reserving the pane at startup keeps the live panes at a fixed size for the
+	// whole session, so entering a rewind never reflows them.
+	appServer.ReserveRewindPane(chartMode && *rewindFlag)
+	if chartMode && cfg.Rewind.Enabled {
+		log.Printf(
+			"live rewind enabled buffer=%ds auto_return=%ds capacity=%d events reserved=%.1fMB pane_reserved=%v",
+			cfg.Rewind.BufferSeconds, cfg.Rewind.AutoReturnSeconds,
+			cfg.Rewind.BufferSeconds*cfg.Rewind.MaxPrintsPerSecond,
+			float64(cfg.RewindBufferBytes())/(1<<20), *rewindFlag || *chartFlag || xtra,
+		)
+	}
 	if mode == "render" {
 		options := renderOptions{
 			date: *dateFlag, start: *startFlag, end: *endFlag, output: *outputFlag,
