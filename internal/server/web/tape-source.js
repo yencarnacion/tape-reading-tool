@@ -28,8 +28,8 @@
 
 import { lowerBound, upperBound, priceTickSize } from './tape-model.js';
 
-const RECEIPT = (trade) => Number(trade.r) || 0;
-const SEQUENCE = (trade) => Number(trade.s) || 0;
+const RECEIPT = (trade) => Number(trade?.r) || 0;
+const SEQUENCE = (trade) => Number(trade?.s) || 0;
 const EMPTY_TOTALS = { volume: 0, buyer: 0, seller: 0, prints: 0 };
 
 export function prefixFromTrade(trade) {

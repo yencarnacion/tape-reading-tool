@@ -58,7 +58,7 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     tapePool: [], dropped: 0, dirtyChart: true, dirtyDayContext: true, dirtyTape: true, dayMapCorner: 0,
     navSymbols: [], navIndex: -1, lastMetricUpdate: 0,
     prefixBase: { volume: 0, buyer: 0, seller: 0, prints: 0 }, midpoints: [],
-    serverClockUS: 0, serverClockAt: 0, replay: null, replayConfig: null,
+    serverClockUS: 0, serverClockAt: 0, replay: null, replayConfig: null, pendingReplayReset: false,
     minuteBars: [], dailyBars: [], marketChartView: 'minute', dailyHistorySymbol: '', dailyHistoryPending: false, dirtyDailyChart: true,
     replayChartEndUS: 0, replayChartKey: '', dirtyReplayChart: true, marketChartEnabled: false, xtraEnabled: false,
     rvolWarmup: { symbol: '', ready: false, pending: false, attempt: 0, token: 0, timer: null, controller: null },
@@ -308,22 +308,42 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
         state.dirtyDailyChart = true;
         if (state.marketChartView === 'daily') void loadDailyHistory();
       }
-      state.trades = Array.isArray(snapshot.trades) ? snapshot.trades : [];
-      prepareTradeHistory();
-      rebuildMinuteBars(state.trades);
-      observeReceiptClock(state.trades);
-      state.quote = snapshot.quote || {};
+      const snapshotTrades = Array.isArray(snapshot.trades) ? snapshot.trades : [];
+      // A seek increments the store generation and publishes an empty replay
+      // snapshot. Keep the last complete frame visible until the first batch
+      // from the new position arrives, then swap atomically in the trades
+      // handler. Painting this transient snapshot blanks every tape metric.
+      const deferReplayReset = String(snapshot.status?.mode || '').toLowerCase() === 'replay'
+        && !symbolChanged && snapshotTrades.length === 0 && state.trades.length > 0;
+      if (deferReplayReset) {
+        state.pendingReplayReset = true;
+      } else {
+        state.pendingReplayReset = false;
+        state.trades = snapshotTrades;
+        prepareTradeHistory();
+      }
+      // A replay seek clears the server store and emits an empty same-symbol
+      // snapshot before delivery resumes. The replay API rebuilds the minute
+      // chart through the seek position; do not let that snapshot race arrive
+      // afterward and erase the loaded history.
+      const preserveReplayChart = String(snapshot.status?.mode || '').toLowerCase() === 'replay'
+        && !symbolChanged && state.minuteBars.length > 0;
+      if (!preserveReplayChart) rebuildMinuteBars(state.trades);
+      if (!deferReplayReset) {
+        observeReceiptClock(state.trades);
+        state.quote = snapshot.quote || {};
+      }
       state.history = snapshot.history || [];
       state.status = snapshot.status || {};
       state.marketChartEnabled = state.status.mode === 'replay' || message.market_chart === true;
       state.xtraEnabled = message.xtra === true;
       state.rewindConfig = message.rewind || state.rewindConfig;
-      // Live Rewind is an IBKR-live feature; demo mode is for development. The
+      // Live Rewind is also useful while practicing a historical replay. The
       // pane slot is reserved from startup so entering a rewind never reflows.
       const feedMode = String(state.status.mode || '').toLowerCase();
       state.rewindPaneAvailable = Boolean(state.rewindConfig?.enabled)
-        && (feedMode === 'live' || feedMode === 'demo')
-        && (message.rewind_pane === true || message.market_chart === true);
+        && (feedMode === 'live' || feedMode === 'demo' || feedMode === 'replay')
+        && (feedMode === 'replay' || message.rewind_pane === true || message.market_chart === true);
       // A snapshot means the delivered sequence is starting over: on a symbol
       // switch, a reconnect, or a server restart. Rewind history cannot be
       // assumed to continue across any of those.
@@ -359,6 +379,15 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     }
     if (message.type === 'trades' && message.symbol === state.symbol) {
       const trades = Array.isArray(message.trades) ? message.trades : [];
+      if (state.pendingReplayReset && trades.length) {
+        state.pendingReplayReset = false;
+        state.trades = [];
+        state.bars = [];
+        prepareTradeHistory();
+        state.tickScale = null;
+        state.dirtyChart = true;
+        state.dirtyTape = true;
+      }
       if (message.quote) state.quote = message.quote;
       if (message.dropped) state.dropped += message.dropped;
       if (trades.length) {
@@ -378,6 +407,14 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
           syncServerClock(message.server_time_ms);
         }
         state.status = message.status;
+        if (message.status.mode === 'replay' && state.replay) {
+          state.replay = {
+            ...state.replay,
+            state: message.status.state,
+            message: message.status.message || state.replay.message
+          };
+          updateReplayControls(state.replay);
+        }
         setConnection(message.status);
         ensureRVOLWarmup();
       }
@@ -464,6 +501,11 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     let latest = 0;
     for (const trade of trades) latest = Math.max(latest, Number(trade.r) || 0);
     if (!latest) return;
+    if (String(state.status?.mode || '').toLowerCase() === 'replay') {
+      state.serverClockUS = latest;
+      state.serverClockAt = performance.now();
+      return;
+    }
     const estimated = serverNowUS(performance.now());
     if (!estimated || latest > estimated) {
       state.serverClockUS = latest;
@@ -518,9 +560,13 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     })).filter((bar) => bar.timeUS > 0 && bar.close > 0);
     state.minuteBars = loaded;
     state.replayChartEndUS = Number(chartEndUS) || 0;
-    // Preserve prints that arrived while the chart-history request was in flight.
-    for (const trade of state.trades) {
-      if ((Number(trade.t) * 1000 || 0) > state.replayChartEndUS) addTradeToMinuteBars(trade);
+    // Preserve prints that arrived while an ordinary chart-history request was
+    // in flight. During a replay rewind these are prints from the old future
+    // position, so merging them would leave candles visible past the new clock.
+    if (!state.pendingReplayReset) {
+      for (const trade of state.trades) {
+        if ((Number(trade.t) * 1000 || 0) > state.replayChartEndUS) addTradeToMinuteBars(trade);
+      }
     }
     state.dirtyReplayChart = true;
     state.dirtyDayContext = true;

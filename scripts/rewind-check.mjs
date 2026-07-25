@@ -15,6 +15,19 @@ const { RewindBuffer, createRewindSource, rewindBufferBytes } = await import('..
 
 const BASE_US = 1_784_726_400_000_000; // 2026-07-22 13:30:00Z, a fixed instant.
 
+// Replay seek deliberately publishes one empty stream snapshot before the new
+// range starts arriving. Every source accessor and rolling metric must remain
+// valid during that frame so the browser animation loop can continue.
+{
+  const empty = createStreamSource({ trades: [], midpoints: [], prefixBase: {} });
+  assert.equal(empty.firstSeq(), 0, 'empty stream first sequence');
+  assert.equal(empty.lastSeq(), 0, 'empty stream last sequence');
+  assert.equal(empty.firstReceivedUS(), 0, 'empty stream first receipt');
+  assert.equal(empty.lastReceivedUS(), 0, 'empty stream last receipt');
+  assert.equal(empty.oldestReceiptUS(), Infinity, 'empty stream receipt floor');
+  assert.doesNotThrow(() => model.computeHorizon(empty, 5, BASE_US), 'empty replay snapshot metrics');
+}
+
 // A deterministic synthetic tape with the shape that makes rewind worth having:
 // a quiet stretch, then a burst, with mixed classifications and sizes.
 function makeTape(count, { startSeq = 1, gapAt = -1, gapLength = 0, stepUS = 4000 } = {}) {

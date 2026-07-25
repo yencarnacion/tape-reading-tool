@@ -128,7 +128,7 @@ An alternate config or listen address can be supplied from the CLI:
 
 Live Rewind re-renders the last few seconds of tape in a second pane while the live tape keeps streaming, recording, and sounding. It exists for the moment a volume or delta spike was too fast to read: the same prints are re-drawn print by print, at a chosen speed, with every rolling metric recomputed for the rewound instant.
 
-It is available in IBKR live mode and in demo mode. Replay, render, and Massive modes do not use it.
+It is available in IBKR live mode, demo mode, and historical replay mode. Render and Massive streaming modes do not use it.
 
 ```bash
 ./go.sh live -rewind
@@ -202,6 +202,8 @@ Start replay mode against the local database:
 ```
 
 Open the browser and press `REPLAY`. Pick the provider/data source, start and end time, and speed, then press `PLAY`. `PAUSE` freezes the tape and all three receipt-time horizons. Enter any local date and minute in `Go to minute`, then press `GO` to clear the old tape and resume from that minute. `RESUME` continues from the exact stored event after the pause.
+
+During replay, `←` opens the same independent Live Rewind tick-chart pane used in demo mode and redraws the preceding five seconds at 0.25× while the primary replay keeps advancing. Hold `Shift` for 15 seconds or `Ctrl` for 30 seconds.
 
 On desktop, replay places the one-minute market chart beside the current tape-reading tool and keeps time and sales on the right. A prominent clock below the tick chart shows New York market time in live mode; in replay it follows the replay receipt timeline, freezes on pause, and jumps with `Go to minute`. The clock consumes space only from the tick-chart pane and is intentionally omitted from the small footer. Yellow is exact trade-weighted VWAP beginning at 09:30 ET, red is the 9-period simple moving average, blue is the 20-period simple moving average, and white is the 20-period Bollinger envelope at two population standard deviations. Volume is rendered in a dedicated pane below price. Compact screens stack the market chart above the tape tool.
 
