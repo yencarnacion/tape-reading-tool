@@ -155,6 +155,64 @@ func TestDeterministicRenderWarmsAndStepsWithoutWallClock(t *testing.T) {
 	}
 }
 
+// Live Rewind introduced a shared event source in the browser. Historical replay
+// is server-driven and reaches the browser as ordinary trade messages, so this
+// pins the exact stream the replay path emits, field by field.
+func TestHistoricalReplayEmitsAnUnchangedEventStream(t *testing.T) {
+	cfg := config.Defaults().Storage
+	cfg.Path = filepath.Join(t.TempDir(), "replay.db")
+	database, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	base := time.Date(2026, 7, 22, 13, 30, 0, 0, time.UTC).UnixMicro()
+	if err := database.InsertQuotes(ctx, []storage.QuoteRecord{
+		{Symbol: "IREN", EventUS: base, Bid: 41.99, Ask: 42.01, BidSize: 300, AskSize: 400, Source: "historical", Provider: "massive"},
+		{Symbol: "IREN", EventUS: base + 3e6, Bid: 42.00, Ask: 42.02, BidSize: 100, AskSize: 200, Source: "historical", Provider: "massive"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.InsertTrades(ctx, []storage.TradeRecord{
+		{Symbol: "IREN", EventUS: base + 1e6, MarketTimeUS: base + 1e6, Price: 42.01, Size: 100, Source: "historical", Provider: "massive"},
+		{Symbol: "IREN", EventUS: base + 2e6, MarketTimeUS: base + 2e6, Price: 41.99, Size: 250, Source: "historical", Provider: "massive"},
+		{Symbol: "IREN", EventUS: base + 4e6, MarketTimeUS: base + 4e6, Price: 42.01, Size: 75, Source: "historical", Provider: "massive"},
+		{Symbol: "IREN", EventUS: base + 5e6, MarketTimeUS: base + 5e6, Price: 42.03, Size: 1000, Source: "historical", Provider: "massive"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	store := tape.NewStore("IREN", 100, 4)
+	replay := NewReplay(database, store, "historical", "massive", 20)
+	if err := replay.Start(ReplayRequest{
+		Symbol: "IREN", Source: "historical", Provider: "massive",
+		StartUS: base, EndUS: base + 6e6, Speed: 20,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitReplayState(t, replay, "complete")
+
+	want := []tape.Trade{
+		{Seq: 1, ExchangeTimeMS: (base + 1e6) / 1000, ReceivedUS: base + 1e6, Price: 42.01, Size: 100, Class: tape.AtAsk, Side: 1, Bid: 41.99, Ask: 42.01},
+		{Seq: 2, ExchangeTimeMS: (base + 2e6) / 1000, ReceivedUS: base + 2e6, Price: 41.99, Size: 250, Class: tape.AtBid, Side: -1, Bid: 41.99, Ask: 42.01},
+		{Seq: 3, ExchangeTimeMS: (base + 4e6) / 1000, ReceivedUS: base + 4e6, Price: 42.01, Size: 75, Class: tape.Between, Side: 1, Bid: 42.00, Ask: 42.02},
+		{Seq: 4, ExchangeTimeMS: (base + 5e6) / 1000, ReceivedUS: base + 5e6, Price: 42.03, Size: 1000, Class: tape.AboveAsk, Side: 1, Bid: 42.00, Ask: 42.02},
+	}
+	got := store.Snapshot("IREN", 100).Trades
+	if len(got) != len(want) {
+		t.Fatalf("replayed %d trades, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("replayed trade %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	if quote := store.Quote("IREN"); quote.Bid != 42.00 || quote.Ask != 42.02 || quote.BidSize != 100 || quote.AskSize != 200 {
+		t.Fatalf("replayed quote = %+v", quote)
+	}
+}
+
 func TestResetSubscriptionsRejectsStaleRequestIDs(t *testing.T) {
 	f := NewIBKR(config.Defaults().IBKR, tape.NewStore("AAPL", 10, 2), nil)
 	f.reqSymbols[41] = "AAPL"

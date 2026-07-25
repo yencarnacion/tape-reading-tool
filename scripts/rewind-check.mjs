@@ -7,6 +7,7 @@
 //   node scripts/rewind-check.mjs
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 const model = await import('../internal/server/web/tape-model.js');
 const { createStreamSource } = await import('../internal/server/web/tape-source.js');
@@ -313,6 +314,67 @@ function fill(buffer, trades) {
     buffer.ask, buffer.prefixVolume, buffer.prefixBuyer, buffer.prefixSeller, buffer.side, buffer.klass]
     .reduce((total, column) => total + column.byteLength, 0);
   assert.equal(measured, buffer.bytes, `columns measure ${measured}B, documented ${buffer.bytes}B`);
+}
+
+// ------------------------------------------------- shared-model golden values
+// The stream source is what live mode and historical replay both read, so these
+// pinned values are what "replay output is unchanged" means on the browser side.
+// They were verified equal, comparison by comparison, against the pre-refactor
+// implementation of calculateHorizon, totalsBetween, addTradeToBars,
+// calculateCurrentCandleRVOL, and updatePriceScale on identical input.
+{
+  const trades = makeTape(2000);
+  const source = createStreamSource(liveState(trades));
+  const nowUS = trades[1800].r;
+  assert.deepStrictEqual(model.computeHorizon(source, 5, nowUS), {
+    volume: 1538551, buyer: 745171, seller: 793380, prints: 1599, delta: -48209,
+    deltaPercent: -3.1334027926276082, sharesRate: 307710.2, printsRate: 319.8,
+    midTicks: -58.99999999999963, relativePace: null, truncated: false
+  }, 'the 5 second horizon must not drift');
+  assert.deepStrictEqual(model.computeHorizon(source, 15, nowUS), {
+    volume: 1740973, buyer: 837741, seller: 903232, prints: 1801, delta: -65491,
+    deltaPercent: -3.7617470230727297, sharesRate: 116064.86666666667, printsRate: 120.06666666666666,
+    midTicks: -39.00000000000006, relativePace: null, truncated: true
+  }, 'the 15 second horizon must not drift');
+  assert.equal(model.computeTapeRate(source, nowUS), 425, 'the one-second tape rate must not drift');
+  assert.deepStrictEqual(
+    [1, 10, 100].map((tickSize) => model.aggregateTickBars(source, 1, trades[1800].s, tickSize).length),
+    [1801, 181, 19],
+    'tick-bar counts must not drift'
+  );
+  const lastBar = model.aggregateTickBars(source, 1, trades[1800].s, 10).at(-1);
+  assert.deepStrictEqual(lastBar, {
+    count: 1, open: 42.12, high: 42.12, low: 42.12, close: 42.12, volume: 10, delta: -10,
+    time: 1784726405000, received: 1784726405811000, className: 'below', firstSeq: 1801
+  }, 'the forming tick bar must not drift');
+  // The price-scale hysteresis the live and replay panes share.
+  const initial = model.updatePriceScale(null, 99, 101, 0);
+  const expanded = model.updatePriceScale(initial, 94, 101, 10);
+  const candidate = model.updatePriceScale(expanded, 99, 101, 20);
+  assert.equal(expanded.minimum, 94, 'expansion must be immediate');
+  assert.equal(model.updatePriceScale(candidate, 99, 101, 1000).minimum, 94, 'contraction must wait');
+  const direct = model.updatePriceScale(candidate, 99, 101, 2720);
+  const split = model.updatePriceScale(model.updatePriceScale(candidate, 99, 101, 1520), 99, 101, 2720);
+  assert.ok(Math.abs(direct.minimum - split.minimum) < 1e-9, 'contraction must not depend on frame rate');
+}
+
+// --------------------------------------------------------- rewind emits no audio
+// Structural, not behavioural: the rewind modules and the rewind section of
+// app.js must not be able to reach the audio path at all. The AudioWorklet is a
+// live-state signal; replayed prints must never enter it.
+{
+  const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
+  // Comments discuss the audio path deliberately; code must not touch it.
+  const code = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  for (const path of ['../internal/server/web/tape-rewind.js', '../internal/server/web/tape-model.js', '../internal/server/web/tape-source.js']) {
+    assert.ok(!/audio/i.test(code(read(path))), `${path} must not reference the audio path`);
+  }
+  const app = read('../internal/server/web/app.js');
+  const section = app.slice(app.indexOf('// ------------------------------------------------------------- Live Rewind'), app.indexOf('function animationLoop'));
+  assert.ok(section.length > 2000, 'the Live Rewind section was not found');
+  assert.ok(!/audio\s*\.\s*(push|setTapeRate|start|sync|setEnabled)/.test(section),
+    'the Live Rewind section must never call into the audio mixer');
+  assert.ok(/ears live, eyes rewound/i.test(section), 'the audio rationale must stay documented in the code');
 }
 
 // ------------------------------------------------------------- benchmarks
