@@ -169,24 +169,24 @@ func TestHistoricalReplayEmitsAnUnchangedEventStream(t *testing.T) {
 	ctx := context.Background()
 	base := time.Date(2026, 7, 22, 13, 30, 0, 0, time.UTC).UnixMicro()
 	if err := database.InsertQuotes(ctx, []storage.QuoteRecord{
-		{Symbol: "IREN", EventUS: base, Bid: 41.99, Ask: 42.01, BidSize: 300, AskSize: 400, Source: "historical", Provider: "massive"},
-		{Symbol: "IREN", EventUS: base + 3e6, Bid: 42.00, Ask: 42.02, BidSize: 100, AskSize: 200, Source: "historical", Provider: "massive"},
+		{Symbol: "IREN", EventUS: base, Bid: 41.99, Ask: 42.01, BidSize: 300, AskSize: 400, Source: "historical", Provider: "ibkr"},
+		{Symbol: "IREN", EventUS: base + 3e6, Bid: 42.00, Ask: 42.02, BidSize: 100, AskSize: 200, Source: "historical", Provider: "ibkr"},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.InsertTrades(ctx, []storage.TradeRecord{
-		{Symbol: "IREN", EventUS: base + 1e6, MarketTimeUS: base + 1e6, Price: 42.01, Size: 100, Source: "historical", Provider: "massive"},
-		{Symbol: "IREN", EventUS: base + 2e6, MarketTimeUS: base + 2e6, Price: 41.99, Size: 250, Source: "historical", Provider: "massive"},
-		{Symbol: "IREN", EventUS: base + 4e6, MarketTimeUS: base + 4e6, Price: 42.01, Size: 75, Source: "historical", Provider: "massive"},
-		{Symbol: "IREN", EventUS: base + 5e6, MarketTimeUS: base + 5e6, Price: 42.03, Size: 1000, Source: "historical", Provider: "massive"},
+		{Symbol: "IREN", EventUS: base + 1e6, MarketTimeUS: base + 1e6, Price: 42.01, Size: 100, Source: "historical", Provider: "ibkr"},
+		{Symbol: "IREN", EventUS: base + 2e6, MarketTimeUS: base + 2e6, Price: 41.99, Size: 250, Source: "historical", Provider: "ibkr"},
+		{Symbol: "IREN", EventUS: base + 4e6, MarketTimeUS: base + 4e6, Price: 42.01, Size: 75, Source: "historical", Provider: "ibkr"},
+		{Symbol: "IREN", EventUS: base + 5e6, MarketTimeUS: base + 5e6, Price: 42.03, Size: 1000, Source: "historical", Provider: "ibkr"},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	store := tape.NewStore("IREN", 100, 4)
-	replay := NewReplay(database, store, "historical", "massive", 20)
+	replay := NewReplay(database, store, "historical", "ibkr", 20)
 	if err := replay.Start(ReplayRequest{
-		Symbol: "IREN", Source: "historical", Provider: "massive",
+		Symbol: "IREN", Source: "historical", Provider: "ibkr",
 		StartUS: base, EndUS: base + 6e6, Speed: 20,
 	}); err != nil {
 		t.Fatal(err)

@@ -21,6 +21,7 @@ _Deterministic IREN replay for July 22, 2026, from 09:30–09:32 ET with the opt
 - Records live trades and quotes with server-side microsecond receipt times using an asynchronous, batched SQLite writer.
 - Downloads IBKR or Massive historical trades and quotes for backfill.
 - Replays a selected range at 0.25x–10x with pause, resume, stop, and go-to-minute seeking.
+- Re-renders the last 5, 15, or 30 seconds of live tape in a second pane, at 0.25x–2x and print by print, with every rolling metric recomputed for the rewound instant and no audio.
 - Adds a replay-only one-minute candlestick chart with 09:30 session VWAP, 9 SMA, 20 SMA, 20-period/2-deviation Bollinger bands, and volume in its own pane.
 
 The program is read-only. It does not place or manage orders.
@@ -111,7 +112,9 @@ Connect to the Massive live stocks feed instead:
 
 Both live modes continuously record trades and quotes into `data/tape.db`. Recording uses a large non-blocking queue, WAL mode, and batched commits so SQLite disk I/O does not run inside the feed callback. The terminal heartbeat reports dropped recording events if the queue is ever saturated.
 
-Schema version 2 intentionally has no migration path. Delete `data/tape.db` before starting this version if a database from an earlier version exists. The program reports an error and never silently deletes it.
+Recorded trades keep the IBKR `tickAttribLast` attributes (`pastLimit`, `unreported`) along with the reporting exchange and special-conditions strings from `tickByTickAllLast`, plus the browser-visible tape sequence. Whether a print was a sweep, an ISO, or derivatively priced changes how a spike reads and is not reconstructable afterwards.
+
+Schema version 3 intentionally has no migration path. Delete `data/tape.db` before starting this version if a database from an earlier version exists. The program reports an error and never silently deletes it.
 
 Then open [http://localhost:8097](http://localhost:8097). `Ctrl-C` shuts down the HTTP server and IBKR connection cleanly.
 
@@ -120,6 +123,53 @@ An alternate config or listen address can be supplied from the CLI:
 ```bash
 ./go.sh live -config config.yaml -addr :8098
 ```
+
+## Live Rewind
+
+Live Rewind re-renders the last few seconds of tape in a second pane while the live tape keeps streaming, recording, and sounding. It exists for the moment a volume or delta spike was too fast to read: the same prints are re-drawn print by print, at a chosen speed, with every rolling metric recomputed for the rewound instant.
+
+It is available in IBKR live mode and in demo mode. Replay, render, and Massive modes do not use it.
+
+```bash
+./go.sh live -rewind
+```
+
+`-rewind` reserves the pane beside the tape tool without enabling the one-minute chart. `./go.sh live -chart` reserves the same pane and shows the chart in it until a rewind starts. Reserving the pane at startup is deliberate: entering a rewind is a contents swap inside that pane's own rectangle, so the live tick chart, the live rolling horizons, and live time and sales never move, resize, or redraw because of a rewind. Compact screens keep the existing stacked arrangement.
+
+| Key | Action |
+|---|---|
+| `←` | jump back 5 seconds, from the current rewind position or from live |
+| `Shift`+`←` | jump back 15 seconds |
+| `Ctrl`+`←` | jump back 30 seconds |
+| `Space` | play or pause |
+| `,` / `.` | step one print backward or forward |
+| `Esc` | return to live immediately |
+
+The pane's own controls set playback speed from 0.25× to 2× and set its tick-bar granularity independently of the live pane. Re-aggregating the same twenty seconds at a finer granularity is the point: it is the one thing a screen recording cannot do.
+
+Shortcuts are inert while an input or select has focus, and `/` still focuses the ticker field. On macOS, `Ctrl`+`←` may be claimed by Mission Control's desktop switching; the pane's own controls cover the same actions.
+
+Rewind returns to live on `Esc`, after `rewind.auto_return_seconds` without interaction, the moment playback catches the live edge, and before any symbol change. While rewound, the pane carries a badge reading `REWIND −18.4s` and a dashed amber frame. Amber is reserved for that chrome and never colors a price, a size, or a delta: the existing palette already spends amber on seller pressure and on downward price movement, so the pane is identified by the frame, the recessed background, and the literal badge text rather than by hue alone.
+
+**The rewind pane produces no audio.** Live print cues and the tape-speed background continue unchanged throughout. The `AudioWorklet` is a live-state signal, and mixing replayed prints into it during a spike would corrupt the real-time read of the market. The intended ergonomic is ears live, eyes rewound.
+
+Rewind reads a browser-side ring of events that have already been delivered; it adds no work to the feed callback and nothing to the recorder. The ring is bounded by receipt time rather than by print count, because the server's count-bounded ring holds about 100 seconds at 500 prints/s but only 25 at the 2,000 prints/s a halt resume produces, which is exactly when a rewind is wanted.
+
+```yaml
+rewind:
+  enabled: true
+  buffer_seconds: 180
+  auto_return_seconds: 20
+  max_prints_per_second: 2000
+```
+
+`buffer_seconds` × `max_prints_per_second` sizes a fixed columnar ring of ten `Float64` columns plus a side and a classification byte, so the default reserves 180 × 2000 × 82 bytes, or 29.5 MB, once and never grows. A sustained rate above `max_prints_per_second` shortens the retained span instead of the configured duration; the pane then reports the span it actually holds, for example `REWIND BUFFER 96s`. `buffer_seconds` defaults to 180 rather than 120 so a 30-second rewind still has a full 60-second window and its own 60-second pace baseline behind it. Configuration that would reserve more than 64 MB is rejected at startup.
+
+A rolling window that reaches past the oldest retained event renders as `NO DATA` rather than as an understated volume.
+
+When a client falls behind the server ring the UI reports `LAGGED`, which would otherwise leave a hole in the rewind buffer during the spike worth rewinding into. `GET /api/tape/range?symbol=<sym>&seq_from=<n>&seq_to=<n>` fills it, addressed by the same sequence numbers the browser sees, and returns the range in the same shape as a WebSocket batch. The in-memory ring answers whatever it still holds under one bounded read and the recording answers the rest through a separate read-only connection, so a rewind never contends with the feed callback or the batched writer. Only the range actually being rewound into is requested. Demo mode keeps no recording, so a hole there cannot be filled; the pane says so rather than displaying an incomplete window.
+
+Symbol changes and tick-count changes are recorded as events on the same microsecond receipt timeline as the tape, so a recording can later be replayed with the view the trader was looking at.
 
 ## Historical backfill
 
@@ -214,6 +264,7 @@ Gateway farm-status messages are printed as `IBKR notice`; request and entitleme
 - Use `CONTROLS` to change visible bars, tape rows, pane visibility, size visibility, and every sound parameter. `Master` controls the existing print cues; `Tape speed sound` has its own mute and volume controls; `Small prints` sets an audible floor for isolated, low-size trades.
 - Press `SOUND START` once to satisfy the browser's audio gesture requirement. The same control then mutes/unmutes the existing print cues; the tape-speed background remains independent in `CONTROLS`.
 - Press `/` while outside an input to focus the ticker field.
+- Press `←` to rewind the last five seconds into their own pane. See [Live Rewind](#live-rewind).
 
 Browser settings are saved in local storage, so changes remain available on the next run without editing files.
 
@@ -235,6 +286,8 @@ At-bid and below-bid size is negative delta. At-ask and above-ask size is positi
 
 Live feed callbacks do constant, bounded work: quote lookup, classification, one ring write, and a non-blocking enqueue to the recorder. Each symbol uses a fixed-size ring rather than an ever-growing slice. WebSocket clients pull from sequence numbers in batches, so a slow client cannot block the feed callback or allocate a queue per print. If a client falls behind the ring, the UI reports the overwritten count as `LAGGED`.
 
+Live Rewind is a read-only view over events already delivered to the browser. It adds nothing to the feed callback, the recorder, or the audio path, and it keeps its own dirty flag so a rewound pane never forces a live redraw. Its aggregate state is recomputed from the buffer rather than cached: at 30,000 buffered events a full recompute measures about 0.13 ms and a seek with a full pane re-aggregation about 0.03 ms, against budgets of 8 ms and 100 ms, so no state keyframes are kept.
+
 The canvas redraws only when data or dimensions change. Time and sales reuses a fixed DOM row pool. Rolling horizon totals use cumulative counters and binary searches rather than rescanning the trade history. The three fixed rows refresh every 100 ms, while WebSocket delivery retains the configurable 16 ms default batch. Old browser history is pruned in chunks to avoid repeated front-of-array work at the open. The audio worklet receives every delivered print and performs synthesis off the main thread with a fixed voice pool. Above 60 trades per second it progressively thins, shortens, and lowers only small-print cues; large prints always bypass that limiter and take priority over small voices.
 
 The optional tape-speed background follows the same rolling one-second receipt-time rate shown in the `TAPE` metric. It maps speed to both a rising low-frequency pitch and a faster amplitude pulse: approximately 126 Hz / 3.8 Hz at 30 prints/s, 179 Hz / 6.6 Hz at 123 prints/s, 263 Hz / 9.6 Hz at 300 prints/s, and 360 Hz / 12 Hz at 500 prints/s. It runs on a separate gain path and automatically ducks beneath the existing print cues.
@@ -246,13 +299,18 @@ go test ./...
 go test -race ./...
 go build -buildvcs=false ./cmd/tape-reading-tool
 node scripts/audio-worklet-check.mjs
+node scripts/rewind-check.mjs
 ```
+
+The rewind check needs no browser and no server. It asserts eviction by receipt time, sequence-gap detection, gap-free reassembly after backfill, the behavior at the buffer floor, and that aggregate state recomputed at a sequence through the rewind buffer equals the state the live path held at that sequence. It also reports seek and recompute timings against their budgets.
 
 With demo mode running, the dependency-free browser check drives local Chrome at the two target widths and saves screenshots under `/tmp`:
 
 ```bash
 node scripts/browser-check.mjs
 ```
+
+Started as `./go.sh demo -rewind`, the same check also drives Live Rewind: it compares the live panes' rectangles before, during, and after a rewind, counts live canvas paints in both states, and exercises independent granularity, print stepping, playback, and the return to live.
 
 ## Notes
 
