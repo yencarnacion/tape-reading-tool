@@ -96,6 +96,28 @@ export function appendTickBar(bars, event, tickSize) {
   return bar;
 }
 
+// Where a rewound pane must start aggregating so its bars coincide with the live
+// pane's. Count-based bars depend on where aggregation started, so the window has
+// to be anchored on an actual live bar boundary: an offset back from the target
+// lands mid-bar, and boundaries are not arithmetic in sequence space once a
+// LAGGED gap has been recorded. When the pane is re-aggregating at a different
+// granularity there is no live phase to match, and the plain offset is used.
+export function rewindWindowStart({ liveBars, liveTickSize, tickSize, targetSeq, floorSeq, visibleBars }) {
+  const span = Math.max(1, visibleBars * tickSize);
+  const desired = Math.max(floorSeq, targetSeq - span + 1);
+  if (!Array.isArray(liveBars) || !liveBars.length || liveTickSize !== tickSize) return desired;
+  const boundary = (bar) => Number(bar.firstSeq) || 0;
+  const index = upperBound(liveBars, desired, boundary) - 1;
+  let anchor = boundary(liveBars[index >= 0 ? index : 0]);
+  if (anchor < floorSeq) {
+    // The anchoring boundary has been evicted from the buffer. Take the oldest
+    // boundary the buffer can still serve whole rather than starting mid-bar.
+    const retained = liveBars.find((bar) => boundary(bar) >= floorSeq);
+    anchor = retained ? boundary(retained) : desired;
+  }
+  return Math.max(floorSeq, Math.min(anchor, targetSeq));
+}
+
 export function aggregateTickBars(source, fromSeq, toSeq, tickSize, maxBars = 0) {
   const bars = [];
   source.each(fromSeq, toSeq, (event) => {

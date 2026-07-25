@@ -264,6 +264,94 @@ func TestTapeRangeFillsTheLaggedHoleFromStorage(t *testing.T) {
 	}
 }
 
+func TestTapeRangeNeverReportsAnUnservedRangeAsComplete(t *testing.T) {
+	server := New(config.Defaults(), liveStore(t, 1000, 40), &stubFeed{})
+
+	// Entirely above the newest sequence: those prints have not happened yet.
+	code, payload := tapeRange(t, server, "seq_from=999999&seq_to=1000000")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	trades, _ := payload["trades"].([]any)
+	if len(trades) != 0 {
+		t.Fatalf("expected no trades, got %d", len(trades))
+	}
+	if payload["complete"] != false {
+		t.Fatalf("an unserved future range must not be complete: %+v", payload)
+	}
+	if payload["seq_to"].(float64) != 0 {
+		t.Fatalf("seq_to must report what was served, not what was asked for: %+v", payload)
+	}
+	// The caller must not be told to advance past a range it never received.
+	if payload["next_seq_from"].(float64) != 999999 {
+		t.Fatalf("next_seq_from = %v, want the unchanged start", payload["next_seq_from"])
+	}
+
+	// Straddling the newest sequence: the resident part is served, the rest is not.
+	code, payload = tapeRange(t, server, "seq_from=38&seq_to=90")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	trades, _ = payload["trades"].([]any)
+	if len(trades) != 3 || payload["complete"] != false || payload["seq_to"].(float64) != 40 {
+		t.Fatalf("straddling range = %+v", payload)
+	}
+	if payload["next_seq_from"].(float64) != 41 {
+		t.Fatalf("next_seq_from = %v, want 41", payload["next_seq_from"])
+	}
+
+	// Below the ring floor with no recording attached: a hole, not a completion.
+	small := liveStore(t, 8, 40)
+	code, payload = tapeRange(t, New(config.Defaults(), small, &stubFeed{}), "seq_from=1&seq_to=10")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	trades, _ = payload["trades"].([]any)
+	if len(trades) != 0 || payload["complete"] != false || payload["seq_to"].(float64) != 0 {
+		t.Fatalf("evicted range = %+v", payload)
+	}
+}
+
+func TestTapeRangeReportsAPartiallyPersistedRangeAsIncomplete(t *testing.T) {
+	// The recording holds only part of what the ring has overwritten, so the
+	// reassembled range has a hole in the middle and must say so.
+	server := New(config.Defaults(), liveStore(t, 8, 40), &stubFeed{})
+	cfg := config.Defaults().Storage
+	cfg.Path = filepath.Join(t.TempDir(), "tape.db")
+	recorder, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recorder.Close()
+	server.AttachRecorder(recorder)
+	server.processStartUS = 0
+
+	base := time.Date(2026, 7, 22, 13, 30, 0, 0, time.UTC).UnixMicro()
+	records := make([]storage.TradeRecord, 0, 4)
+	// Sequences 25 and 26 only; 27 through 32 were never persisted.
+	for _, seq := range []uint64{25, 26} {
+		records = append(records, storage.TradeRecord{
+			Symbol: "IREN", EventUS: base + int64(seq), ReceivedUS: base + int64(seq), RingSeq: seq,
+			Price: 10, Size: 100, ChartEligible: true, Source: "live", Provider: "ibkr",
+		})
+	}
+	if err := recorder.InsertTrades(context.Background(), records); err != nil {
+		t.Fatal(err)
+	}
+
+	code, payload := tapeRange(t, server, "seq_from=25&seq_to=40")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	if payload["complete"] != false || payload["contiguous"] != false {
+		t.Fatalf("a range with an unfilled hole must be reported: %+v", payload)
+	}
+	trades, _ := payload["trades"].([]any)
+	if len(trades) != 10 {
+		t.Fatalf("served %d trades, want 2 from storage plus 8 from the ring", len(trades))
+	}
+}
+
 func TestTapeRangeRejectsBadRequestsAndNonLiveModes(t *testing.T) {
 	server := New(config.Defaults(), liveStore(t, 100, 10), &stubFeed{})
 	for _, query := range []string{"seq_from=0&seq_to=5", "seq_from=9&seq_to=4", "seq_from=x&seq_to=4"} {

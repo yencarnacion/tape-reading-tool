@@ -1,6 +1,6 @@
 import {
   HORIZONS, BALANCE_DEADBAND_PERCENT, aggregateTickBars, appendMinuteBar, appendTickBar,
-  calculateCandleRVOL, computeHorizon, computeTapeRate, lowerBound, updatePriceScale
+  calculateCandleRVOL, computeHorizon, computeTapeRate, lowerBound, rewindWindowStart, updatePriceScale
 } from './tape-model.js';
 import { createStreamSource, prefixFromTrade } from './tape-source.js';
 import { RewindBuffer, createRewindSource } from './tape-rewind.js';
@@ -327,8 +327,12 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
       // switch, a reconnect, or a server restart. Rewind history cannot be
       // assumed to continue across any of those.
       returnToLive();
-      discardRewindBuffer();
-      feedRewindBuffer(state.trades);
+      if (rewindEnabled()) {
+        discardRewindBuffer();
+        feedRewindBuffer(state.trades);
+      } else {
+        releaseRewindBuffer();
+      }
       state.replayConfig = message.replay_config || state.replayConfig;
       if (state.replayConfig) {
         elements.replayProvider.value = state.replayConfig.provider || 'all';
@@ -1497,13 +1501,12 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     elements.relativeVolume.hidden = !relativeVolumeMode;
     // The rewind pane lives in this slot, so the slot is present for the whole
     // session rather than appearing when a rewind starts.
-    const marketChartMode = replayMode || state.marketChartEnabled || state.rewindPaneAvailable;
-    elements.replayMarketPanel.hidden = !marketChartMode;
-    applyRewindSlot();
+    elements.replayMarketPanel.hidden = !paneSlotReserved();
     elements.replayMarketPanel.setAttribute('aria-label', `${replayMode ? 'Replay' : 'Live'} one-minute price and volume chart`);
     elements.replayChartEmpty.textContent = replayMode ? 'START REPLAY TO BUILD THE CHART' : 'WAITING FOR LIVE MINUTE BARS';
-    elements.workspace.classList.toggle('replay-mode', replayMode);
-    elements.workspace.classList.toggle('market-chart-mode', marketChartMode);
+    // After the chart's own empty state, so a rewind-only slot keeps its hint.
+    applyRewindSlot();
+    applyWorkspaceClasses();
     state.dirtyReplayChart = true;
     if (replayMode) updateReplayControls({ ...(state.replay || {}), state: String(status?.state || '').toLowerCase(), message: status?.message });
   }
@@ -1558,15 +1561,33 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     elements.historyForward.disabled = state.navIndex < 0 || state.navIndex >= state.navSymbols.length - 1;
   }
 
+  // True whenever the pane beside the tape tool is present: for replay, for the
+  // live market chart, or because Live Rewind reserved it at startup.
+  function paneSlotReserved() {
+    return state.status?.mode === 'replay' || state.marketChartEnabled || state.rewindPaneAvailable;
+  }
+
+  // Every workspace class is toggled here rather than rebuilt from scratch, so no
+  // caller can silently drop one. Rebuilding the list is what previously
+  // collapsed the reserved rewind pane on any settings change.
+  function applyWorkspaceClasses() {
+    const replayMode = state.status?.mode === 'replay';
+    const showChart = state.settings ? state.settings.showChart : true;
+    const showTape = state.settings ? state.settings.showTape : true;
+    const workspace = elements.workspace;
+    workspace.classList.toggle('replay-mode', replayMode);
+    workspace.classList.toggle('market-chart-mode', paneSlotReserved());
+    workspace.classList.toggle('both-hidden', !showChart && !showTape);
+    workspace.classList.toggle('chart-hidden', !showChart && showTape);
+    workspace.classList.toggle('tape-hidden', showChart && !showTape);
+  }
+
   function applyLayout() {
     if (!state.settings) return;
-    const { showChart, showTape, showSize } = state.settings;
-    elements.workspace.className = 'workspace';
-    if (state.status?.mode === 'replay') elements.workspace.classList.add('replay-mode');
-    if (state.status?.mode === 'replay' || state.marketChartEnabled) elements.workspace.classList.add('market-chart-mode');
-    if (!showChart && !showTape) elements.workspace.classList.add('both-hidden');
-    else if (!showChart) elements.workspace.classList.add('chart-hidden');
-    else if (!showTape) elements.workspace.classList.add('tape-hidden');
+    const { showSize } = state.settings;
+    applyWorkspaceClasses();
+    elements.replayMarketPanel.hidden = !paneSlotReserved();
+    applyRewindSlot();
     elements.tapePanel.classList.toggle('hide-size', !showSize);
     ensureTapePool();
     state.dirtyChart = true;
@@ -2019,8 +2040,11 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     return Boolean(state.rewindConfig?.enabled) && state.rewindPaneAvailable;
   }
 
+  // Nothing is reserved until the pane exists to show it. Without this gate a
+  // plain live session with no rewind pane still reserved the whole buffer and
+  // mirrored every print for a feature the trader cannot reach.
   function ensureRewindBuffer() {
-    if (state.rewind.buffer || !state.rewindConfig?.enabled) return state.rewind.buffer;
+    if (state.rewind.buffer || !rewindEnabled()) return state.rewind.buffer;
     state.rewind.buffer = new RewindBuffer({
       bufferSeconds: Number(state.rewindConfig.buffer_seconds) || 180,
       maxPrintsPerSecond: Number(state.rewindConfig.max_prints_per_second) || 2000
@@ -2045,8 +2069,18 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     for (const trade of trades) buffer.push(trade);
   }
 
+  // Drops the retained events but keeps the columns, for a symbol switch or a
+  // reconnect where rewind stays available.
   function discardRewindBuffer() {
     state.rewind.buffer?.reset();
+    state.rewind.notice = '';
+  }
+
+  // Releases the columns themselves when rewind is not available at all.
+  function releaseRewindBuffer() {
+    state.rewind.buffer = null;
+    state.rewind.source = null;
+    state.rewind.bars = [];
     state.rewind.notice = '';
   }
 
@@ -2063,7 +2097,6 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
       rewind.tickSize = Number(elements.rewindTicks.value) || state.settings?.tickSize || 1;
       rewind.scale = null;
       elements.rewindPanel.hidden = false;
-      elements.workspace.classList.add('rewind-active');
     }
     rewind.playing = false;
     markRewindInteraction();
@@ -2134,7 +2167,6 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     elements.rewindPanel.hidden = true;
     elements.rewindPlay.textContent = 'PLAY';
     elements.rewindPlay.classList.remove('active');
-    elements.workspace.classList.remove('rewind-active');
     elements.rewindNotice.hidden = true;
     if (reason) elements.rewindBadge.textContent = 'LIVE';
     updateRewindIdleHint();
@@ -2160,11 +2192,14 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     if (!rewind.active || !rewind.source || !rewind.targetSeq) return;
     const source = rewind.source;
     const nowUS = rewind.targetUS;
-    // Bars are anchored on a live bar boundary at or before the window, so the
-    // pane reproduces the live bar phase whenever the tick sizes agree.
-    const visibleBars = state.settings?.visibleBars || 360;
-    const span = Math.max(1, visibleBars * rewind.tickSize);
-    const fromSeq = Math.max(source.firstSeq(), rewind.targetSeq - span + 1);
+    // Anchored on a real live bar boundary, so the pane reproduces the live bar
+    // phase whenever the tick sizes agree. An offset back from the target would
+    // start mid-bar and shift every bar in the pane against live.
+    const fromSeq = rewindWindowStart({
+      liveBars: state.bars, liveTickSize: state.settings?.tickSize || 1, tickSize: rewind.tickSize,
+      targetSeq: rewind.targetSeq, floorSeq: source.firstSeq(),
+      visibleBars: state.settings?.visibleBars || 360
+    });
     rewind.bars = aggregateTickBars(source, fromSeq, rewind.targetSeq, rewind.tickSize);
     drawTickChart(rewindChartTarget);
 
@@ -2331,6 +2366,11 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
         available: rewindEnabled(), active: rewind.active, playing: rewind.playing,
         targetSeq: rewind.targetSeq, targetUS: rewind.targetUS, tickSize: rewind.tickSize,
         speed: rewind.speed, bars: rewind.bars.length, notice: rewind.notice,
+        // The pane's first bar must start on one of the live pane's own bar
+        // boundaries, otherwise every bar shown is shifted against live.
+        firstBarSeq: rewind.bars[0]?.firstSeq || 0,
+        phaseAnchored: rewind.bars.length > 0 && state.bars.some((bar) => bar.firstSeq === rewind.bars[0].firstSeq),
+        liveTickSize: state.settings?.tickSize || 0,
         buffered: rewind.buffer?.count || 0, retainedSeconds: rewind.buffer?.retainedSeconds() || 0,
         bufferBytes: rewind.buffer?.bytes || 0, gaps: rewind.buffer?.gapList.length || 0,
         behindSeconds: rewind.active ? (rewind.source.lastReceivedUS() - rewind.targetUS) / 1e6 : 0

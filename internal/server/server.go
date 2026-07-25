@@ -442,20 +442,32 @@ func (s *Server) handleTapeRange(w http.ResponseWriter, r *http.Request) {
 	if trades == nil {
 		trades = []tape.Trade{}
 	}
-	lastSeq := seqTo
-	if count := len(trades); count > 0 {
-		lastSeq = trades[count-1].Seq
+	// Completeness describes contiguous events actually served, judged against
+	// what the client asked for rather than against the batch-bounded window this
+	// response could cover. Serving nothing is never complete: a range above the
+	// newest sequence has not happened yet, and one below the ring floor that
+	// storage could not answer is a hole the caller must be told about.
+	var lastSeq uint64
+	contiguous := true
+	for i, trade := range trades {
+		if i > 0 && trade.Seq != trades[i-1].Seq+1 {
+			contiguous = false
+			break
+		}
+		lastSeq = trade.Seq
 	}
-	// Completeness is judged against what the client asked for, not against the
-	// batch-bounded window this response was able to cover.
-	complete := !more && lastSeq >= requestedTo
+	complete := len(trades) > 0 && contiguous && !more && trades[0].Seq == seqFrom && lastSeq >= requestedTo
 	payload := map[string]any{
 		"type": "trades", "symbol": symbol, "trades": trades, "quote": quote,
 		"seq_from": seqFrom, "seq_to": lastSeq, "ring_oldest": oldest, "ring_newest": newest,
-		"served": served, "complete": complete,
+		"served": served, "complete": complete, "contiguous": contiguous,
 	}
 	if !complete {
-		payload["next_seq_from"] = lastSeq + 1
+		next := seqFrom
+		if lastSeq >= seqFrom && contiguous {
+			next = lastSeq + 1
+		}
+		payload["next_seq_from"] = next
 	}
 	writeJSON(w, http.StatusOK, payload)
 }

@@ -132,12 +132,38 @@ try {
           tape: document.querySelector('#tapePanel').getBoundingClientRect().toJSON()
         });
         const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        // The rolling panel is positioned by the live pane's draw, so a viewport
+        // override leaves it at its previous geometry until the next frame. Wait
+        // for two agreeing samples, or the baseline races that first redraw.
+        const settle = async () => {
+          let previous = JSON.stringify(rects());
+          for (let attempt = 0; attempt < 40; attempt++) {
+            await sleep(120);
+            const current = JSON.stringify(rects());
+            if (current === previous) return;
+            previous = current;
+          }
+        };
+        await settle();
         // Count live-canvas paints to compare live-only against rewound.
         const context = document.querySelector('#chartCanvas').getContext('2d');
         let paints = 0;
         const original = context.fillRect.bind(context);
         context.fillRect = (...args) => { paints++; return original(...args); };
         const before = rects();
+        const slotBefore = document.querySelector('#replayMarketPanel').getBoundingClientRect().width;
+        // A settings change re-applies the workspace layout. The reserved pane has
+        // to survive it: rebuilding the class list used to drop the two-column
+        // grid, collapsing the slot and letting the live chart expand into it.
+        const volume = document.querySelector('#tapeRateVolume');
+        const originalVolume = volume.value;
+        volume.value = '0.21';
+        volume.dispatchEvent(new Event('input', { bubbles: true }));
+        await sleep(400);
+        const afterSettingsChange = { ...rects(), slot: document.querySelector('#replayMarketPanel').getBoundingClientRect().width, workspace: document.querySelector('#workspace').className };
+        volume.value = originalVolume;
+        volume.dispatchEvent(new Event('input', { bubbles: true }));
+        await sleep(300);
         paints = 0; await sleep(1500); const liveOnlyPaints = paints;
         const retainedBefore = api.state().retainedSeconds;
         await api.enter(5);
@@ -145,6 +171,19 @@ try {
         const during = rects();
         const rewound = api.state();
         const fine = rewound.bars;
+        // With the pane and live on the same tick size, the pane's bars must sit
+        // on live bar boundaries rather than an offset back from the target.
+        document.querySelector('#tickSelect').value = '10';
+        document.querySelector('#tickSelect').dispatchEvent(new Event('change'));
+        document.querySelector('#rewindTicks').value = '10';
+        document.querySelector('#rewindTicks').dispatchEvent(new Event('change'));
+        await sleep(700);
+        const matched = api.state();
+        document.querySelector('#tickSelect').value = '1';
+        document.querySelector('#tickSelect').dispatchEvent(new Event('change'));
+        document.querySelector('#rewindTicks').value = '1';
+        document.querySelector('#rewindTicks').dispatchEvent(new Event('change'));
+        await sleep(500);
         document.querySelector('#rewindTicks').value = '100';
         document.querySelector('#rewindTicks').dispatchEvent(new Event('change'));
         await sleep(400);
@@ -162,7 +201,8 @@ try {
         api.exit();
         await sleep(300);
         return {
-          before, during, after: rects(), covered,
+          before, during, after: rects(), covered, slotBefore, afterSettingsChange,
+          matchedTick: { live: matched.liveTickSize, pane: matched.tickSize, firstBarSeq: matched.firstBarSeq, phaseAnchored: matched.phaseAnchored, bars: matched.bars },
           paneHiddenAfterExit: document.querySelector('#rewindPanel').hidden,
           activeAfterExit: api.state().active,
           badge, rewindRows, fineBars: fine, coarseBars: coarse.bars, retainedBefore,
@@ -179,10 +219,17 @@ try {
     for (const pane of ['chart', 'rolling', 'tape']) {
       for (const edge of ['x', 'y', 'width', 'height']) {
         if (Math.abs(rewind.before[pane][edge] - rewind.during[pane][edge]) > 0.01 ||
-            Math.abs(rewind.before[pane][edge] - rewind.after[pane][edge]) > 0.01) {
-          throw new Error(`rewind moved the live ${pane} pane: ${JSON.stringify(rewind)}`);
+            Math.abs(rewind.before[pane][edge] - rewind.after[pane][edge]) > 0.01 ||
+            Math.abs(rewind.before[pane][edge] - rewind.afterSettingsChange[pane][edge]) > 0.01) {
+          throw new Error(`the live ${pane} pane moved: ${JSON.stringify(rewind)}`);
         }
       }
+    }
+    // The reserved slot must keep its width through a settings change, and the
+    // workspace must keep the two-column layout class that provides it.
+    if (Math.abs(rewind.slotBefore - rewind.afterSettingsChange.slot) > 0.01 ||
+        !/market-chart-mode/.test(rewind.afterSettingsChange.workspace)) {
+      throw new Error(`a settings change collapsed the reserved rewind pane: ${JSON.stringify(rewind)}`);
     }
     if (rewind.covered.left < rewind.before.chart.right - 0.01 === false) {
       throw new Error(`the rewind pane overlaps the live tick chart: ${JSON.stringify(rewind)}`);
@@ -194,6 +241,12 @@ try {
     if (rewind.rewindRows !== 3) throw new Error(`rewind rolling rows = ${rewind.rewindRows}`);
     if (rewind.frameStyle !== 'dashed' || rewind.frameColor !== 'rgb(255, 192, 46)') {
       throw new Error(`rewind chrome is not the reserved dashed amber: ${rewind.frameStyle} ${rewind.frameColor}`);
+    }
+    // Bar phase: at a matching tick size the pane must aggregate from a live
+    // boundary, so its bars are the bars live showed at that sequence.
+    const matched = rewind.matchedTick;
+    if (matched.live !== 10 || matched.pane !== 10 || !matched.bars || !matched.phaseAnchored) {
+      throw new Error(`rewound bars are not anchored on a live bar boundary: ${JSON.stringify(rewind)}`);
     }
     // Independent granularity: the same window, re-aggregated more coarsely.
     if (rewind.coarseTick !== 100 || rewind.liveTick !== '1' || rewind.coarseBars >= rewind.fineBars) {
@@ -212,7 +265,15 @@ try {
       throw new Error(`rewind forced extra live redraws: ${rewind.liveOnlyPaints} -> ${rewind.rewoundPaints}`);
     }
   } else {
-    console.error('rewind check: skipped, the rewind pane is not reserved in this mode');
+    // Nothing may be reserved for a feature this session cannot reach.
+    const idle = (await command('Runtime.evaluate', {
+      expression: `JSON.stringify(window.__tapeReadingRewind.state())`, returnByValue: true
+    })).result.value;
+    const state = JSON.parse(idle);
+    if (state.bufferBytes !== 0 || state.buffered !== 0) {
+      throw new Error(`the rewind buffer was allocated without a pane: ${idle}`);
+    }
+    console.error(`rewind check: skipped, no pane reserved and no buffer allocated (${idle})`);
   }
 
   for (const width of [384, 634, 902, 1372]) {

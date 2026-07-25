@@ -260,6 +260,73 @@ function fill(buffer, trades) {
   );
 }
 
+// --------------------------------------------------- rewind bar phase
+// A rewound pane must show the bars the live pane showed at that sequence, not a
+// differently-phased re-aggregation of the same prints. Live boundaries depend on
+// where live aggregation started, which is the first delivered sequence and is
+// not generally congruent to 1 modulo the tick size.
+{
+  const tickSize = 10;
+  const visibleBars = 2;
+  // A snapshot that begins at sequence 3, so live boundaries are 3, 13, 23, ...
+  const trades = makeTape(60, { startSeq: 3 });
+  const source = createStreamSource(liveState(trades));
+  const liveBars = model.aggregateTickBars(source, 0, trades.at(-1).s, tickSize);
+  assert.deepEqual(liveBars.slice(0, 3).map((bar) => bar.firstSeq), [3, 13, 23], 'live boundaries');
+
+  const targetSeq = 25;
+  const floorSeq = source.firstSeq();
+  const start = model.rewindWindowStart({ liveBars, liveTickSize: tickSize, tickSize, targetSeq, floorSeq, visibleBars });
+  const boundaries = liveBars.map((bar) => bar.firstSeq);
+  assert.ok(boundaries.includes(start), `window start ${start} must be a live bar boundary`);
+  assert.equal(start, 3, 'the window rounds down to the enclosing live boundary');
+
+  // The bug this replaces: a plain offset back from the target starts mid-bar and
+  // every bar in the pane is then shifted against live.
+  const unanchored = Math.max(floorSeq, targetSeq - visibleBars * tickSize + 1);
+  assert.equal(unanchored, 6, 'the unanchored formula lands mid-bar');
+  assert.ok(!boundaries.includes(unanchored), 'the unanchored start is not a live boundary');
+  assert.deepEqual(
+    model.aggregateTickBars(source, unanchored, targetSeq, tickSize).map((bar) => bar.firstSeq),
+    [6, 16],
+    'the unanchored window produces shifted bars'
+  );
+
+  // Anchored, every rewound bar is identical to the live bar covering the same
+  // sequences, including the one still forming at the target. The window is a
+  // superset of the requested bars; the renderer keeps the trailing visibleBars.
+  const rewound = model.aggregateTickBars(source, start, targetSeq, tickSize);
+  const live = liveBars.filter((bar) => bar.firstSeq >= start && bar.firstSeq <= targetSeq);
+  assert.equal(rewound.length, live.length, 'bar count at the rewound instant');
+  assert.ok(rewound.length >= visibleBars, 'the window must cover at least the visible bars');
+  for (let index = 0; index < rewound.length - 1; index++) {
+    assert.deepStrictEqual(rewound[index], live[index], `completed bar ${index} must match live exactly`);
+  }
+  const formingLive = model.aggregateTickBars(source, live.at(-1).firstSeq, targetSeq, tickSize).at(-1);
+  assert.deepStrictEqual(rewound.at(-1), formingLive, 'the forming bar must match what live showed at that sequence');
+  assert.equal(rewound.at(-1).firstSeq, 23, 'the forming bar starts on the live boundary');
+  assert.equal(rewound.at(-1).count, targetSeq - 23 + 1, 'the forming bar holds only prints up to the target');
+
+  // A boundary evicted from the buffer must not produce a partial leading bar.
+  const raisedFloor = 15;
+  assert.equal(
+    model.rewindWindowStart({ liveBars, liveTickSize: tickSize, tickSize, targetSeq, floorSeq: raisedFloor, visibleBars }),
+    23,
+    'a boundary below the buffer floor must be skipped forward, not sliced'
+  );
+  // A different granularity has no live phase to match.
+  assert.equal(
+    model.rewindWindowStart({ liveBars, liveTickSize: 1, tickSize, targetSeq, floorSeq, visibleBars }),
+    6,
+    'a re-aggregation at another granularity uses the plain window'
+  );
+  assert.equal(
+    model.rewindWindowStart({ liveBars: [], liveTickSize: tickSize, tickSize, targetSeq, floorSeq, visibleBars }),
+    6,
+    'no live bars means no anchor'
+  );
+}
+
 // ----------------------------------------- independent bar granularity
 {
   const trades = makeTape(5000);
