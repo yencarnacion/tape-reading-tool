@@ -1,3 +1,9 @@
+import {
+  HORIZONS, BALANCE_DEADBAND_PERCENT, appendMinuteBar, appendTickBar,
+  calculateCandleRVOL, computeHorizon, computeTapeRate, lowerBound, updatePriceScale
+} from './tape-model.js';
+import { createStreamSource, prefixFromTrade } from './tape-source.js';
+
 (() => {
   'use strict';
 
@@ -6,13 +12,6 @@
   const LEGACY_SOUND_DEFAULTS = { buyPitchHz: 920, sellPitchHz: 330, durationMS: 42 };
   const MAX_LOCAL_TRADES = 120000;
   const LOCAL_TRADE_PRUNE_CHUNK = 8192;
-  const HORIZONS = [5, 15, 60];
-  const BALANCE_DEADBAND_PERCENT = 2;
-  const RVOL_BASELINE_BARS = 20;
-  const RVOL_MIN_BASELINE_BARS = 5;
-  const RVOL_EARLY_PRIOR_SECONDS = 5;
-  const SCALE_CONTRACTION_DELAY_MS = 1500;
-  const SCALE_CONTRACTION_TIME_CONSTANT_MS = 1200;
   const ET_MINUTE_PARTS = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
@@ -58,6 +57,9 @@
     rvolWarmup: { symbol: '', ready: false, pending: false, attempt: 0, token: 0, timer: null, controller: null },
     tickScale: null, minuteScale: null, renderNowMS: null, renderInitialized: false
   };
+  // The live and replay panes read every panel through this source. Live Rewind
+  // adds a second source over the same aggregation code, never a second copy.
+  const liveSource = createStreamSource(state);
   const DAY_MAP_CORNERS = ['', 'day-map-lower-left', 'day-map-lower-right', 'day-map-upper-right'];
   const DAY_MAP_CORNER_NAMES = ['upper-left', 'lower-left', 'lower-right', 'upper-right'];
 
@@ -401,15 +403,6 @@
     addMidpoint(trade);
   }
 
-  function prefixFromTrade(trade) {
-    return {
-      volume: Number(trade?._volume) || 0,
-      buyer: Number(trade?._buyer) || 0,
-      seller: Number(trade?._seller) || 0,
-      prints: Number(trade?._prints) || 0
-    };
-  }
-
   function addMidpoint(trade) {
     const bid = Number(trade.b);
     const ask = Number(trade.a);
@@ -457,25 +450,12 @@
 
   function addTradeToBars(trade) {
     const tickSize = state.settings ? state.settings.tickSize : 1;
-    let bar = state.bars[state.bars.length - 1];
-    if (!bar || bar.count >= tickSize) {
-      bar = {
-        count: 0, open: trade.p, high: trade.p, low: trade.p, close: trade.p,
-        volume: 0, delta: 0, time: trade.t, received: trade.r, className: trade.c
-      };
-      state.bars.push(bar);
+    const before = state.bars.length;
+    appendTickBar(state.bars, trade, tickSize);
+    if (state.bars.length !== before) {
       const maxBars = Math.max(10000, (state.settings?.visibleBars || 360) * 3);
       if (state.bars.length > maxBars) state.bars.splice(0, state.bars.length - maxBars);
     }
-    bar.count++;
-    bar.high = Math.max(bar.high, trade.p);
-    bar.low = Math.min(bar.low, trade.p);
-    bar.close = trade.p;
-    bar.volume += trade.z;
-    bar.delta += trade.z * trade.d;
-    bar.time = trade.t;
-    bar.received = trade.r;
-    bar.className = trade.c;
   }
 
   function rebuildMinuteBars(trades) {
@@ -486,22 +466,7 @@
   }
 
   function addTradeToMinuteBars(trade) {
-    const marketUS = Number(trade.t) * 1000;
-    const price = Number(trade.p);
-    const size = Math.max(0, Number(trade.z) || 0);
-    if (!marketUS || !Number.isFinite(price) || price <= 0) return;
-    const timeUS = Math.floor(marketUS / 6e7) * 6e7;
-    let bar = state.minuteBars[state.minuteBars.length - 1];
-    if (!bar || bar.timeUS !== timeUS) {
-      bar = { timeUS, open: price, high: price, low: price, close: price, volume: 0, dollarVolume: 0 };
-      state.minuteBars.push(bar);
-      if (state.minuteBars.length > 2000) state.minuteBars.splice(0, state.minuteBars.length - 2000);
-    }
-    bar.high = Math.max(bar.high, price);
-    bar.low = Math.min(bar.low, price);
-    bar.close = price;
-    bar.volume += size;
-    bar.dollarVolume += price * size;
+    appendMinuteBar(state.minuteBars, trade);
   }
 
   function replaceReplayMinuteBars(rawBars, chartEndUS) {
@@ -690,33 +655,6 @@
       elements.chart.height = height;
       state.dirtyChart = true;
     }
-  }
-
-  // Expand immediately so real moves are never clipped. Contract only after a
-  // stable smaller target, using elapsed-time exponential smoothing so the
-  // result does not depend on display refresh rate.
-  function updatePriceScale(previous, targetMinimum, targetMaximum, nowMS) {
-    if (!previous || !Number.isFinite(previous.minimum) || !Number.isFinite(previous.maximum)) {
-      return { minimum: targetMinimum, maximum: targetMaximum, targetMinimum, targetMaximum, lastMS: nowMS, candidateSince: nowMS, contracting: false };
-    }
-    let minimum = Math.min(previous.minimum, targetMinimum);
-    let maximum = Math.max(previous.maximum, targetMaximum);
-    const expanded = targetMinimum < previous.minimum || targetMaximum > previous.maximum;
-    const targetChanged = targetMinimum !== previous.targetMinimum || targetMaximum !== previous.targetMaximum;
-    let candidateSince = expanded || targetChanged ? nowMS : (previous.candidateSince ?? nowMS);
-    const smaller = !expanded && (targetMinimum > previous.minimum || targetMaximum < previous.maximum);
-    let contracting = smaller;
-    if (smaller && nowMS - candidateSince >= SCALE_CONTRACTION_DELAY_MS) {
-      const elapsed = Math.max(0, nowMS - (previous.lastMS ?? nowMS));
-      const alpha = 1 - Math.exp(-elapsed / SCALE_CONTRACTION_TIME_CONSTANT_MS);
-      minimum = previous.minimum + (targetMinimum - previous.minimum) * alpha;
-      maximum = previous.maximum + (targetMaximum - previous.maximum) * alpha;
-      // Floating point convergence should not keep the animation alive forever.
-      if (Math.abs(minimum - targetMinimum) < 1e-9) minimum = targetMinimum;
-      if (Math.abs(maximum - targetMaximum) < 1e-9) maximum = targetMaximum;
-      contracting = minimum !== targetMinimum || maximum !== targetMaximum;
-    }
-    return { minimum, maximum, targetMinimum, targetMaximum, lastMS: nowMS, candidateSince, contracting };
   }
 
   // Exposed solely for deterministic browser validation.
@@ -1839,78 +1777,10 @@
     elements.quoteText.textContent = `BID ${bid} / ASK ${ask}`;
   }
 
-  function lowerBound(items, target, selector) {
-    let low = 0;
-    let high = items.length;
-    while (low < high) {
-      const middle = (low + high) >>> 1;
-      if (selector(items[middle]) < target) low = middle + 1;
-      else high = middle;
-    }
-    return low;
-  }
-
-  function upperBound(items, target, selector) {
-    let low = 0;
-    let high = items.length;
-    while (low < high) {
-      const middle = (low + high) >>> 1;
-      if (selector(items[middle]) <= target) low = middle + 1;
-      else high = middle;
-    }
-    return low;
-  }
-
-  function totalsBetween(startUS, endUS, includeEnd = true) {
-    const start = lowerBound(state.trades, startUS, (trade) => Number(trade.r) || 0);
-    const end = (includeEnd ? upperBound : lowerBound)(state.trades, endUS, (trade) => Number(trade.r) || 0) - 1;
-    if (start > end || end < 0 || start >= state.trades.length) return { volume: 0, buyer: 0, seller: 0, prints: 0 };
-    const after = prefixFromTrade(state.trades[end]);
-    const before = start > 0 ? prefixFromTrade(state.trades[start - 1]) : state.prefixBase;
-    return {
-      volume: Math.max(0, after.volume - before.volume),
-      buyer: Math.max(0, after.buyer - before.buyer),
-      seller: Math.max(0, after.seller - before.seller),
-      prints: Math.max(0, after.prints - before.prints)
-    };
-  }
-
-  function calculateHorizon(seconds, nowUS) {
-    const durationUS = seconds * 1e6;
-    const startUS = nowUS - durationUS;
-    const totals = totalsBetween(startUS, nowUS);
-    const baselineStartUS = startUS - durationUS;
-    const baseline = totalsBetween(baselineStartUS, startUS, false);
-    const oldestReceipt = Number(state.trades[0]?.r) || Infinity;
-    const hasBaseline = oldestReceipt <= baselineStartUS;
-    const sharesRate = totals.volume / seconds;
-    const baselineRate = baseline.volume / seconds;
-    const relativePace = hasBaseline
-      ? baselineRate > 0 ? sharesRate / baselineRate : sharesRate > 0 ? Infinity : 1
-      : null;
-    const delta = totals.buyer - totals.seller;
-    const deltaPercent = totals.volume > 0 ? delta / totals.volume * 100 : 0;
-    const firstMidpoint = lowerBound(state.midpoints, startUS, (trade) => Number(trade.r) || 0);
-    const afterLastMidpoint = upperBound(state.midpoints, nowUS, (trade) => Number(trade.r) || 0);
-    let midTicks = 0;
-    if (firstMidpoint < afterLastMidpoint) {
-      const firstTrade = state.midpoints[firstMidpoint];
-      const lastTrade = state.midpoints[afterLastMidpoint - 1];
-      const first = (Number(firstTrade.b) + Number(firstTrade.a)) / 2;
-      const last = (Number(lastTrade.b) + Number(lastTrade.a)) / 2;
-      midTicks = (last - first) / priceTickSize(last);
-    }
-    return { ...totals, delta, deltaPercent, sharesRate, printsRate: totals.prints / seconds, midTicks, relativePace };
-  }
-
-  function priceTickSize(price) {
-    return Number(price) > 0 && Number(price) < 1 ? 0.0001 : 0.01;
-  }
-
   function updateRollingPanel(nowUS) {
     if (!nowUS) return;
     for (const seconds of HORIZONS) {
-      const metric = calculateHorizon(seconds, nowUS);
+      const metric = computeHorizon(liveSource, seconds, nowUS);
       const cells = horizonElements.get(seconds);
       const magnitude = Math.abs(metric.deltaPercent);
       const direction = magnitude < BALANCE_DEADBAND_PERCENT ? 'balanced' : metric.deltaPercent > 0 ? 'buyer' : 'seller';
@@ -1931,38 +1801,8 @@
     }
   }
 
-  function calculateCurrentCandleRVOL(nowUS) {
-    if (!Number.isFinite(nowUS) || nowUS <= 0 || state.minuteBars.length < RVOL_MIN_BASELINE_BARS + 1) return null;
-    const current = state.minuteBars[state.minuteBars.length - 1];
-    const currentStartUS = Number(current?.timeUS);
-    const currentVolume = Number(current?.volume);
-    if (!Number.isFinite(currentStartUS) || currentStartUS <= 0 || !Number.isFinite(currentVolume) || currentVolume < 0 || nowUS < currentStartUS) return null;
-
-    const baselineStart = Math.max(0, state.minuteBars.length - 1 - RVOL_BASELINE_BARS);
-    const baselineVolumes = state.minuteBars.slice(baselineStart, -1)
-      .filter((bar) => Number(bar.timeUS) < currentStartUS && Number.isFinite(Number(bar.volume)) && Number(bar.volume) >= 0)
-      .map((bar) => Number(bar.volume))
-      .sort((left, right) => left - right);
-    if (baselineVolumes.length < RVOL_MIN_BASELINE_BARS) return null;
-    const middle = Math.floor(baselineVolumes.length / 2);
-    const baseline = baselineVolumes.length % 2
-      ? baselineVolumes[middle]
-      : (baselineVolumes[middle - 1] + baselineVolumes[middle]) / 2;
-    if (!Number.isFinite(baseline) || baseline <= 0) return null;
-
-    const elapsedSeconds = Math.max(0, Math.min(60, (nowUS - currentStartUS) / 1e6));
-    const forming = elapsedSeconds < 60;
-    // Five seconds of neutral prior pace dampens the otherwise explosive first
-    // few prints, while quickly yielding to observed volume as the candle forms.
-    const ratio = forming
-      ? (currentVolume / baseline * 60 + RVOL_EARLY_PRIOR_SECONDS) / (elapsedSeconds + RVOL_EARLY_PRIOR_SECONDS)
-      : currentVolume / baseline;
-    if (!Number.isFinite(ratio) || ratio < 0) return null;
-    return { ratio, baseline, baselineBars: baselineVolumes.length, currentVolume, elapsedSeconds, forming };
-  }
-
   function updateRelativeVolume(nowUS) {
-    const metric = calculateCurrentCandleRVOL(nowUS);
+    const metric = calculateCandleRVOL(state.minuteBars, nowUS);
     elements.relativeVolume.classList.remove('building', 'quiet', 'normal', 'elevated', 'surge');
     if (!metric) {
       elements.relativeVolume.classList.add('building');
@@ -1984,7 +1824,7 @@
 
   function updateLiveMetrics(now) {
     const receiptNowUS = serverNowUS(now);
-    const tapeRate = receiptNowUS ? totalsBetween(receiptNowUS - 1e6, receiptNowUS).prints : 0;
+    const tapeRate = computeTapeRate(liveSource, receiptNowUS);
     elements.tapeRate.textContent = `${tapeRate >= 1000 ? formatSize(tapeRate) : tapeRate}/s`;
     audio.setTapeRate(tapeRate);
     updateRollingPanel(receiptNowUS);
