@@ -281,7 +281,7 @@ func (w *ibWrapper) TickByTickAllLast(reqID int64, tickType int64, unixTime int6
 		trade = w.feed.store.AddTrade(symbol, time.Unix(unixTime, 0), now, price, tradeSize)
 	}
 	if w.feed.recorder != nil {
-		quote := w.feed.store.Snapshot(symbol, 0).Quote
+		quote := w.feed.store.Quote(symbol)
 		w.feed.recorder.RecordTrade(storage.TradeRecord{
 			Symbol: symbol, MarketTimeUS: unixTime * 1e6, SequenceID: arrivalSeq, ReceivedUS: now.UnixMicro(),
 			Price: price, Size: tradeSize, Class: trade.Class, Side: trade.Side,

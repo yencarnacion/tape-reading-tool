@@ -84,6 +84,26 @@ func TestRingSinceReportsOverrun(t *testing.T) {
 	}
 }
 
+func TestQuoteReadsTopOfBookWithoutCopyingTheRing(t *testing.T) {
+	store := NewStore("AAPL", 4096, 4)
+	now := time.Unix(1_700_000_000, 0)
+	store.UpdateQuote("AAPL", 100, 101, 500, 600)
+	store.UpdatePreviousClose("AAPL", 99.5)
+	for i := 0; i < 4096; i++ {
+		store.AddTrade("AAPL", now, now, 100.5, 100)
+	}
+	quote := store.Quote("AAPL")
+	if quote != store.Snapshot("AAPL", 0).Quote {
+		t.Fatalf("quote = %+v, want the snapshot quote %+v", quote, store.Snapshot("AAPL", 0).Quote)
+	}
+	if allocations := testing.AllocsPerRun(50, func() { _ = store.Quote("AAPL") }); allocations != 0 {
+		t.Fatalf("Quote allocated %.0f times per call; the live tick callback must stay allocation-free", allocations)
+	}
+	if empty := store.Quote("MISSING"); empty != (Quote{}) {
+		t.Fatalf("unknown symbol quote = %+v", empty)
+	}
+}
+
 func TestActivateMaintainsMRUHistory(t *testing.T) {
 	store := NewStore("AAPL", 100, 3)
 	for _, symbol := range []string{"MSFT", "NVDA", "AAPL", "TSLA"} {

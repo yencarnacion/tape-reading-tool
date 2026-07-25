@@ -198,6 +198,21 @@ func (s *Store) AddRecordedTrade(symbol string, exchangeTime, received time.Time
 	return tape.addRecorded(exchangeTime, received, price, size, class, side, bid, ask)
 }
 
+// Quote reads only the current top of book. The live tick callback needs the
+// quote for every print, and Snapshot copies the whole ring to return it, so
+// this accessor keeps that path O(1) and allocation-free.
+func (s *Store) Quote(symbol string) Quote {
+	s.mu.RLock()
+	tape := s.tapes[symbol]
+	s.mu.RUnlock()
+	if tape == nil {
+		return Quote{}
+	}
+	tape.mu.RLock()
+	defer tape.mu.RUnlock()
+	return tape.quote
+}
+
 func (s *Store) Snapshot(symbol string, limit int) Snapshot {
 	s.mu.RLock()
 	if symbol == "" {
