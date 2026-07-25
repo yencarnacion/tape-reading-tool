@@ -66,7 +66,8 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     rewindConfig: null, rewindPaneAvailable: false,
     rewind: {
       active: false, playing: false, buffer: null, source: null, targetSeq: 0, targetUS: 0,
-      speed: 1, tickSize: 1, bars: [], scale: null, dirty: false, notice: '',
+      playbackEndUS: 0, holdForLiveClick: false, completed: false,
+      speed: 0.25, tickSize: 1, bars: [], scale: null, dirty: false, notice: '',
       lastInteractionMS: 0, lastFrameMS: 0, token: 0
     }
   };
@@ -1804,7 +1805,10 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
       if (event.key === 'Escape') {
         if (state.rewind.active) {
           event.preventDefault();
-          returnToLive('escape');
+          // Once the trader has deliberately paused, only the visible LIVE
+          // control dismisses the pane. This prevents an incidental shortcut
+          // from discarding the held replay position.
+          if (!state.rewind.holdForLiveClick) returnToLive('escape');
         }
         return;
       }
@@ -2035,6 +2039,7 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
   // ears live, eyes rewound.
 
   const REWIND_DEPTHS = { plain: 5, shift: 15, ctrl: 30 };
+  const REWIND_AUTO_SPEED = 0.25;
 
   function rewindEnabled() {
     return Boolean(state.rewindConfig?.enabled) && state.rewindPaneAvailable;
@@ -2089,24 +2094,32 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     const buffer = ensureRewindBuffer();
     if (!buffer || buffer.count === 0) return;
     const rewind = state.rewind;
+    // Capture a fixed segment endpoint. At 0.25x a player chasing the moving
+    // live head can never catch it; a five-second segment must instead replay
+    // the five seconds that existed when the shortcut was pressed, then jump to
+    // the current live view.
     const fromUS = rewind.active && rewind.targetUS ? rewind.targetUS : buffer.lastReceivedUS();
     const targetUS = Math.max(buffer.firstReceivedUS(), fromUS - seconds * 1e6);
     if (!rewind.active) {
       rewind.active = true;
-      rewind.speed = Number(elements.rewindSpeed.value) || 1;
+      rewind.holdForLiveClick = false;
       rewind.tickSize = Number(elements.rewindTicks.value) || state.settings?.tickSize || 1;
       rewind.scale = null;
       elements.rewindPanel.hidden = false;
     }
-    rewind.playing = false;
+    rewind.playbackEndUS = fromUS;
+    rewind.completed = false;
+    rewind.speed = REWIND_AUTO_SPEED;
+    elements.rewindSpeed.value = String(REWIND_AUTO_SPEED);
+    setRewindPlaying(false);
     markRewindInteraction();
-    await seekRewind(targetUS);
+    if (await seekRewind(targetUS)) setRewindPlaying(true);
   }
 
   async function seekRewind(targetUS) {
     const rewind = state.rewind;
     const buffer = rewind.buffer;
-    if (!rewind.active || !buffer || buffer.count === 0) return;
+    if (!rewind.active || !buffer || buffer.count === 0) return false;
     const clamped = Math.min(Math.max(targetUS, buffer.firstReceivedUS()), buffer.lastReceivedUS());
     rewind.targetUS = clamped;
     rewind.targetSeq = rewind.source.seqAtOrBefore(clamped);
@@ -2116,22 +2129,26 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     const fromSeq = rewind.source.seqAtOrBefore(windowStartUS) || buffer.firstSeq();
     const token = ++rewind.token;
     const contiguous = await rewind.source.ensure(fromSeq, rewind.targetSeq);
-    if (token !== rewind.token || !rewind.active) return;
+    if (token !== rewind.token || !rewind.active) return false;
     rewind.notice = contiguous ? '' : 'GAP IN THE REWIND RANGE COULD NOT BE BACKFILLED';
     rewind.dirty = true;
+    return true;
   }
 
   function stepRewind(delta) {
     const rewind = state.rewind;
     if (!rewind.active || !rewind.source) return;
+    // Print stepping is a deliberate pause just like Space or the PAUSE button.
+    rewind.holdForLiveClick = true;
+    rewind.completed = false;
+    setRewindPlaying(false);
     const nextSeq = rewind.targetSeq + delta;
     const receipt = rewind.source.receivedUSAt(nextSeq);
     if (!receipt) {
       // Sequences are dense in the buffer, so a miss means an edge was reached.
-      if (delta > 0) returnToLive('caught the live edge');
+      if (delta > 0) finishRewindSegment(rewind.source.lastReceivedUS());
       return;
     }
-    rewind.playing = false;
     rewind.targetSeq = nextSeq;
     rewind.targetUS = receipt;
     rewind.dirty = true;
@@ -2141,12 +2158,25 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
   function toggleRewindPlayback() {
     const rewind = state.rewind;
     if (!rewind.active) return;
-    rewind.playing = !rewind.playing;
+    if (rewind.playing) {
+      // A manual pause latches the pane. Resuming does not clear the latch: when
+      // this segment finishes it waits at the endpoint until LIVE is clicked.
+      rewind.holdForLiveClick = true;
+      rewind.completed = false;
+      setRewindPlaying(false);
+    } else {
+      setRewindPlaying(true);
+    }
+    markRewindInteraction();
+    rewind.dirty = true;
+  }
+
+  function setRewindPlaying(playing) {
+    const rewind = state.rewind;
+    rewind.playing = Boolean(playing);
     rewind.lastFrameMS = performance.now();
     elements.rewindPlay.textContent = rewind.playing ? 'PAUSE' : 'PLAY';
     elements.rewindPlay.classList.toggle('active', rewind.playing);
-    markRewindInteraction();
-    rewind.dirty = true;
   }
 
   function markRewindInteraction() {
@@ -2162,6 +2192,9 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     rewind.playing = false;
     rewind.targetSeq = 0;
     rewind.targetUS = 0;
+    rewind.playbackEndUS = 0;
+    rewind.holdForLiveClick = false;
+    rewind.completed = false;
     rewind.token++;
     rewind.notice = '';
     elements.rewindPanel.hidden = true;
@@ -2172,14 +2205,31 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     updateRewindIdleHint();
   }
 
+  function finishRewindSegment(endpointUS = 0) {
+    const rewind = state.rewind;
+    if (rewind.holdForLiveClick) {
+      const endpoint = endpointUS || rewind.playbackEndUS || rewind.targetUS;
+      rewind.targetUS = endpoint;
+      rewind.targetSeq = rewind.source.seqAtOrBefore(endpoint) || rewind.targetSeq;
+      rewind.completed = true;
+      setRewindPlaying(false);
+      rewind.dirty = true;
+      return;
+    }
+    returnToLive('replay complete');
+  }
+
   function advanceRewindPlayback(nowMS) {
     const rewind = state.rewind;
     if (!rewind.active || !rewind.playing) return;
     const elapsedMS = Math.max(0, nowMS - (rewind.lastFrameMS || nowMS));
     rewind.lastFrameMS = nowMS;
     const advanced = rewind.targetUS + elapsedMS * 1000 * rewind.speed;
-    if (advanced >= rewind.buffer.lastReceivedUS()) {
-      returnToLive('caught the live edge');
+    const endpoint = rewind.playbackEndUS || rewind.buffer.lastReceivedUS();
+    if (advanced >= endpoint) {
+      rewind.targetUS = endpoint;
+      rewind.targetSeq = rewind.source.seqAtOrBefore(endpoint) || rewind.targetSeq;
+      finishRewindSegment(endpoint);
       return;
     }
     rewind.targetUS = advanced;
@@ -2220,7 +2270,14 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     }).format(new Date(nowUS / 1000));
     const retained = source.retainedSeconds();
     const shortfall = retained + 1 < (Number(state.rewindConfig?.buffer_seconds) || 180);
-    const notice = rewind.notice || (shortfall ? `REWIND BUFFER ${retained.toFixed(0)}s` : '');
+    const held = rewind.completed
+      ? 'REPLAY COMPLETE · ← REPLAY AGAIN · CLICK LIVE TO EXIT'
+      : rewind.holdForLiveClick && !rewind.playing
+        ? 'PAUSED · ← REPLAY AGAIN · CLICK LIVE TO EXIT'
+        : rewind.holdForLiveClick
+          ? 'PAUSE LATCHED · CLICK LIVE TO EXIT WHEN COMPLETE'
+          : '';
+    const notice = rewind.notice || held || (shortfall ? `REWIND BUFFER ${retained.toFixed(0)}s` : '');
     elements.rewindNotice.textContent = notice;
     elements.rewindNotice.hidden = !notice;
   }
@@ -2251,7 +2308,8 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     advanceRewindPlayback(now);
     if (state.rewind.active) {
       const autoReturnMS = (Number(state.rewindConfig?.auto_return_seconds) || 20) * 1000;
-      if (now - state.rewind.lastInteractionMS > autoReturnMS) returnToLive('inactivity');
+      if (!state.rewind.playing && !state.rewind.holdForLiveClick &&
+          now - state.rewind.lastInteractionMS > autoReturnMS) returnToLive('inactivity');
       else if (state.rewind.dirty) drawRewindPane();
     }
     if (state.dirtyReplayChart && (state.status?.mode === 'replay' || state.marketChartEnabled) && state.settings?.showChart) drawReplayChart();
@@ -2365,7 +2423,8 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
       return {
         available: rewindEnabled(), active: rewind.active, playing: rewind.playing,
         targetSeq: rewind.targetSeq, targetUS: rewind.targetUS, tickSize: rewind.tickSize,
-        speed: rewind.speed, bars: rewind.bars.length, notice: rewind.notice,
+        playbackEndUS: rewind.playbackEndUS, holdForLiveClick: rewind.holdForLiveClick,
+        completed: rewind.completed, speed: rewind.speed, bars: rewind.bars.length, notice: rewind.notice,
         // The pane's first bar must start on one of the live pane's own bar
         // boundaries, otherwise every bar shown is shifted against live.
         firstBarSeq: rewind.bars[0]?.firstSeq || 0,

@@ -138,18 +138,18 @@ It is available in IBKR live mode and in demo mode. Replay, render, and Massive 
 
 | Key | Action |
 |---|---|
-| `←` | jump back 5 seconds, from the current rewind position or from live |
-| `Shift`+`←` | jump back 15 seconds |
-| `Ctrl`+`←` | jump back 30 seconds |
-| `Space` | play or pause |
+| `←` | jump back 5 seconds and replay that segment automatically at 0.25× |
+| `Shift`+`←` | jump back 15 seconds and replay automatically at 0.25× |
+| `Ctrl`+`←` | jump back 30 seconds and replay automatically at 0.25× |
+| `Space` | pause or resume; pausing latches the pane until LIVE is clicked |
 | `,` / `.` | step one print backward or forward |
-| `Esc` | return to live immediately |
+| `Esc` | return to live before a manual pause |
 
-The pane's own controls set playback speed from 0.25× to 2× and set its tick-bar granularity independently of the live pane. Re-aggregating the same twenty seconds at a finer granularity is the point: it is the one thing a screen recording cannot do.
+Each rewind shortcut captures a fixed segment ending at the position where the shortcut was pressed, starts it immediately at 0.25×, and returns to the current live view when that segment finishes. The pane's own controls can then change playback speed from 0.25× to 2× and set its tick-bar granularity independently of the live pane. Re-aggregating the same twenty seconds at a finer granularity is the point: it is the one thing a screen recording cannot do.
 
 Shortcuts are inert while an input or select has focus, and `/` still focuses the ticker field. On macOS, `Ctrl`+`←` may be claimed by Mission Control's desktop switching; the pane's own controls cover the same actions.
 
-Rewind returns to live on `Esc`, after `rewind.auto_return_seconds` without interaction, the moment playback catches the live edge, and before any symbol change. While rewound, the pane carries a badge reading `REWIND −18.4s` and a dashed amber frame. Amber is reserved for that chrome and never colors a price, a size, or a delta: the existing palette already spends amber on seller pressure and on downward price movement, so the pane is identified by the frame, the recessed background, and the literal badge text rather than by hue alone.
+Pressing Space or the pane's PAUSE control sets a manual hold. Resuming keeps that hold: when the segment finishes, the pane waits at its endpoint instead of returning to live. More rewind shortcuts can be started from the held position, and only an actual click on the pane's LIVE button dismisses it. A symbol change still exits rewind as a safety boundary. `rewind.auto_return_seconds` remains a fallback for an unpaused, inactive rewind that is not playing a segment. While rewound, the pane carries a badge reading `REWIND −18.4s` and a dashed amber frame. Amber is reserved for that chrome and never colors a price, a size, or a delta: the existing palette already spends amber on seller pressure and on downward price movement, so the pane is identified by the frame, the recessed background, and the literal badge text rather than by hue alone.
 
 **The rewind pane produces no audio.** Live print cues and the tape-speed background continue unchanged throughout. The `AudioWorklet` is a live-state signal, and mixing replayed prints into it during a spike would corrupt the real-time read of the market. The intended ergonomic is ears live, eyes rewound.
 
@@ -310,7 +310,7 @@ With demo mode running, the dependency-free browser check drives local Chrome at
 node scripts/browser-check.mjs
 ```
 
-Started as `./go.sh demo -rewind`, the same check also drives Live Rewind: it compares the live panes' rectangles before, during, and after a rewind, counts live canvas paints in both states, and exercises independent granularity, print stepping, playback, and the return to live.
+Started as `./go.sh demo -rewind`, the same check also drives Live Rewind: it compares the live panes' rectangles before, during, and after a rewind, counts live canvas paints in both states, and exercises automatic 0.25× playback, the manual-pause latch, additional held replays, independent granularity, print stepping, and both automatic and LIVE-button returns.
 
 ## Notes
 

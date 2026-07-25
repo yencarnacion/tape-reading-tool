@@ -165,6 +165,44 @@ try {
         volume.dispatchEvent(new Event('input', { bubbles: true }));
         await sleep(300);
         paints = 0; await sleep(1500); const liveOnlyPaints = paints;
+
+        // A shortcut owns a fixed segment: it starts immediately at 0.25x and a
+        // normal completion jumps back to the current live view.
+        await api.enter(0.5);
+        await sleep(120);
+        const autoStarted = {
+          ...api.state(),
+          button: document.querySelector('#rewindPlay').textContent,
+          selectedSpeed: document.querySelector('#rewindSpeed').value
+        };
+        await sleep(2200);
+        const autoFinished = api.state();
+
+        // A manual pause latches the pane. Resuming and completing the segment
+        // must leave it held, further rewind shortcuts must still work, and an
+        // actual LIVE-button click is the only normal dismissal.
+        await api.enter(0.5);
+        await sleep(120);
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+        const manuallyPaused = api.state();
+        const speed = document.querySelector('#rewindSpeed');
+        speed.value = '2';
+        speed.dispatchEvent(new Event('change'));
+        document.querySelector('#rewindPlay').click();
+        await sleep(600);
+        const heldComplete = api.state();
+        const heldEndpoint = heldComplete.targetUS;
+        await api.enter(0.25);
+        await sleep(120);
+        const additionalReplay = api.state();
+        document.querySelector('#rewindExit').click();
+        await sleep(200);
+        const afterLiveClick = api.state();
+        const playbackLifecycle = {
+          autoStarted, autoFinished, manuallyPaused, heldComplete,
+          heldEndpoint, additionalReplay, afterLiveClick
+        };
+
         const retainedBefore = api.state().retainedSeconds;
         await api.enter(5);
         await sleep(600);
@@ -202,6 +240,7 @@ try {
         await sleep(300);
         return {
           before, during, after: rects(), covered, slotBefore, afterSettingsChange,
+          playbackLifecycle,
           matchedTick: { live: matched.liveTickSize, pane: matched.tickSize, firstBarSeq: matched.firstBarSeq, phaseAnchored: matched.phaseAnchored, bars: matched.bars },
           paneHiddenAfterExit: document.querySelector('#rewindPanel').hidden,
           activeAfterExit: api.state().active,
@@ -230,6 +269,32 @@ try {
     if (Math.abs(rewind.slotBefore - rewind.afterSettingsChange.slot) > 0.01 ||
         !/market-chart-mode/.test(rewind.afterSettingsChange.workspace)) {
       throw new Error(`a settings change collapsed the reserved rewind pane: ${JSON.stringify(rewind)}`);
+    }
+    const lifecycle = rewind.playbackLifecycle;
+    if (!lifecycle.autoStarted.active || !lifecycle.autoStarted.playing ||
+        lifecycle.autoStarted.speed !== 0.25 || lifecycle.autoStarted.selectedSpeed !== '0.25' ||
+        lifecycle.autoStarted.button !== 'PAUSE' ||
+        !(lifecycle.autoStarted.playbackEndUS > lifecycle.autoStarted.targetUS)) {
+      throw new Error(`rewind did not auto-play a fixed segment at 0.25x: ${JSON.stringify(lifecycle)}`);
+    }
+    if (lifecycle.autoFinished.active || lifecycle.autoFinished.playing) {
+      throw new Error(`an unpaused replay did not return to live: ${JSON.stringify(lifecycle)}`);
+    }
+    if (!lifecycle.manuallyPaused.active || lifecycle.manuallyPaused.playing ||
+        !lifecycle.manuallyPaused.holdForLiveClick) {
+      throw new Error(`manual pause did not latch the rewind pane: ${JSON.stringify(lifecycle)}`);
+    }
+    if (!lifecycle.heldComplete.active || lifecycle.heldComplete.playing ||
+        !lifecycle.heldComplete.holdForLiveClick || !lifecycle.heldComplete.completed) {
+      throw new Error(`a latched replay did not wait after completion: ${JSON.stringify(lifecycle)}`);
+    }
+    if (!lifecycle.additionalReplay.active || !lifecycle.additionalReplay.playing ||
+        !lifecycle.additionalReplay.holdForLiveClick || lifecycle.additionalReplay.speed !== 0.25 ||
+        !(lifecycle.additionalReplay.targetUS < lifecycle.heldEndpoint)) {
+      throw new Error(`a held pane did not allow another rewind replay: ${JSON.stringify(lifecycle)}`);
+    }
+    if (lifecycle.afterLiveClick.active || lifecycle.afterLiveClick.holdForLiveClick) {
+      throw new Error(`the LIVE button did not dismiss the held pane: ${JSON.stringify(lifecycle)}`);
     }
     if (rewind.covered.left < rewind.before.chart.right - 0.01 === false) {
       throw new Error(`the rewind pane overlaps the live tick chart: ${JSON.stringify(rewind)}`);
