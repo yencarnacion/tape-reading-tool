@@ -1194,11 +1194,12 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     drawReplayIndicator('sma9', '#ff4d5e', 2.2, 1);
     drawReplayIndicator('vwap', '#ffd447', 2.6, 1);
 
+    let xtraLevels = [];
     if (state.xtraEnabled) {
       const candleMinimum = Math.min(...visible.map((bar) => bar.low));
       const candleMaximum = Math.max(...visible.map((bar) => bar.high));
-      const levels = calculateXtraLevels(state.minuteBars).filter((level) => level.price >= candleMinimum && level.price <= candleMaximum);
-      drawXtraLevels(levels, priceY, left, right, rightAxis, top, priceBottom);
+      xtraLevels = calculateXtraLevels(state.minuteBars).filter((level) => level.price >= candleMinimum && level.price <= candleMaximum);
+      drawXtraLevels(xtraLevels, priceY, left, right, rightAxis, top, priceBottom);
     }
 
     replayContext.strokeStyle = '#3a424c';
@@ -1247,6 +1248,7 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     replayContext.textBaseline = 'middle';
     replayContext.font = '700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     replayContext.fillText(formatPrice(last.close), right + 4, currentY);
+    drawCurrentXtraBadges(xtraLevels, priceY, last.close, right, rightAxis, currentY);
     state.dirtyReplayChart = Boolean(state.minuteScale.contracting);
 
     function drawReplayIndicator(key, color, lineWidth, alpha) {
@@ -1365,6 +1367,31 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
       replayContext.fillStyle = level.color;
       replayContext.globalAlpha = 1;
       replayContext.fillText(`${level.key} ${formatPrice(level.price)}`, right + 6, level.labelY);
+    }
+    replayContext.restore();
+  }
+
+  function drawCurrentXtraBadges(levels, priceY, currentPrice, right, rightAxis, currentY) {
+    // A current-price marker covers labels within its 18px height. Repeat the
+    // level key beside the price so recognition does not depend on remembering
+    // which colored/dashed line was there before the collision.
+    const active = levels.filter((level) => Math.abs(priceY(level.price) - currentY) <= 10);
+    if (!active.length) return;
+
+    replayContext.save();
+    replayContext.font = '800 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    replayContext.textAlign = 'left';
+    replayContext.textBaseline = 'middle';
+    let x = right + 8 + replayContext.measureText(formatPrice(currentPrice)).width;
+    const limit = right + rightAxis - 3;
+    for (const level of active) {
+      const width = replayContext.measureText(level.key).width + 8;
+      if (x + width > limit) break;
+      replayContext.fillStyle = level.color;
+      replayContext.fillRect(x, currentY - 7, width, 14);
+      replayContext.fillStyle = '#090b0e';
+      replayContext.fillText(level.key, x + 4, currentY);
+      x += width + 3;
     }
     replayContext.restore();
   }
