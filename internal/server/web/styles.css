@@ -349,10 +349,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 
 .tape-panel { min-width: 0; display: flex; flex-direction: column; overflow: hidden; border-left: 1px solid var(--line); background: #0d1014; }
 .tape-header { height: 29px; flex: 0 0 29px; display: grid; grid-template-columns: 68px minmax(0, 1fr); column-gap: 5px; align-items: center; padding: 0 6px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; font-weight: 800; }
-.tape-header span:last-child { text-align: left; }
+.tape-header span:last-child { text-align: right; }
 .tape-rows { min-height: 0; flex: 1 1 auto; overflow: hidden; font: 700 16px/22px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .tape-row { height: 22px; display: grid; grid-template-columns: 68px minmax(0, 1fr); column-gap: 5px; align-items: center; padding: 0 6px; border-bottom: 1px solid rgba(42, 48, 56, .22); white-space: nowrap; }
-.tape-row span:last-child { overflow: hidden; text-align: left; color: currentColor; opacity: .82; }
+.tape-row span:last-child { overflow: hidden; text-align: right; color: currentColor; opacity: .82; }
 .tape-row.below { color: var(--magenta); }
 .tape-row.bid { color: var(--red); }
 .tape-row.mid { color: var(--text); }
