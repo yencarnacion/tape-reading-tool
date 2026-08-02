@@ -117,8 +117,8 @@ func (r *Replay) Cue(ctx context.Context, request ReplayRequest, warmupUS, targe
 		stateName = "replaying"
 	}
 	r.state = ReplayState{State: stateName, Symbol: request.Symbol, Source: request.Source, Provider: request.Provider, StartUS: targetUS, EndUS: request.EndUS, PositionUS: targetUS, Speed: request.Speed, Message: "external replay", Generation: generation}
-	r.mu.Unlock()
 	r.setFeedStatus(stateName, "external replay")
+	r.mu.Unlock()
 	if playing {
 		// launch publishes its own generation. Report that one, or a later sync
 		// would see a mismatch against a stale value and rebuild instead of
@@ -367,11 +367,11 @@ func (r *Replay) PrepareRender(request ReplayRequest, warmupUS int64) error {
 		StartUS: request.StartUS, EndUS: request.EndUS, PositionUS: warmupUS,
 		Speed: request.Speed, Message: fmt.Sprintf("deterministic render %s/%s", request.Provider, request.Source), Generation: r.generation,
 	}
+	r.setFeedStatus("paused", "deterministic render")
 	r.mu.Unlock()
 
 	r.store.Activate(request.Symbol)
 	r.store.Clear(request.Symbol)
-	r.setFeedStatus("paused", "deterministic render")
 	_, err = r.StepRender(request.StartUS)
 	return err
 }
@@ -447,8 +447,8 @@ func (r *Replay) Pause() error {
 	r.state.State = "paused"
 	r.state.Message = "paused"
 	r.state.Generation = r.generation
-	r.mu.Unlock()
 	r.setFeedStatus("paused", "replay paused")
+	r.mu.Unlock()
 	return nil
 }
 
@@ -498,10 +498,10 @@ func (r *Replay) stop(updateStatus bool) {
 	r.state.State = "stopped"
 	r.state.Message = "stopped"
 	r.state.Generation = r.generation
-	r.mu.Unlock()
 	if updateStatus {
 		r.setFeedStatus("stopped", "replay stopped")
 	}
+	r.mu.Unlock()
 }
 
 func (r *Replay) launch(request ReplayRequest, fromUS int64, cursor replayCursor, stateName string) {
@@ -525,8 +525,8 @@ func (r *Replay) launch(request ReplayRequest, fromUS int64, cursor replayCursor
 		StartUS: request.StartUS, EndUS: request.EndUS, PositionUS: position,
 		Speed: request.Speed, Message: fmt.Sprintf("%.2fx %s/%s", request.Speed, request.Provider, request.Source), Generation: generation,
 	}
-	r.mu.Unlock()
 	r.setFeedStatus("replaying", fmt.Sprintf("%.2fx %s/%s", request.Speed, request.Provider, request.Source))
+	r.mu.Unlock()
 	go r.play(ctx, generation, request, fromUS, cursor)
 }
 
@@ -589,10 +589,17 @@ func (r *Replay) finish(generation uint64, stateName, message string) {
 	r.cancel = nil
 	r.state.State = stateName
 	r.state.Message = message
-	r.mu.Unlock()
 	r.setFeedStatus(stateName, message)
+	r.mu.Unlock()
 }
 
+// setFeedStatus publishes the state the browser renders. Every caller that also
+// changes r.state must call this while still holding r.mu, so the two can never
+// be reordered: publishing after the lock is released lets a newer transition
+// land in between and then be overwritten by an already stale status, leaving
+// the browser and a polling controller permanently disagreeing. The play
+// goroutine is why this matters - finish runs there, ordered against a cue by
+// nothing else. Startup's "ready" is the one caller with no state to agree with.
 func (r *Replay) setFeedStatus(stateName, message string) {
 	r.store.SetStatus(tape.FeedStatus{Mode: "replay", State: stateName, Connected: stateName != "error", Message: message})
 }

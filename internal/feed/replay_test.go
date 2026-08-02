@@ -331,3 +331,77 @@ func TestFailedCueDoesNotDisturbANewerCue(t *testing.T) {
 		t.Fatalf("the newer cue's tape was disturbed: %d trades", len(trades))
 	}
 }
+
+// finish() runs on the play goroutine, which no lock orders against an external
+// cue. If it published the feed status after releasing the state lock, a cue
+// landing in between would be overwritten by an already stale status and the
+// browser would keep rendering a replay that had moved on.
+func TestCompletedPlaybackDoesNotOverwriteANewerFeedStatus(t *testing.T) {
+	replay, store, base := newCueFixture(t)
+	second := int64(time.Second / time.Microsecond)
+	if err := replay.Start(ReplayRequest{
+		Symbol: "AAPL", Source: "historical", Provider: "massive",
+		StartUS: base, EndUS: base + 2*second, Speed: 20,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The completed state is set under the lock, so observing it means finish is
+	// at exactly the point where an unordered publish would still be pending.
+	deadline := time.Now().Add(5 * time.Second)
+	for replay.Status().State != "complete" {
+		if time.Now().After(deadline) {
+			t.Fatal("replay never completed")
+		}
+		time.Sleep(50 * time.Microsecond)
+	}
+	if _, err := replay.Cue(context.Background(), cueRequest(base), base, base+10*second, true); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(60 * time.Millisecond)
+
+	state := replay.Status()
+	if feed := store.Status(); feed.State != state.State {
+		t.Fatalf("the browser sees %q/%q while the controller sees %q/%q",
+			feed.State, feed.Message, state.State, state.Message)
+	}
+}
+
+// Every transition must leave the browser's status agreeing with the replay
+// state once things settle, whichever order the transitions arrive in.
+func TestFeedStatusAgreesWithReplayStateAcrossTransitions(t *testing.T) {
+	replay, store, base := newCueFixture(t)
+	second := int64(time.Second / time.Microsecond)
+	agree := func(t *testing.T, step string) {
+		t.Helper()
+		state := replay.Status()
+		feed := store.Status()
+		if feed.State != state.State {
+			t.Fatalf("%s: browser %q/%q, controller %q/%q", step, feed.State, feed.Message, state.State, state.Message)
+		}
+	}
+	if _, err := replay.Cue(context.Background(), cueRequest(base), base, base+5*second, false); err != nil {
+		t.Fatal(err)
+	}
+	agree(t, "paused cue")
+	if _, err := replay.Cue(context.Background(), cueRequest(base), base, base+10*second, true); err != nil {
+		t.Fatal(err)
+	}
+	waitReplayState(t, replay, "replaying")
+	agree(t, "playing cue")
+	if err := replay.Pause(); err != nil {
+		t.Fatal(err)
+	}
+	agree(t, "pause")
+	if err := replay.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	waitReplayState(t, replay, "replaying")
+	agree(t, "resume")
+	if err := replay.SeekTo(base + 20*second); err != nil {
+		t.Fatal(err)
+	}
+	waitReplayState(t, replay, "replaying")
+	agree(t, "seek")
+	replay.Stop()
+	agree(t, "stop")
+}
