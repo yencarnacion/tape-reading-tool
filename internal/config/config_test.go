@@ -140,10 +140,10 @@ func TestValidateAudioGainRanges(t *testing.T) {
 	}
 }
 
-func TestExternalReplayDefaultsAreOffAndLoopbackOnly(t *testing.T) {
+func TestExternalReplayDefaultsAreOnAndLoopbackOnly(t *testing.T) {
 	defaults := Defaults()
-	if defaults.ExternalReplay.Enabled {
-		t.Fatal("external replay control must be off unless it is explicitly enabled")
+	if !defaults.ExternalReplay.Enabled {
+		t.Fatal("external replay control must default on for the local DaiDai integration")
 	}
 	if !defaults.ExternalReplay.LoopbackOnly {
 		t.Fatal("external replay control must default to loopback-only")
