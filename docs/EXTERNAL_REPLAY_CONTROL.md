@@ -42,7 +42,9 @@ Bars are unadjusted one-minute Massive aggregates so their prices agree with raw
 
 `coverage` is read-only inspection of completed downloads and never contacts a provider.
 
-Repeated bar downloads upsert the `(symbol, provider, source, minute)` key, so re-running a range replaces it without duplicating rows. Completed intervals are recorded independently for `minute_bars`, `trades`, and `quotes`, and only after that data kind's request has succeeded — a failed or cancelled download leaves no coverage behind. An interval with zero rows is still valid coverage: a quiet premarket is not a missing download. Coverage checks merge adjacent and overlapping successful intervals rather than inferring coverage from the first and last row. A `-rth` download records only the 09:30–16:00 Eastern parts of the requested span, because that is all it retained.
+Repeated bar downloads upsert the `(symbol, provider, source, minute)` key, so re-running a range replaces it without duplicating rows. A bar range too large for one provider response is rejected rather than silently truncated, so a short answer can never be recorded as a complete download.
+
+Detailed downloads replace their range: the existing coverage claim over that window is withdrawn *before* the rows are deleted, so a replacement that then fails leaves coverage describing only the data that is still durable. Completed coverage on either side of the replaced window survives with a recount. Coverage is recorded for both providers, and only after that data kind's request has succeeded — a failed or cancelled download leaves no coverage behind. An interval with zero rows is still valid coverage: a quiet premarket is not a missing download. Coverage checks merge adjacent and overlapping successful intervals rather than inferring coverage from the first and last row. A `-rth` download records only the 09:30–16:00 Eastern parts of the requested span, because that is all it retained.
 
 ### Database schema
 
@@ -102,7 +104,7 @@ An unreachable server is the fourth state and is observed as a connection failur
 
 `control.state` is one of `cueing`, `paused`, `following`, `fast_follow`, `data_incomplete`, `error`, or `detached`. `playing` reports what the replay is actually doing, so it is false in fast follow. `drift_us` is the last measured controller-to-replay offset and `drift_corrections` counts how often that was absorbed without a rebuild. `last_cue_ms` and `last_cue_rows` are the cue diagnostics.
 
-`ui_audio_ready` reflects a bounded heartbeat from the browser (`POST /api/external-replay/ui`, newest report only). A tab that has not unlocked Web Audio, has muted sound, or has stopped reporting reads as not ready rather than being assumed healthy.
+`ui_audio_ready` reflects a bounded heartbeat from the browser (`POST /api/external-replay/ui`, loopback-only, newest report only). A tab that has not unlocked Web Audio, has muted sound, or has stopped reporting reads as not ready rather than being assumed healthy.
 
 ### Coverage
 
@@ -147,9 +149,9 @@ Each result echoes `requirement` and returns `complete`, plus normalized `covere
 
 **`cue`** validates mode, authentication, request, symbol, ranges, and coverage for all three data kinds; rejects or supersedes stale work; cancels the previous replay generation; reconstructs chart and tape state from warmup through the exact target; and publishes it as one complete browser generation before attaching the controller and either staying paused or beginning playback. Reconstruction happens on a detached tape, so the previous symbol stays on screen until the new one is complete and no part of the warmup is ever delivered as incremental prints. Coverage is checked before anything changes, so an incomplete request leaves the display exactly as it was.
 
-**`sync`** carries authoritative target, play/pause, and speed. Forward drift within `sync_tolerance`, on the same symbol and the same generation, at a detailed speed, is corrected in place without a rebuild and increments `drift_corrections`. Backward movement, a symbol change, a jump beyond tolerance, a generation mismatch, or a change between detailed and fast-follow mode rebuilds deterministically. In fast follow, a forward sync advances the historical clock and the compact-bar chart without replaying detailed prints.
+**`sync`** carries authoritative target, play/pause, and speed. Forward drift within `sync_tolerance`, on the same symbol, the same generation, and the same speed, at a detailed speed, is corrected in place without a rebuild and increments `drift_corrections`. Backward movement, a symbol change, a jump beyond tolerance, a generation mismatch, a speed change, or a change between detailed and fast-follow mode rebuilds deterministically — a speed change rebuilds rather than advertising a speed that playback never adopted. In fast follow, a forward sync advances the historical clock and the compact-bar chart without replaying detailed prints.
 
-**`detach`** releases ownership and pauses, leaving the display intact and manually controllable rather than continuing autonomously.
+**`detach`** releases ownership and pauses, leaving the display intact and manually controllable rather than continuing autonomously. A detach that owns nothing is a no-op: it never pauses a session the caller did not control, so it is safe to send after a manual action has already released the controller.
 
 ```bash
 curl -sS http://127.0.0.1:8097/api/external-replay/control \
@@ -185,7 +187,7 @@ While a controller is attached the toolbar shows a compact badge:
 EXTERNAL REPLAY · AAPL · 09:35:42 · FOLLOWING
 ```
 
-with `CUEING`, `PAUSED`, `FAST FOLLOW`, `AUDIO LOCKED`, `DATA INCOMPLETE`, `ERROR · …`, and `DETACHED` as the other states. The controlling application is never named or assumed.
+with `CUEING`, `PAUSED`, `FAST FOLLOW`, `AUDIO LOCKED`, `DATA INCOMPLETE`, `ERROR · …`, and `DETACHED` as the other states. A cue that is refused before any controller attaches still reports `DATA INCOMPLETE` or the error, so a rejected cue never looks like nothing happened. The controlling application is never named or assumed.
 
 Chart and tape display settings stay usable and do not detach. A manual ticker change, replay seek, play, pause, speed change, or stop detaches external control first and then performs the manual action. The badge itself is the generic detach control.
 
@@ -206,6 +208,6 @@ A `409` for incomplete data returns the exact missing intervals per data kind an
 
 - Control is local HTTP, not a durable distributed coordination protocol.
 - Fast follow advances when the controller sends authoritative sync anchors; it does not extrapolate indefinitely after controller loss.
-- Massive aggregate requests are bounded to the provider's 50,000-base-aggregate response limit; split very long ranges into explicit downloads.
+- Massive aggregate requests are bounded to the provider's 50,000-base-aggregate response limit. A range that exceeds one response is rejected with an explicit error rather than truncated; split it into smaller explicit downloads.
 - Audio readiness is browser-local and reports the most recent tab that reported, not every open tab.
 - `scripts/browser-check.mjs` measures Live Rewind's paint budget against a steadily fed live tape. Run it against an ordinary replay; the ratio it asserts is not meaningful while an external cue has pre-loaded a large warmup into the same session.

@@ -315,3 +315,109 @@ func TestCoverageRecordsListCompletedDownloads(t *testing.T) {
 		t.Fatalf("filtered = %+v err=%v", filtered, err)
 	}
 }
+
+// Invalidation must only ever remove the window it was asked about. Every other
+// completed download has to survive with an accurate row count, because the
+// caller deletes the underlying rows immediately afterwards and a lost interval
+// would silently downgrade real data to "never downloaded".
+func TestInvalidateCoverageKeepsUnrelatedAndNeighbouringIntervals(t *testing.T) {
+	database := testDatabase(t)
+	ctx := context.Background()
+	minute := easternMinute(t, 2026, time.July, 2, 9, 30)
+	for _, record := range []Coverage{
+		{Symbol: "AAPL", Provider: "massive", Kind: "trades", StartUS: minute, EndUS: minute + 10*minuteSizeUS},
+		{Symbol: "AAPL", Provider: "massive", Kind: "quotes", StartUS: minute, EndUS: minute + 10*minuteSizeUS},
+		{Symbol: "NVDA", Provider: "massive", Kind: "trades", StartUS: minute, EndUS: minute + 10*minuteSizeUS},
+		{Symbol: "AAPL", Provider: "ibkr", Kind: "trades", StartUS: minute, EndUS: minute + 10*minuteSizeUS},
+	} {
+		if err := database.MarkCoverage(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An interval that merely touches the invalidated window's lower edge.
+	if err := database.MarkCoverage(ctx, Coverage{
+		Symbol: "AAPL", Provider: "massive", Kind: "trades",
+		StartUS: minute - 5*minuteSizeUS, EndUS: minute - 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.InvalidateCoverage(ctx, "AAPL", "massive", "trades", minute+2*minuteSizeUS, minute+4*minuteSizeUS); err != nil {
+		t.Fatal(err)
+	}
+
+	_, missing, err := database.CoverageIntervals(ctx, "AAPL", "massive", "trades", minute, minute+10*minuteSizeUS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 1 || missing[0].StartUS != minute+2*minuteSizeUS || missing[0].EndUS != minute+4*minuteSizeUS {
+		t.Fatalf("missing = %+v", missing)
+	}
+	// The adjacent interval never overlapped the window and must be untouched.
+	if complete, err := database.HasCoverage(ctx, "AAPL", "massive", "trades", minute-5*minuteSizeUS, minute-1); err != nil || !complete {
+		t.Fatalf("the adjacent interval was disturbed: complete=%v err=%v", complete, err)
+	}
+	for _, other := range []struct{ symbol, provider, kind string }{
+		{"AAPL", "massive", "quotes"}, {"NVDA", "massive", "trades"}, {"AAPL", "ibkr", "trades"},
+	} {
+		complete, err := database.HasCoverage(ctx, other.symbol, other.provider, other.kind, minute, minute+10*minuteSizeUS)
+		if err != nil || !complete {
+			t.Fatalf("invalidation leaked to %+v: complete=%v err=%v", other, complete, err)
+		}
+	}
+}
+
+// A download that deletes rows and then fails must leave coverage describing
+// only what is still durable, which is what invalidating first buys.
+func TestInvalidateThenFailedReplacementLeavesNoFalseCoverage(t *testing.T) {
+	database := testDatabase(t)
+	ctx := context.Background()
+	minute := easternMinute(t, 2026, time.July, 2, 9, 30)
+	window := Coverage{Symbol: "AAPL", Provider: "massive", Kind: "trades", StartUS: minute, EndUS: minute + 5*minuteSizeUS, RowCount: 2}
+	if err := database.MarkCoverage(ctx, window); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.InsertTrades(ctx, []TradeRecord{
+		{Symbol: "AAPL", EventUS: minute + 1e6, MarketTimeUS: minute + 1e6, Price: 10, Size: 5, Source: "historical", Provider: "massive"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The downloader's order: drop the claim, then the rows. The replacement
+	// never arrives.
+	if err := database.InvalidateCoverage(ctx, "AAPL", "massive", "trades", minute, minute+5*minuteSizeUS); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DeleteRange(ctx, "AAPL", "historical", "massive", minute, minute+5*minuteSizeUS); err != nil {
+		t.Fatal(err)
+	}
+	complete, err := database.HasCoverage(ctx, "AAPL", "massive", "trades", minute, minute+5*minuteSizeUS)
+	if err != nil || complete {
+		t.Fatalf("a failed replacement must not stay covered: complete=%v err=%v", complete, err)
+	}
+	records, err := database.CoverageRecords(ctx, "AAPL", "massive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("stale coverage survived: %+v", records)
+	}
+}
+
+// Invalidating a window nothing has ever covered must be a no-op rather than an
+// error, so a first download can call it unconditionally.
+func TestInvalidateCoverageOnAnUncoveredWindowIsANoOp(t *testing.T) {
+	database := testDatabase(t)
+	ctx := context.Background()
+	if err := database.InvalidateCoverage(ctx, "AAPL", "massive", "trades", 1000, 2000); err != nil {
+		t.Fatal(err)
+	}
+	records, err := database.CoverageRecords(ctx, "", "")
+	if err != nil || len(records) != 0 {
+		t.Fatalf("records = %+v err = %v", records, err)
+	}
+	if err := database.InvalidateCoverage(ctx, "AAPL", "nasdaq", "trades", 1000, 2000); err == nil {
+		t.Fatal("an unknown provider must be rejected rather than silently resolved")
+	}
+	if err := database.InvalidateCoverage(ctx, "AAPL", "massive", "candles", 1000, 2000); err == nil {
+		t.Fatal("an unknown data kind must be rejected")
+	}
+}

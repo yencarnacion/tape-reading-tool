@@ -113,7 +113,12 @@ try {
         locked: badge({ ...base, state: 'following' }, false, true, 'AAPL'),
         mutedLock: badge({ ...base, state: 'following' }, false, false, 'AAPL'),
         failed: badge({ ...base, state: 'error', error: 'cue superseded' }, true, true, 'AAPL'),
-        detached: badge({ attached: false, state: 'detached' }, true, true, 'AAPL')
+        detached: badge({ attached: false, state: 'detached' }, true, true, 'AAPL'),
+        // A first cue that is refused never attaches. The operator still has to
+        // be told, or a rejected cue is indistinguishable from no cue at all.
+        refusedFirstCue: badge({ ...base, attached: false, state: 'data_incomplete' }, true, true, 'AAPL'),
+        failedFirstCue: badge({ ...base, attached: false, state: 'error', error: 'no such symbol' }, true, true, 'AAPL'),
+        idleUnattached: badge({ attached: false, state: '' }, true, true, 'AAPL')
       };
     })()`, returnByValue: true
   });
@@ -127,8 +132,14 @@ try {
       throw new Error(`external badge ${key} failed: ${JSON.stringify(externalBadge)}`);
     }
   }
-  if (externalBadge.idle.visible) {
+  if (externalBadge.idle.visible || externalBadge.idleUnattached.visible) {
     throw new Error(`the external badge must stay hidden without a controller: ${JSON.stringify(externalBadge.idle)}`);
+  }
+  if (!externalBadge.refusedFirstCue.visible || externalBadge.refusedFirstCue.label !== 'DATA INCOMPLETE') {
+    throw new Error(`a refused first cue must still be reported: ${JSON.stringify(externalBadge.refusedFirstCue)}`);
+  }
+  if (!externalBadge.failedFirstCue.visible || !externalBadge.failedFirstCue.label.startsWith('ERROR')) {
+    throw new Error(`a failed first cue must still be reported: ${JSON.stringify(externalBadge.failedFirstCue)}`);
   }
   if (!externalBadge.failed.label.startsWith('ERROR')) {
     throw new Error(`external badge error state failed: ${JSON.stringify(externalBadge.failed)}`);

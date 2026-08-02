@@ -805,3 +805,59 @@ func TestTransportOnlySyncPublishesTheNewReplayGeneration(t *testing.T) {
 		t.Fatalf("control generation=%v replay generation=%d", control["generation"], after)
 	}
 }
+
+// A detach only releases what the caller owns. Pausing an operator's manual
+// replay on behalf of a controller that never attached would let any local
+// caller reach into a session it does not control.
+func TestDetachWithoutOwnershipLeavesAManualReplayAlone(t *testing.T) {
+	fixture := newExternalFixture(t, nil)
+	if err := fixture.replay.Start(feed.ReplayRequest{
+		Symbol: "AAPL", Source: "historical", Provider: "massive",
+		StartUS: fixture.baseUS, EndUS: fixture.baseUS + 60*int64(time.Second/time.Microsecond), Speed: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if state := fixture.replay.Status().State; state != "replaying" {
+		t.Fatalf("manual replay state = %s", state)
+	}
+	detach := map[string]any{
+		"protocol_version": 1, "controller_session_id": "never-attached", "sequence": 1, "action": "detach",
+	}
+	if code := fixture.control(t, detach, nil, "").Code; code != http.StatusOK {
+		t.Fatalf("detach = %d", code)
+	}
+	if state := fixture.replay.Status().State; state != "replaying" {
+		t.Fatalf("an unowned detach paused the operator's manual replay: state = %s", state)
+	}
+	// Nothing was attached, so nothing is reported as detached either.
+	if control := fixture.controlState(t); control["attached"] != false || control["state"] == externalStateDetached {
+		t.Fatalf("an unowned detach invented a session: %+v", control)
+	}
+}
+
+// A real detach still pauses, and repeating it stays safe.
+func TestDetachPausesTheSessionItOwnsAndIsRepeatable(t *testing.T) {
+	fixture := newExternalFixture(t, nil)
+	if code := fixture.control(t, fixture.cue("AAPL", 1, 20*time.Second, true, 1), nil, "").Code; code != http.StatusOK {
+		t.Fatalf("cue = %d", code)
+	}
+	if state := fixture.replay.Status().State; state != "replaying" {
+		t.Fatalf("replay state = %s", state)
+	}
+	detach := map[string]any{
+		"protocol_version": 1, "controller_session_id": "session-a", "sequence": 2, "action": "detach",
+	}
+	if code := fixture.control(t, detach, nil, "").Code; code != http.StatusOK {
+		t.Fatalf("detach = %d", code)
+	}
+	if state := fixture.replay.Status().State; state != "paused" {
+		t.Fatalf("detach did not pause the session it owned: %s", state)
+	}
+	if control := fixture.controlState(t); control["attached"] != false || control["state"] != externalStateDetached {
+		t.Fatalf("control = %+v", control)
+	}
+	detach["sequence"] = 3
+	if code := fixture.control(t, detach, nil, "").Code; code != http.StatusOK {
+		t.Fatalf("a repeated detach must stay safe: %d", code)
+	}
+}

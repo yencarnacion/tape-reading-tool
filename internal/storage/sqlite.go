@@ -621,6 +621,15 @@ func (d *Database) InvalidateCoverage(ctx context.Context, symbol, provider, kin
 			remainders = append(remainders, remainder{endUS + 1, existingEnd, completed})
 		}
 	}
+	// Rows.Close reports the driver's close error, never the iteration error, so
+	// Err has to be read separately. Without this a truncated read would produce
+	// short remainders and the delete below would still commit, destroying
+	// coverage for data that is still in the database.
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		tx.Rollback()
+		return err
+	}
 	if err := rows.Close(); err != nil {
 		tx.Rollback()
 		return err
@@ -902,6 +911,12 @@ func (d *Database) MinuteBars(ctx context.Context, symbol, source, provider stri
 				return nil, err
 			}
 			cached[b.TimeUS] = b
+		}
+		// Close does not surface an iteration error, and silently dropping cached
+		// bars would quietly shorten the chart instead of failing the request.
+		if err := barRows.Err(); err != nil {
+			barRows.Close()
+			return nil, err
 		}
 		if err := barRows.Close(); err != nil {
 			return nil, err

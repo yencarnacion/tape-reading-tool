@@ -216,6 +216,8 @@ func (s *Server) handleExternalReplayControl(w http.ResponseWriter, r *http.Requ
 	switch request.Action {
 	case "detach":
 		s.releaseExternal(replay, externalStateDetached)
+		// Reporting OK either way keeps detach idempotent: a controller that has
+		// already been released by a manual action can retry safely.
 		writeJSON(w, http.StatusOK, s.externalStatus())
 		return
 	case "cue", "sync":
@@ -398,15 +400,21 @@ func (s *Server) recordExternalError(message string) {
 }
 
 // releaseExternal drops ownership and leaves the display intact. Pausing is
-// deliberate: an autonomous continuation after the controller is gone would be
-// ambiguous about who is driving.
-func (s *Server) releaseExternal(replay *feed.Replay, state string) {
-	if replay != nil {
+// deliberate on a real detach: an autonomous continuation after the controller
+// is gone would be ambiguous about who is driving. A detach that owned nothing
+// is a no-op, because pausing there would let any caller reach into a manual
+// session it never controlled.
+func (s *Server) releaseExternal(replay *feed.Replay, state string) bool {
+	s.externalMu.Lock()
+	attached := s.external.Attached
+	if attached {
+		s.external = externalReplayState{State: state}
+	}
+	s.externalMu.Unlock()
+	if attached && replay != nil {
 		_ = replay.Pause()
 	}
-	s.externalMu.Lock()
-	s.external = externalReplayState{State: state}
-	s.externalMu.Unlock()
+	return attached
 }
 
 func (s *Server) handleCoverageCheck(w http.ResponseWriter, r *http.Request) {

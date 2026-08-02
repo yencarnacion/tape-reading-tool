@@ -1927,8 +1927,15 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
   function externalBadge(control, audioReady, audioEnabled, fallbackSymbol) {
     const state = String(control?.state || '').toLowerCase();
     const attached = Boolean(control?.attached);
-    if (!attached && state !== 'detached') return { visible: false, label: '', text: '', suppressed: false };
-    if (!attached) return { visible: true, label: 'DETACHED', text: 'EXTERNAL REPLAY · DETACHED', suppressed: false };
+    // A controller whose first cue is rejected never attaches. Those states still
+    // have to reach the operator, or a refused cue looks like nothing happened.
+    const reportedWhileUnattached = ['detached', 'data_incomplete', 'error', 'cueing'];
+    if (!attached && !reportedWhileUnattached.includes(state)) {
+      return { visible: false, label: '', text: '', suppressed: false };
+    }
+    if (!attached && state === 'detached') {
+      return { visible: true, label: 'DETACHED', text: 'EXTERNAL REPLAY · DETACHED', suppressed: false };
+    }
     const fast = Boolean(control?.fast_follow);
     let label = state.replaceAll('_', ' ').toUpperCase();
     if (control?.error && state === 'error') label = `ERROR · ${String(control.error).toUpperCase()}`;
