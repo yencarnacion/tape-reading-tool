@@ -71,19 +71,26 @@ func (r *Replay) Cue(ctx context.Context, request ReplayRequest, warmupUS, targe
 	r.generation++
 	generation := r.generation
 	r.mu.Unlock()
+	stage := r.store.PrepareRebuild(request.Symbol)
+	if stage == nil {
+		return CueReport{}, fmt.Errorf("invalid cue symbol")
+	}
 
 	rows, err := r.database.Events(ctx, request.Symbol, request.Source, request.Provider, warmupUS, targetUS)
 	if err != nil {
 		return CueReport{}, err
 	}
 	defer rows.Close()
-	events := make([]storage.Event, 0, 8192)
+	cursor := replayCursor{}
+	rowCount := 0
 	for rows.Next() {
 		event, scanErr := storage.ScanEvent(rows)
 		if scanErr != nil {
 			return CueReport{}, scanErr
 		}
-		events = append(events, event)
+		r.applyEventTo(stage, event)
+		cursor = replayCursor{eventUS: event.EventUS, kind: event.Kind, id: event.ID, valid: true}
+		rowCount++
 	}
 	if err := rows.Err(); err != nil {
 		return CueReport{}, err
@@ -94,13 +101,10 @@ func (r *Replay) Cue(ctx context.Context, request ReplayRequest, warmupUS, targe
 		r.mu.Unlock()
 		return CueReport{}, fmt.Errorf("cue superseded by a newer generation")
 	}
-	cursor := replayCursor{}
-	r.store.Rebuild(request.Symbol, func(sink tape.Sink) {
-		for _, event := range events {
-			r.applyEventTo(sink, event)
-			cursor = replayCursor{eventUS: event.EventUS, kind: event.Kind, id: event.ID, valid: true}
-		}
-	})
+	if !stage.Commit() {
+		r.mu.Unlock()
+		return CueReport{}, fmt.Errorf("cue superseded by a newer tape generation")
+	}
 	r.request = request
 	r.cursor = cursor
 	r.resumeUS = targetUS
@@ -118,7 +122,7 @@ func (r *Replay) Cue(ctx context.Context, request ReplayRequest, warmupUS, targe
 		r.launch(request, targetUS, cursor, "replaying")
 		_, _, generation, _ = r.Position()
 	}
-	report := CueReport{Generation: generation, Rows: len(events), Duration: time.Since(started), PositionUS: targetUS}
+	report := CueReport{Generation: generation, Rows: rowCount, Duration: time.Since(started), PositionUS: targetUS}
 	log.Printf("external cue symbol=%s target_us=%d warmup_us=%d rows=%d generation=%d playing=%v duration=%s",
 		request.Symbol, targetUS, warmupUS, report.Rows, report.Generation, playing, report.Duration.Round(time.Millisecond))
 	return report, nil

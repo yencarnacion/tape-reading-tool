@@ -379,6 +379,11 @@ func (s *Server) handleTicker(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ticker must be 1-16 letters, digits, dot, or hyphen", http.StatusBadRequest)
 		return
 	}
+	// Manual symbol changes and external cues share one operation lock. Without
+	// it, a cue that was already rebuilding could publish and reattach after this
+	// manual action had detached, taking control back from the operator.
+	s.externalControlMu.Lock()
+	defer s.externalControlMu.Unlock()
 	s.detachExternalForManualAction()
 	s.store.Activate(symbol)
 	s.feed.SetSymbol(symbol)
@@ -619,6 +624,10 @@ func (s *Server) handleReplay(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	// Keep detach plus the requested transport action atomic with respect to an
+	// external cue/sync/detach operation.
+	s.externalControlMu.Lock()
+	defer s.externalControlMu.Unlock()
 	s.detachExternalForManualAction()
 	var err error
 	switch strings.ToLower(request.Action) {

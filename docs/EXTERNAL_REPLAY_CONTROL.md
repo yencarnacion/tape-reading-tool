@@ -191,6 +191,8 @@ with `CUEING`, `PAUSED`, `FAST FOLLOW`, `AUDIO LOCKED`, `DATA INCOMPLETE`, `ERRO
 
 Chart and tape display settings stay usable and do not detach. A manual ticker change, replay seek, play, pause, speed change, or stop detaches external control first and then performs the manual action. The badge itself is the generic detach control.
 
+Manual ticker and transport operations are ordered against whole external control operations. If a cue is already reconstructing, the manual action completes after that cue and remains authoritative; an older cue cannot publish later and retake control. Cue reconstruction streams its database cursor into a detached tape whose memory is bounded by the configured tape ring, then atomically publishes that completed stage.
+
 ## Errors
 
 | status | meaning |

@@ -256,6 +256,72 @@ type storeSink struct {
 	symbol string
 }
 
+// RebuildStage is a detached, ring-bounded symbol tape. Callers can stream an
+// arbitrarily busy warmup into it without retaining the event set in memory,
+// then publish the completed state in one atomic swap.
+type RebuildStage struct {
+	store    *Store
+	symbol   string
+	previous *symbolTape
+	tape     *symbolTape
+}
+
+func (s *Store) PrepareRebuild(symbol string) *RebuildStage {
+	symbol = NormalizeSymbol(symbol)
+	if symbol == "" {
+		return nil
+	}
+	s.mu.RLock()
+	previous := s.tapes[symbol]
+	s.mu.RUnlock()
+	staged := newSymbolTape(symbol, s.ringSize)
+	if previous != nil {
+		previous.mu.RLock()
+		staged.generation = previous.generation + 1
+		staged.nextSeq = previous.nextSeq
+		staged.quote.PreviousClose = previous.quote.PreviousClose
+		previous.mu.RUnlock()
+	}
+	return &RebuildStage{store: s, symbol: symbol, previous: previous, tape: staged}
+}
+
+func (r *RebuildStage) UpdateQuote(bid, ask, bidSize, askSize float64) {
+	r.tape.UpdateQuote(bid, ask, bidSize, askSize)
+}
+
+func (r *RebuildStage) AddTrade(exchangeTime, received time.Time, price, size float64) {
+	r.tape.AddTrade(exchangeTime, received, price, size)
+}
+
+func (r *RebuildStage) AddRecordedTrade(exchangeTime, received time.Time, price, size float64, class Classification, side int8, bid, ask float64) {
+	r.tape.AddRecordedTrade(exchangeTime, received, price, size, class, side, bid, ask)
+}
+
+// Commit publishes only if the symbol still points at the tape this stage was
+// based on. That protects callers beyond Replay's own generation check from an
+// older staged rebuild overwriting a newer publication.
+func (r *RebuildStage) Commit() bool {
+	if r == nil || r.store == nil || r.tape == nil {
+		return false
+	}
+	s := r.store
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tapes[r.symbol] != r.previous {
+		return false
+	}
+	s.tapes[r.symbol] = r.tape
+	s.active = r.symbol
+	history := []string{r.symbol}
+	for _, item := range s.history {
+		if item != r.symbol && len(history) < s.historySize {
+			history = append(history, item)
+		}
+	}
+	s.history = history
+	return true
+}
+
 func (w storeSink) UpdateQuote(bid, ask, bidSize, askSize float64) {
 	w.store.UpdateQuote(w.symbol, bid, ask, bidSize, askSize)
 }
@@ -276,36 +342,14 @@ func (w storeSink) AddRecordedTrade(exchangeTime, received time.Time, price, siz
 // Sequence numbers continue past the replaced tape so a stale delta can never be
 // mistaken for a new one.
 func (s *Store) Rebuild(symbol string, apply func(Sink)) bool {
-	symbol = NormalizeSymbol(symbol)
-	if symbol == "" {
+	stage := s.PrepareRebuild(symbol)
+	if stage == nil {
 		return false
 	}
-	s.mu.RLock()
-	previous := s.tapes[symbol]
-	s.mu.RUnlock()
-	staged := newSymbolTape(symbol, s.ringSize)
-	if previous != nil {
-		previous.mu.RLock()
-		staged.generation = previous.generation + 1
-		staged.nextSeq = previous.nextSeq
-		staged.quote.PreviousClose = previous.quote.PreviousClose
-		previous.mu.RUnlock()
-	}
 	if apply != nil {
-		apply(staged)
+		apply(stage)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.tapes[symbol] = staged
-	s.active = symbol
-	history := []string{symbol}
-	for _, item := range s.history {
-		if item != symbol && len(history) < s.historySize {
-			history = append(history, item)
-		}
-	}
-	s.history = history
-	return true
+	return stage.Commit()
 }
 
 // Clear resets one symbol without reusing sequence numbers. Generation tells

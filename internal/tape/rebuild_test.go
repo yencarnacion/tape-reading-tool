@@ -155,6 +155,30 @@ func TestRebuildPreservesThePreviousClose(t *testing.T) {
 	}
 }
 
+func TestPreparedRebuildIsRingBoundedAndStaleStageCannotPublish(t *testing.T) {
+	store := NewStore("AAPL", 100, 8)
+	at := time.Date(2026, 7, 2, 9, 30, 0, 0, time.UTC)
+	older := store.PrepareRebuild("AAPL")
+	newer := store.PrepareRebuild("AAPL")
+	for i := range 10_000 {
+		newer.AddTrade(at.Add(time.Duration(i)*time.Microsecond), at, 100+float64(i%5), 1)
+	}
+	if !newer.Commit() {
+		t.Fatal("newer stage did not publish")
+	}
+	older.AddTrade(at, at, 1, 1)
+	if older.Commit() {
+		t.Fatal("a stage based on the replaced tape overwrote the newer rebuild")
+	}
+	snapshot := store.Snapshot("AAPL", 0)
+	if len(snapshot.Trades) != 100 {
+		t.Fatalf("staged warmup retained %d trades, want ring capacity 100", len(snapshot.Trades))
+	}
+	if snapshot.Trades[len(snapshot.Trades)-1].Price == 1 {
+		t.Fatal("stale stage content was published")
+	}
+}
+
 func TestSymbolSinkWritesToThePublishedTape(t *testing.T) {
 	store := NewStore("AAPL", 1024, 8)
 	at := time.Date(2026, 7, 2, 9, 30, 0, 0, time.UTC)

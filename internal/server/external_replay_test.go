@@ -622,6 +622,45 @@ func TestManualTransportAndTickerDetachButDisplaySettingsDoNot(t *testing.T) {
 	}
 }
 
+func TestManualTickerWaitsForInFlightExternalControlOperation(t *testing.T) {
+	fixture := newExternalFixture(t, nil)
+	fixture.server.externalMu.Lock()
+	fixture.server.external = externalReplayState{Attached: true, ControllerSessionID: "session-a", State: externalStatePaused}
+	fixture.server.externalMu.Unlock()
+
+	// Stand in for a cue that has passed ownership checks and is still rebuilding.
+	fixture.server.externalControlMu.Lock()
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		request := httptest.NewRequest(http.MethodPost, "/api/ticker", bytes.NewBufferString(`{"symbol":"NVDA"}`))
+		response := httptest.NewRecorder()
+		fixture.server.handleTicker(response, request)
+		done <- response
+	}()
+	select {
+	case <-done:
+		fixture.server.externalControlMu.Unlock()
+		t.Fatal("manual ticker change overtook an in-flight external operation")
+	case <-time.After(20 * time.Millisecond):
+	}
+	fixture.server.externalControlMu.Unlock()
+
+	select {
+	case response := <-done:
+		if response.Code != http.StatusOK {
+			t.Fatalf("ticker = %d: %s", response.Code, response.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("manual ticker change remained blocked")
+	}
+	if fixture.store.Active() != "NVDA" {
+		t.Fatalf("active symbol = %s", fixture.store.Active())
+	}
+	if control := fixture.controlState(t); control["attached"] != false || control["state"] != externalStateDetached {
+		t.Fatalf("manual ticker did not finish detached: %+v", control)
+	}
+}
+
 func TestAudioReadinessIsReportedRatherThanAssumed(t *testing.T) {
 	fixture := newExternalFixture(t, nil)
 	if status := fixture.status(t); status["ui_audio_ready"] != false {
