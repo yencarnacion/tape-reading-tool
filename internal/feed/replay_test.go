@@ -45,7 +45,7 @@ func TestReplayPauseResumeSeekAndHistoricalQuoteClassification(t *testing.T) {
 		t.Fatal(err)
 	}
 	seekUS := base + 5e6
-	if err := replay.Seek(seekUS); err != nil {
+	if err := replay.SeekTo(seekUS); err != nil {
 		t.Fatal(err)
 	}
 	if err := replay.Pause(); err != nil {
@@ -224,4 +224,191 @@ func TestResetSubscriptionsRejectsStaleRequestIDs(t *testing.T) {
 	if len(f.subs) != 0 {
 		t.Fatalf("subscriptions survived reconnect: %+v", f.subs)
 	}
+}
+
+func newCueFixture(t *testing.T) (*Replay, *tape.Store, int64) {
+	t.Helper()
+	cfg := config.Defaults().Storage
+	cfg.Path = filepath.Join(t.TempDir(), "replay.db")
+	cfg.FlushInterval = "5ms"
+	database, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	base := time.Date(2026, 7, 2, 13, 30, 0, 0, time.UTC).UnixMicro()
+	trades := make([]storage.TradeRecord, 0, 60)
+	for i := range 60 {
+		at := base + int64(i)*int64(time.Second/time.Microsecond)
+		trades = append(trades, storage.TradeRecord{
+			Symbol: "AAPL", EventUS: at, MarketTimeUS: at, ExchangeTimeMS: at / 1000,
+			Price: 100 + float64(i)*0.01, Size: 100, Source: "historical", Provider: "massive",
+		})
+	}
+	if err := database.InsertTrades(context.Background(), trades); err != nil {
+		t.Fatal(err)
+	}
+	for range 200 {
+		dataRange, err := database.DataRange(context.Background(), "AAPL", "historical", "massive")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dataRange.Trades >= 60 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	store := tape.NewStore("AAPL", 1000, 4)
+	return NewReplay(database, store, "historical", "massive", 1), store, base
+}
+
+func cueRequest(base int64) ReplayRequest {
+	return ReplayRequest{
+		Symbol: "AAPL", Source: "historical", Provider: "massive",
+		StartUS: base, EndUS: base + 60*int64(time.Second/time.Microsecond), Speed: 1,
+	}
+}
+
+// A cue cancels the running generation before it reads. If the read then fails -
+// a controller that disconnects mid-cue cancels the request context - the status
+// must stop claiming the replay is still moving, because both a polling
+// controller and the operator's clock would otherwise be told playback continues.
+func TestFailedCueStopsReportingPlaybackAndStaysResumable(t *testing.T) {
+	replay, _, base := newCueFixture(t)
+	if _, err := replay.Cue(context.Background(), cueRequest(base), base, base+10e6, true); err != nil {
+		t.Fatal(err)
+	}
+	waitReplayState(t, replay, "replaying")
+	playingAt := replay.Status().PositionUS
+
+	dead, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := replay.Cue(dead, cueRequest(base), base, base+20e6, true); err == nil {
+		t.Fatal("a cue on a cancelled context must fail")
+	}
+	time.Sleep(120 * time.Millisecond)
+
+	status := replay.Status()
+	if status.State == "replaying" {
+		t.Fatalf("status still claims playback after the cue failed: %+v", status)
+	}
+	if status.PositionUS < playingAt {
+		t.Fatalf("the failed cue rewound the reported position: %d then %d", playingAt, status.PositionUS)
+	}
+	if status.Message == "" {
+		t.Fatal("the failure was not explained")
+	}
+	// The session is left recoverable rather than wedged.
+	if err := replay.Resume(); err != nil {
+		t.Fatalf("resume after a failed cue: %v", err)
+	}
+	waitReplayState(t, replay, "replaying")
+}
+
+// A failure must never demote a newer generation that already took ownership.
+func TestFailedCueDoesNotDisturbANewerCue(t *testing.T) {
+	replay, store, base := newCueFixture(t)
+	if _, err := replay.Cue(context.Background(), cueRequest(base), base, base+10e6, true); err != nil {
+		t.Fatal(err)
+	}
+	waitReplayState(t, replay, "replaying")
+
+	// A newer cue lands while an older one is about to report its failure.
+	if _, err := replay.Cue(context.Background(), cueRequest(base), base, base+30e6, false); err != nil {
+		t.Fatal(err)
+	}
+	generation := replay.Status().Generation
+	replay.abortCue(generation-1, "stale failure")
+
+	status := replay.Status()
+	if status.Generation != generation || status.Message == "stale failure" {
+		t.Fatalf("an older cue's failure overwrote the newer one: %+v", status)
+	}
+	if feedStatus := store.Status(); feedStatus.Message == "stale failure" || feedStatus.State != status.State {
+		t.Fatalf("an older cue's failure overwrote the newer feed status: %+v", feedStatus)
+	}
+	if trades := store.Snapshot("AAPL", 0).Trades; len(trades) != 31 {
+		t.Fatalf("the newer cue's tape was disturbed: %d trades", len(trades))
+	}
+}
+
+// finish() runs on the play goroutine, which no lock orders against an external
+// cue. If it published the feed status after releasing the state lock, a cue
+// landing in between would be overwritten by an already stale status and the
+// browser would keep rendering a replay that had moved on.
+func TestCompletedPlaybackDoesNotOverwriteANewerFeedStatus(t *testing.T) {
+	replay, store, base := newCueFixture(t)
+	second := int64(time.Second / time.Microsecond)
+	if err := replay.Start(ReplayRequest{
+		Symbol: "AAPL", Source: "historical", Provider: "massive",
+		StartUS: base, EndUS: base + 2*second, Speed: 20,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The completed state is set under the lock, so observing it means finish is
+	// at exactly the point where an unordered publish would still be pending.
+	deadline := time.Now().Add(5 * time.Second)
+	for replay.Status().State != "complete" {
+		if time.Now().After(deadline) {
+			t.Fatal("replay never completed")
+		}
+		time.Sleep(50 * time.Microsecond)
+	}
+	if _, err := replay.Cue(context.Background(), cueRequest(base), base, base+10*second, true); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(60 * time.Millisecond)
+
+	state := replay.Status()
+	if feed := store.Status(); feed.State != state.State {
+		t.Fatalf("the browser sees %q/%q while the controller sees %q/%q",
+			feed.State, feed.Message, state.State, state.Message)
+	}
+}
+
+// Every transition must leave the browser's status agreeing with the replay
+// state once things settle, whichever order the transitions arrive in.
+func TestFeedStatusAgreesWithReplayStateAcrossTransitions(t *testing.T) {
+	replay, store, base := newCueFixture(t)
+	second := int64(time.Second / time.Microsecond)
+	agree := func(t *testing.T, step string) {
+		t.Helper()
+		state := replay.Status()
+		feed := store.Status()
+		if feed.State != state.State {
+			t.Fatalf("%s: browser %q/%q, controller %q/%q", step, feed.State, feed.Message, state.State, state.Message)
+		}
+	}
+	if _, err := replay.Cue(context.Background(), cueRequest(base), base, base+5*second, false); err != nil {
+		t.Fatal(err)
+	}
+	agree(t, "paused cue")
+	if _, err := replay.Cue(context.Background(), cueRequest(base), base, base+10*second, true); err != nil {
+		t.Fatal(err)
+	}
+	waitReplayState(t, replay, "replaying")
+	agree(t, "playing cue")
+	if err := replay.Pause(); err != nil {
+		t.Fatal(err)
+	}
+	agree(t, "pause")
+	if err := replay.Track("AAPL", base+15*second); err != nil {
+		t.Fatal(err)
+	}
+	agree(t, "fast follow")
+	if feed := store.Status(); feed.Message != "fast follow" {
+		t.Fatalf("fast follow: browser retained stale message %q", feed.Message)
+	}
+	if err := replay.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	waitReplayState(t, replay, "replaying")
+	agree(t, "resume")
+	if err := replay.SeekTo(base + 20*second); err != nil {
+		t.Fatal(err)
+	}
+	waitReplayState(t, replay, "replaying")
+	agree(t, "seek")
+	replay.Stop()
+	agree(t, "stop")
 }

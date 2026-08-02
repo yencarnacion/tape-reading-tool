@@ -24,7 +24,7 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     replayMarketPanel: $('replayMarketPanel'), replayChart: $('replayChartCanvas'), replayChartEmpty: $('replayChartEmpty'),
     dailyChart: $('dailyChartCanvas'), dailyChartEmpty: $('dailyChartEmpty'), minuteChartTab: $('minuteChartTab'), dailyChartTab: $('dailyChartTab'),
     tapePanel: $('tapePanel'), tapeRows: $('tapeRows'), sizeHeading: $('sizeHeading'),
-    tickerForm: $('tickerForm'), tickerInput: $('tickerInput'), historySelect: $('historySelect'),
+    tickerForm: $('tickerForm'), tickerInput: $('tickerInput'), historySelect: $('historySelect'), externalReplayBadge: $('externalReplayBadge'),
     historyBack: $('historyBack'), historyForward: $('historyForward'), tickSelect: $('tickSelect'),
     soundButton: $('soundButton'), replayButton: $('replayButton'), controlsButton: $('controlsButton'), connectionState: $('connectionState'),
     nbbo: $('nbbo'), bestBid: $('bestBid'), bestBidSize: $('bestBidSize'), nbboSpread: $('nbboSpread'), nbboSpreadDollars: $('nbboSpreadDollars'), bestAsk: $('bestAsk'), bestAskSize: $('bestAskSize'),
@@ -59,6 +59,7 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     navSymbols: [], navIndex: -1, lastMetricUpdate: 0,
     prefixBase: { volume: 0, buyer: 0, seller: 0, prints: 0 }, midpoints: [],
     serverClockUS: 0, serverClockAt: 0, replay: null, replayConfig: null, pendingReplayReset: false,
+    externalTargetUS: 0, reportedAudioReady: null, reportedAudioAt: 0,
     minuteBars: [], dailyBars: [], marketChartView: 'minute', dailyHistorySymbol: '', dailyHistoryPending: false, dirtyDailyChart: true,
     replayChartEndUS: 0, replayChartKey: '', dirtyReplayChart: true, marketChartEnabled: false, xtraEnabled: false,
     rvolWarmup: { symbol: '', ready: false, pending: false, attempt: 0, token: 0, timer: null, controller: null },
@@ -1398,6 +1399,7 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
 
   // Exposed solely for deterministic browser validation.
   window.__tapeReadingXtraLevels = calculateXtraLevels;
+  window.__tapeReadingExternalBadge = externalBadge;
 
   function drawDailyChart() {
     const canvas = elements.dailyChart;
@@ -1746,6 +1748,12 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
       elements.tickerInput.select();
     });
     elements.tickerInput.addEventListener('focus', () => elements.tickerInput.select());
+    elements.externalReplayBadge.addEventListener('click', async () => {
+      // Ordinary replay transport is intentionally a manual action and the
+      // server detaches ownership before applying it.
+      await replayAction({ action: 'pause' }).catch(() => {});
+      await refreshExternalReplayStatus();
+    });
     elements.historySelect.addEventListener('change', () => switchSymbol(elements.historySelect.value, true));
     elements.historyBack.addEventListener('click', () => {
       if (state.navIndex <= 0) return;
@@ -1903,6 +1911,78 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
         stepRewind(event.key === ',' ? -1 : 1);
       }
     });
+  }
+
+  // externalBadge is pure so the badge contract can be checked without a
+  // controller attached. The tape may never look current while fast-follow
+  // suppression is on, and an audio-locked session may never read as FOLLOWING.
+  // The badge is a compact toolbar chip, so it carries the market clock alone.
+  // The replay range picker keeps its own dated format.
+  function formatExternalClock(value) {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+    }).format(new Date(Number(value) / 1000));
+  }
+
+  function externalBadge(control, audioReady, audioEnabled, fallbackSymbol) {
+    const state = String(control?.state || '').toLowerCase();
+    const attached = Boolean(control?.attached);
+    // A controller whose first cue is rejected never attaches. Those states still
+    // have to reach the operator, or a refused cue looks like nothing happened.
+    const reportedWhileUnattached = ['detached', 'data_incomplete', 'error', 'cueing'];
+    if (!attached && !reportedWhileUnattached.includes(state)) {
+      return { visible: false, label: '', text: '', suppressed: false };
+    }
+    if (!attached && state === 'detached') {
+      return { visible: true, label: 'DETACHED', text: 'EXTERNAL REPLAY · DETACHED', suppressed: false };
+    }
+    const fast = Boolean(control?.fast_follow);
+    let label = state.replaceAll('_', ' ').toUpperCase();
+    if (control?.error && state === 'error') label = `ERROR · ${String(control.error).toUpperCase()}`;
+    else if (!fast && audioEnabled && !audioReady && (state === 'following' || state === 'paused')) label = 'AUDIO LOCKED';
+    const at = Number(control?.target_us) > 0 ? formatExternalClock(Number(control.target_us)) : '--:--:--';
+    const symbol = control?.symbol || fallbackSymbol || '';
+    return {
+      visible: true, label, suppressed: fast,
+      text: `EXTERNAL REPLAY · ${symbol} · ${at} · ${label}`
+    };
+  }
+
+  async function refreshExternalReplayStatus() {
+    try {
+      const response = await fetch('/api/external-replay/status', { cache: 'no-store' });
+      if (!response.ok) return;
+      const payload = await response.json();
+      const control = payload.control || {};
+      const audioEnabled = state.settings?.audio?.enabled !== false;
+      const badge = externalBadge(control, audio.ready, audioEnabled, state.symbol);
+      elements.externalReplayBadge.hidden = !badge.visible;
+      elements.tapePanel.classList.toggle('fast-follow', badge.suppressed);
+      elements.externalReplayBadge.classList.toggle('fast', badge.suppressed);
+      elements.externalReplayBadge.classList.toggle('locked', badge.label === 'AUDIO LOCKED');
+      elements.externalReplayBadge.classList.toggle('alert', badge.label.startsWith('ERROR') || badge.label === 'DATA INCOMPLETE');
+      const targetUS = Number(control.target_us) || 0;
+      if (control.attached && targetUS && targetUS !== state.externalTargetUS) {
+        state.externalTargetUS = targetUS;
+        refreshReplayRange(false).catch(() => {});
+      }
+      if (badge.visible) elements.externalReplayBadge.textContent = badge.text;
+      reportAudioReadiness(Boolean(payload.enabled));
+    } catch (_) {}
+  }
+
+  // A controller cannot see whether this tab has unlocked Web Audio, so the tab
+  // says so itself. Only the newest report is kept server side.
+  function reportAudioReadiness(enabled) {
+    if (!enabled) return;
+    const ready = Boolean(audio.ready && audio.enabled);
+    if (ready === state.reportedAudioReady && state.reportedAudioAt && Date.now() - state.reportedAudioAt < 3000) return;
+    state.reportedAudioReady = ready;
+    state.reportedAudioAt = Date.now();
+    fetch('/api/external-replay/ui', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ audio_ready: ready })
+    }).catch(() => {});
   }
 
   // Fire and forget: a display change is recorded on the receipt timeline so a
@@ -2567,6 +2647,8 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
   bindControls();
   new ResizeObserver(() => { state.dirtyChart = true; state.dirtyReplayChart = true; state.dirtyDayContext = true; state.dirtyDailyChart = true; }).observe(elements.visualStack);
   connect();
+  refreshExternalReplayStatus();
+  setInterval(refreshExternalReplayStatus, 500);
   updateNavButtons();
   updateSoundButton();
   requestAnimationFrame(animationLoop);

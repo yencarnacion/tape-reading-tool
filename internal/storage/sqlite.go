@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -75,13 +76,40 @@ CREATE TABLE IF NOT EXISTS metadata (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO metadata(key, value) VALUES ('schema_version', '3');
+CREATE TABLE IF NOT EXISTS minute_bars (
+  symbol TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  source TEXT NOT NULL,
+  minute_us INTEGER NOT NULL,
+  open REAL NOT NULL,
+  high REAL NOT NULL,
+  low REAL NOT NULL,
+  close REAL NOT NULL,
+  volume REAL NOT NULL,
+  dollar_volume REAL NOT NULL DEFAULT 0,
+  updated_us INTEGER NOT NULL,
+  PRIMARY KEY(symbol, provider, source, minute_us)
+);
+CREATE INDEX IF NOT EXISTS minute_bars_range_idx ON minute_bars(symbol, provider, source, minute_us);
+CREATE TABLE IF NOT EXISTS download_coverage (
+  id INTEGER PRIMARY KEY,
+  symbol TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  start_us INTEGER NOT NULL,
+  end_us INTEGER NOT NULL,
+  completed_us INTEGER NOT NULL,
+  row_count INTEGER NOT NULL,
+  CHECK(kind IN ('minute_bars','trades','quotes')),
+  UNIQUE(symbol, provider, kind, start_us, end_us)
+);
+CREATE INDEX IF NOT EXISTS download_coverage_range_idx ON download_coverage(symbol, provider, kind, start_us, end_us);
+INSERT OR IGNORE INTO metadata(key, value) VALUES ('schema_version', '4');
 `
 
-// SchemaVersion is the only database layout this build reads or writes. There
-// is deliberately no migration path: an older file is reported as an error and
-// never deleted or rewritten.
-const SchemaVersion = "3"
+// SchemaVersion is the current layout. Version 3 is migrated additively; other
+// historical and future versions are rejected without deleting the database.
+const SchemaVersion = "4"
 
 type TradeRecord struct {
 	Symbol       string
@@ -182,6 +210,21 @@ type MinuteBar struct {
 	DollarVolume float64 `json:"dollar_volume"`
 }
 
+type Coverage struct {
+	Symbol      string `json:"symbol"`
+	Provider    string `json:"provider"`
+	Kind        string `json:"kind"`
+	StartUS     int64  `json:"start_us"`
+	EndUS       int64  `json:"end_us"`
+	CompletedUS int64  `json:"completed_us"`
+	RowCount    int64  `json:"row_count"`
+}
+
+type Interval struct {
+	StartUS int64 `json:"start_us"`
+	EndUS   int64 `json:"end_us"`
+}
+
 type queuedRecord struct {
 	trade   *TradeRecord
 	quote   *QuoteRecord
@@ -224,13 +267,20 @@ func Open(cfg config.StorageConfig) (*Database, error) {
 		}
 	}
 	var oldVersion string
-	if err := db.QueryRow("SELECT value FROM metadata WHERE key='schema_version'").Scan(&oldVersion); err == nil && oldVersion != SchemaVersion {
+	versionErr := db.QueryRow("SELECT value FROM metadata WHERE key='schema_version'").Scan(&oldVersion)
+	if versionErr == nil && oldVersion != "3" && oldVersion != SchemaVersion {
 		db.Close()
-		return nil, fmt.Errorf("database schema %s is unsupported; delete %s and start with a fresh database", oldVersion, cfg.Path)
+		return nil, fmt.Errorf("database schema %s is unsupported by this build", oldVersion)
 	}
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("initialize sqlite schema: %w", err)
+	}
+	if versionErr == nil && oldVersion == "3" {
+		if _, err := db.Exec("UPDATE metadata SET value=? WHERE key='schema_version'", SchemaVersion); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("migrate sqlite schema 3 to %s: %w", SchemaVersion, err)
+		}
 	}
 	flush, _ := time.ParseDuration(cfg.FlushInterval)
 	result := &Database{
@@ -471,6 +521,276 @@ func (d *Database) InsertQuotes(ctx context.Context, records []QuoteRecord) erro
 	return d.writeBatch(ctx, items)
 }
 
+// UpsertMinuteBars replaces provider aggregates deterministically. Callers add
+// coverage only after the complete provider request has succeeded.
+func (d *Database) UpsertMinuteBars(ctx context.Context, symbol, provider string, bars []MinuteBar) error {
+	symbol = strings.ToUpper(strings.TrimSpace(symbol))
+	provider, err := resolveProvider(provider)
+	if err != nil {
+		return err
+	}
+	if symbol == "" {
+		return fmt.Errorf("a symbol is required")
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO minute_bars
+      (symbol,provider,source,minute_us,open,high,low,close,volume,dollar_volume,updated_us)
+      VALUES (?,?, 'historical',?,?,?,?,?,?,?,?)
+      ON CONFLICT(symbol,provider,source,minute_us) DO UPDATE SET
+      open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,
+      volume=excluded.volume,dollar_volume=excluded.dollar_volume,updated_us=excluded.updated_us`)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	defer stmt.Close()
+	now := time.Now().UnixMicro()
+	for _, b := range bars {
+		if b.TimeUS <= 0 || b.High < b.Low {
+			tx.Rollback()
+			return fmt.Errorf("invalid minute bar")
+		}
+		if _, err := stmt.ExecContext(ctx, symbol, provider, b.TimeUS, b.Open, b.High, b.Low, b.Close, b.Volume, b.DollarVolume, now); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (d *Database) MarkCoverage(ctx context.Context, c Coverage) error {
+	c.Symbol = strings.ToUpper(strings.TrimSpace(c.Symbol))
+	provider, err := resolveProvider(c.Provider)
+	if err != nil {
+		return err
+	}
+	c.Provider = provider
+	if c.Symbol == "" || !validCoverageKind(c.Kind) || c.StartUS <= 0 || c.EndUS < c.StartUS || c.RowCount < 0 {
+		return fmt.Errorf("invalid completed coverage")
+	}
+	if c.CompletedUS <= 0 {
+		c.CompletedUS = time.Now().UnixMicro()
+	}
+	_, err = d.db.ExecContext(ctx, `INSERT INTO download_coverage(symbol,provider,kind,start_us,end_us,completed_us,row_count)
+      VALUES(?,?,?,?,?,?,?) ON CONFLICT(symbol,provider,kind,start_us,end_us) DO UPDATE SET
+      completed_us=excluded.completed_us,row_count=excluded.row_count`, c.Symbol, c.Provider, c.Kind, c.StartUS, c.EndUS, c.CompletedUS, c.RowCount)
+	return err
+}
+
+// InvalidateCoverage removes a range that is about to be replaced while
+// preserving completed coverage on either side. This must happen before a
+// downloader deletes existing rows: if the replacement later fails, coverage
+// must describe the remaining durable data rather than the old successful
+// request.
+func (d *Database) InvalidateCoverage(ctx context.Context, symbol, provider, kind string, startUS, endUS int64) error {
+	provider, err := resolveProvider(provider)
+	if err != nil {
+		return err
+	}
+	symbol = strings.ToUpper(strings.TrimSpace(symbol))
+	if symbol == "" || !validCoverageKind(kind) || startUS <= 0 || endUS < startUS {
+		return fmt.Errorf("invalid coverage invalidation")
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT start_us,end_us,completed_us FROM download_coverage
+      WHERE symbol=? AND provider=? AND kind=? AND end_us>=? AND start_us<=?`,
+		symbol, provider, kind, startUS, endUS)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	type remainder struct{ start, end, completed int64 }
+	remainders := make([]remainder, 0, 4)
+	for rows.Next() {
+		var existingStart, existingEnd, completed int64
+		if err := rows.Scan(&existingStart, &existingEnd, &completed); err != nil {
+			rows.Close()
+			tx.Rollback()
+			return err
+		}
+		if existingStart < startUS {
+			remainders = append(remainders, remainder{existingStart, startUS - 1, completed})
+		}
+		if existingEnd > endUS {
+			remainders = append(remainders, remainder{endUS + 1, existingEnd, completed})
+		}
+	}
+	// Rows.Close reports the driver's close error, never the iteration error, so
+	// Err has to be read separately. Without this a truncated read would produce
+	// short remainders and the delete below would still commit, destroying
+	// coverage for data that is still in the database.
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		tx.Rollback()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM download_coverage
+      WHERE symbol=? AND provider=? AND kind=? AND end_us>=? AND start_us<=?`,
+		symbol, provider, kind, startUS, endUS); err != nil {
+		tx.Rollback()
+		return err
+	}
+	for _, item := range remainders {
+		table, timestampColumn := kind, "event_us"
+		if kind == "minute_bars" {
+			table, timestampColumn = "minute_bars", "minute_us"
+		}
+		var rowCount int64
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table+`
+		  WHERE symbol=? AND provider=? AND source='historical' AND `+timestampColumn+`>=? AND `+timestampColumn+`<=?`,
+			symbol, provider, item.start, item.end).Scan(&rowCount); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO download_coverage
+		  (symbol,provider,kind,start_us,end_us,completed_us,row_count) VALUES(?,?,?,?,?,?,?)
+		  ON CONFLICT(symbol,provider,kind,start_us,end_us) DO UPDATE SET
+		  completed_us=excluded.completed_us,row_count=excluded.row_count`,
+			symbol, provider, kind, item.start, item.end, item.completed, rowCount); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func validCoverageKind(kind string) bool {
+	return kind == "minute_bars" || kind == "trades" || kind == "quotes"
+}
+
+func (d *Database) CoverageIntervals(ctx context.Context, symbol, provider, kind string, startUS, endUS int64) (covered, missing []Interval, err error) {
+	resolved, err := resolveProvider(provider)
+	if err != nil {
+		return nil, nil, err
+	}
+	symbol = strings.ToUpper(strings.TrimSpace(symbol))
+	if symbol == "" || startUS <= 0 || endUS < startUS || !validCoverageKind(kind) {
+		return nil, nil, fmt.Errorf("invalid coverage requirement")
+	}
+	rows, err := d.db.QueryContext(ctx, `SELECT start_us,end_us FROM download_coverage
+      WHERE symbol=? AND provider=? AND kind=? AND end_us>=? AND start_us<=? ORDER BY start_us,end_us`,
+		symbol, resolved, kind, startUS, endUS)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var a, b int64
+		if err := rows.Scan(&a, &b); err != nil {
+			return nil, nil, err
+		}
+		if a < startUS {
+			a = startUS
+		}
+		if b > endUS {
+			b = endUS
+		}
+		if len(covered) == 0 || a > covered[len(covered)-1].EndUS+1 {
+			covered = append(covered, Interval{a, b})
+		} else if b > covered[len(covered)-1].EndUS {
+			covered[len(covered)-1].EndUS = b
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	next := startUS
+	for _, iv := range covered {
+		if iv.StartUS > next {
+			missing = append(missing, Interval{next, iv.StartUS - 1})
+		}
+		if iv.EndUS >= next {
+			next = iv.EndUS + 1
+		}
+	}
+	if next <= endUS {
+		missing = append(missing, Interval{next, endUS})
+	}
+	return covered, missing, nil
+}
+
+func (d *Database) HasCoverage(ctx context.Context, symbol, provider, kind string, startUS, endUS int64) (bool, error) {
+	_, missing, err := d.CoverageIntervals(ctx, symbol, provider, kind, startUS, endUS)
+	return err == nil && len(missing) == 0, err
+}
+
+// CoverageRecords lists the completed downloads themselves, which is what a
+// coverage inspection reports rather than the merged intervals.
+func (d *Database) CoverageRecords(ctx context.Context, symbol, provider string) ([]Coverage, error) {
+	query := `SELECT symbol,provider,kind,start_us,end_us,completed_us,row_count FROM download_coverage`
+	args := []any{}
+	conditions := []string{}
+	if symbol = strings.ToUpper(strings.TrimSpace(symbol)); symbol != "" {
+		conditions = append(conditions, "symbol=?")
+		args = append(args, symbol)
+	}
+	if provider = strings.TrimSpace(provider); provider != "" && !strings.EqualFold(provider, "all") {
+		resolved, err := resolveProvider(provider)
+		if err != nil {
+			return nil, err
+		}
+		conditions = append(conditions, "provider=?")
+		args = append(args, resolved)
+	}
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	rows, err := d.db.QueryContext(ctx, query+" ORDER BY symbol,provider,kind,start_us", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	records := make([]Coverage, 0, 32)
+	for rows.Next() {
+		var record Coverage
+		if err := rows.Scan(&record.Symbol, &record.Provider, &record.Kind, &record.StartUS, &record.EndUS, &record.CompletedUS, &record.RowCount); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+// MinuteBarRange reports the cached-bar extent inside a window. The replay chart
+// uses it to reach back to context that has no detailed prints, such as a
+// premarket session or the previous trading day.
+func (d *Database) MinuteBarRange(ctx context.Context, symbol, provider string, startUS, endUS int64) (firstUS, lastUS, count int64, err error) {
+	resolved, err := resolveProvider(provider)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	var first, last, total sql.NullInt64
+	err = d.db.QueryRowContext(ctx, `SELECT MIN(minute_us),MAX(minute_us),COUNT(*) FROM minute_bars
+      WHERE symbol=? AND source='historical' AND provider=? AND minute_us>=? AND minute_us<=?`,
+		strings.ToUpper(strings.TrimSpace(symbol)), resolved, startUS, endUS).Scan(&first, &last, &total)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return first.Int64, last.Int64, total.Int64, nil
+}
+
+// coveredMinute answers the per-minute precedence question from one merged
+// interval list instead of one query per minute, which keeps a full session
+// chart to a single bounded coverage read.
+func coveredMinute(covered []Interval, minuteUS, minuteSize int64) bool {
+	for _, interval := range covered {
+		if interval.StartUS <= minuteUS && interval.EndUS >= minuteUS+minuteSize-1 {
+			return true
+		}
+	}
+	return false
+}
+
 func (d *Database) DeleteRange(ctx context.Context, symbol, source, provider string, startUS, endUS int64) error {
 	source = normalizeSource(source)
 	provider = normalizeProvider(provider)
@@ -543,7 +863,7 @@ func (d *Database) MinuteBars(ctx context.Context, symbol, source, provider stri
 		return nil, err
 	}
 	defer rows.Close()
-	bars := make([]MinuteBar, 0, 1024)
+	tradeBars := make(map[int64]MinuteBar)
 	for rows.Next() {
 		var eventUS int64
 		var price, size float64
@@ -551,17 +871,91 @@ func (d *Database) MinuteBars(ctx context.Context, symbol, source, provider stri
 			return nil, err
 		}
 		minuteUS := eventUS - eventUS%int64(time.Minute/time.Microsecond)
-		if len(bars) == 0 || bars[len(bars)-1].TimeUS != minuteUS {
-			bars = append(bars, MinuteBar{TimeUS: minuteUS, Open: price, High: price, Low: price, Close: price})
+		bar, exists := tradeBars[minuteUS]
+		if !exists {
+			bar = MinuteBar{TimeUS: minuteUS, Open: price, High: price, Low: price, Close: price}
 		}
-		bar := &bars[len(bars)-1]
 		bar.High = max(bar.High, price)
 		bar.Low = min(bar.Low, price)
 		bar.Close = price
 		bar.Volume += size
 		bar.DollarVolume += price * size
+		tradeBars[minuteUS] = bar
 	}
-	return bars, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// A provider aggregate is safe only for a minute that has fully elapsed.
+	// The forming minute always comes exclusively from eligible prints through
+	// endUS, which prevents future high/low/close/volume leakage.
+	minuteSize := int64(time.Minute / time.Microsecond)
+	currentMinute := endUS - endUS%minuteSize
+	cached := make(map[int64]MinuteBar)
+	// Cached aggregates only exist for a specific historical provider. Anything
+	// else - live recordings, or a combined provider view - stays entirely
+	// trade-derived, exactly as it was before bars were cached.
+	resolved, resolveErr := resolveProvider(provider)
+	useCached := source == "historical" && !strings.EqualFold(provider, "all") && resolveErr == nil
+	if useCached {
+		barRows, err := d.db.QueryContext(ctx, `SELECT minute_us,open,high,low,close,volume,dollar_volume FROM minute_bars
+          WHERE symbol=? AND source='historical' AND provider=? AND minute_us>=? AND minute_us<? ORDER BY minute_us`,
+			symbol, resolved, startUS-startUS%minuteSize, currentMinute)
+		if err != nil {
+			return nil, err
+		}
+		for barRows.Next() {
+			var b MinuteBar
+			if err := barRows.Scan(&b.TimeUS, &b.Open, &b.High, &b.Low, &b.Close, &b.Volume, &b.DollarVolume); err != nil {
+				barRows.Close()
+				return nil, err
+			}
+			cached[b.TimeUS] = b
+		}
+		// Close does not surface an iteration error, and silently dropping cached
+		// bars would quietly shorten the chart instead of failing the request.
+		if err := barRows.Err(); err != nil {
+			barRows.Close()
+			return nil, err
+		}
+		if err := barRows.Close(); err != nil {
+			return nil, err
+		}
+	}
+	// One bounded coverage read answers the precedence question for every minute
+	// in the window. Exact trade-derived data wins whenever a completed download
+	// proves the whole minute is present; otherwise the provider aggregate stands
+	// alone, so the two sources are never added together.
+	var tradeCoverage []Interval
+	if len(tradeBars) > 0 && useCached {
+		var err error
+		tradeCoverage, _, err = d.CoverageIntervals(ctx, symbol, resolved, "trades", startUS-startUS%minuteSize, endUS)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for minute, b := range tradeBars {
+		if minute == currentMinute {
+			cached[minute] = b
+			continue
+		}
+		complete := !useCached || coveredMinute(tradeCoverage, minute, minuteSize)
+		if complete || cached[minute].TimeUS == 0 {
+			cached[minute] = b
+		}
+	}
+	keys := make([]int64, 0, len(cached))
+	for minute := range cached {
+		if minute <= currentMinute {
+			keys = append(keys, minute)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	bars := make([]MinuteBar, 0, len(keys))
+	for _, minute := range keys {
+		bars = append(bars, cached[minute])
+	}
+	return bars, nil
 }
 
 func ScanEvent(rows *sql.Rows) (Event, error) {
@@ -609,6 +1003,20 @@ func normalizeProvider(provider string) string {
 		return provider
 	}
 	return "ibkr"
+}
+
+// resolveProvider is the strict form used by the externally reachable coverage
+// and minute-bar APIs. normalizeProvider coerces anything it does not recognise
+// to ibkr, which is safe for internal callers that only pass canonical values
+// but would silently answer a request about the wrong provider.
+func resolveProvider(provider string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "ibkr":
+		return "ibkr", nil
+	case "massive":
+		return "massive", nil
+	}
+	return "", fmt.Errorf("provider must be ibkr or massive")
 }
 
 func dataFilter(source, provider string) (string, []any, error) {

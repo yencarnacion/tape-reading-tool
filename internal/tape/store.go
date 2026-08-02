@@ -239,6 +239,130 @@ func (s *Store) Generation(symbol string) uint64 {
 	return tape.Generation()
 }
 
+// Sink accepts reconstructed events. A live sink writes straight into the
+// published tape; Rebuild hands out a detached one instead.
+type Sink interface {
+	UpdateQuote(bid, ask, bidSize, askSize float64)
+	AddTrade(exchangeTime, received time.Time, price, size float64)
+	AddRecordedTrade(exchangeTime, received time.Time, price, size float64, class Classification, side int8, bid, ask float64)
+}
+
+// SymbolSink writes into the published tape for one symbol, which is what an
+// ordinary streaming feed wants.
+func (s *Store) SymbolSink(symbol string) Sink { return storeSink{store: s, symbol: symbol} }
+
+type storeSink struct {
+	store  *Store
+	symbol string
+}
+
+// RebuildStage is a detached, ring-bounded symbol tape. Callers can stream an
+// arbitrarily busy warmup into it without retaining the event set in memory,
+// then publish the completed state in one atomic swap.
+type RebuildStage struct {
+	store              *Store
+	symbol             string
+	previous           *symbolTape
+	previousGeneration uint64
+	previousNextSeq    uint64
+	previousQuote      Quote
+	tape               *symbolTape
+}
+
+// PrepareRebuild starts a replacement of one symbol. Nothing the caller streams
+// into the stage is visible until Commit, so a connected browser never observes
+// a partially rebuilt symbol: the previous generation stays published until the
+// new one is complete, and the finished state then arrives as a single snapshot
+// instead of a burst of deltas that the audio path would sound as fresh prints.
+// Sequence numbers continue past the replaced tape so a stale delta can never be
+// mistaken for a new one. A nil result means the symbol was not usable.
+func (s *Store) PrepareRebuild(symbol string) *RebuildStage {
+	symbol = NormalizeSymbol(symbol)
+	if symbol == "" {
+		return nil
+	}
+	s.mu.RLock()
+	previous := s.tapes[symbol]
+	s.mu.RUnlock()
+	staged := newSymbolTape(symbol, s.ringSize)
+	var previousGeneration, previousNextSeq uint64
+	var previousQuote Quote
+	if previous != nil {
+		previous.mu.RLock()
+		previousGeneration = previous.generation
+		previousNextSeq = previous.nextSeq
+		previousQuote = previous.quote
+		staged.generation = previousGeneration + 1
+		staged.nextSeq = previousNextSeq
+		staged.quote.PreviousClose = previousQuote.PreviousClose
+		previous.mu.RUnlock()
+	}
+	return &RebuildStage{store: s, symbol: symbol, previous: previous,
+		previousGeneration: previousGeneration, previousNextSeq: previousNextSeq,
+		previousQuote: previousQuote, tape: staged}
+}
+
+func (r *RebuildStage) UpdateQuote(bid, ask, bidSize, askSize float64) {
+	r.tape.UpdateQuote(bid, ask, bidSize, askSize)
+}
+
+func (r *RebuildStage) AddTrade(exchangeTime, received time.Time, price, size float64) {
+	r.tape.AddTrade(exchangeTime, received, price, size)
+}
+
+func (r *RebuildStage) AddRecordedTrade(exchangeTime, received time.Time, price, size float64, class Classification, side int8, bid, ask float64) {
+	r.tape.AddRecordedTrade(exchangeTime, received, price, size, class, side, bid, ask)
+}
+
+// Commit publishes only if the symbol still points at the tape this stage was
+// based on. That protects callers beyond Replay's own generation check from an
+// older staged rebuild overwriting a newer publication.
+func (r *RebuildStage) Commit() bool {
+	if r == nil || r.store == nil || r.tape == nil {
+		return false
+	}
+	s := r.store
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tapes[r.symbol] != r.previous {
+		return false
+	}
+	// A writer can mutate the published tape without replacing its pointer.
+	// Refuse that stale stage too, or its copied counter could reuse a sequence
+	// assigned while the rebuild was in progress and discard that write.
+	if r.previous != nil {
+		r.previous.mu.RLock()
+		unchanged := r.previous.generation == r.previousGeneration &&
+			r.previous.nextSeq == r.previousNextSeq && r.previous.quote == r.previousQuote
+		r.previous.mu.RUnlock()
+		if !unchanged {
+			return false
+		}
+	}
+	s.tapes[r.symbol] = r.tape
+	s.active = r.symbol
+	history := []string{r.symbol}
+	for _, item := range s.history {
+		if item != r.symbol && len(history) < s.historySize {
+			history = append(history, item)
+		}
+	}
+	s.history = history
+	return true
+}
+
+func (w storeSink) UpdateQuote(bid, ask, bidSize, askSize float64) {
+	w.store.UpdateQuote(w.symbol, bid, ask, bidSize, askSize)
+}
+
+func (w storeSink) AddTrade(exchangeTime, received time.Time, price, size float64) {
+	w.store.AddTrade(w.symbol, exchangeTime, received, price, size)
+}
+
+func (w storeSink) AddRecordedTrade(exchangeTime, received time.Time, price, size float64, class Classification, side int8, bid, ask float64) {
+	w.store.AddRecordedTrade(w.symbol, exchangeTime, received, price, size, class, side, bid, ask)
+}
+
 // Clear resets one symbol without reusing sequence numbers. Generation tells
 // connected browsers to discard the previous replay before new prints arrive.
 func (s *Store) Clear(symbol string) {
@@ -256,12 +380,16 @@ func (s *Store) Clear(symbol string) {
 	tape.mu.Unlock()
 }
 
-func (s *Store) Since(symbol string, seq uint64, limit int) (trades []Trade, quote Quote, dropped uint64, more bool) {
+// Since reports the generation the delivered prints came from. A caller that
+// checked the generation in a separate call would otherwise be able to observe
+// the old generation and then read prints out of a tape that has since been
+// replaced, delivering a whole reconstruction as incremental prints.
+func (s *Store) Since(symbol string, seq uint64, limit int) (trades []Trade, quote Quote, dropped uint64, more bool, generation uint64) {
 	s.mu.RLock()
 	tape := s.tapes[symbol]
 	s.mu.RUnlock()
 	if tape == nil {
-		return nil, Quote{}, 0, false
+		return nil, Quote{}, 0, false, 0
 	}
 	return tape.since(seq, limit)
 }
@@ -309,6 +437,39 @@ func (t *symbolTape) Generation() uint64 {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.generation
+}
+
+// The Sink methods let a detached tape be filled by exactly the same code path
+// that fills a published one, so a reconstruction cannot drift from a replay.
+func (t *symbolTape) UpdateQuote(bid, ask, bidSize, askSize float64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if bid > 0 {
+		t.quote.Bid = bid
+	}
+	if ask > 0 {
+		t.quote.Ask = ask
+	}
+	if bidSize >= 0 {
+		t.quote.BidSize = bidSize
+	}
+	if askSize >= 0 {
+		t.quote.AskSize = askSize
+	}
+}
+
+func (t *symbolTape) AddTrade(exchangeTime, received time.Time, price, size float64) {
+	if price <= 0 || size < 0 {
+		return
+	}
+	t.add(exchangeTime, received, price, size)
+}
+
+func (t *symbolTape) AddRecordedTrade(exchangeTime, received time.Time, price, size float64, class Classification, side int8, bid, ask float64) {
+	if price <= 0 || size < 0 {
+		return
+	}
+	t.addRecorded(exchangeTime, received, price, size, class, side, bid, ask)
 }
 
 func (t *symbolTape) add(exchangeTime, received time.Time, price, size float64) Trade {
@@ -369,11 +530,11 @@ func (t *symbolTape) snapshot(limit int) ([]Trade, Quote) {
 	return result, t.quote
 }
 
-func (t *symbolTape) since(seq uint64, limit int) ([]Trade, Quote, uint64, bool) {
+func (t *symbolTape) since(seq uint64, limit int) ([]Trade, Quote, uint64, bool, uint64) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if t.count == 0 || limit <= 0 {
-		return nil, t.quote, 0, false
+		return nil, t.quote, 0, false, t.generation
 	}
 	oldest := t.items[t.start].Seq
 	wanted := seq + 1
@@ -384,7 +545,7 @@ func (t *symbolTape) since(seq uint64, limit int) ([]Trade, Quote, uint64, bool)
 	}
 	newest := t.nextSeq - 1
 	if wanted > newest {
-		return nil, t.quote, dropped, false
+		return nil, t.quote, dropped, false, t.generation
 	}
 	available := int(newest - wanted + 1)
 	count := available
@@ -396,7 +557,7 @@ func (t *symbolTape) since(seq uint64, limit int) ([]Trade, Quote, uint64, bool)
 	for i := range result {
 		result[i] = t.items[(t.start+offset+i)%len(t.items)]
 	}
-	return result, t.quote, dropped, available > count
+	return result, t.quote, dropped, available > count, t.generation
 }
 
 func (t *symbolTape) rangeSeq(fromSeq, toSeq uint64, limit int) ([]Trade, Quote, uint64, uint64, bool) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"sync"
 	"time"
 
@@ -30,6 +31,162 @@ type ReplayState struct {
 	PositionUS int64   `json:"position_us"`
 	Speed      float64 `json:"speed"`
 	Message    string  `json:"message,omitempty"`
+	Generation uint64  `json:"generation"`
+}
+
+// CueReport describes one completed reconstruction. The external control API
+// turns it into the diagnostics an operator needs when a cue is slow or a
+// generation is superseded.
+type CueReport struct {
+	Generation uint64
+	Rows       int
+	Duration   time.Duration
+	PositionUS int64
+}
+
+// Cue reconstructs a bounded window through an exact target and publishes it as
+// one new generation. Reconstruction runs on a detached tape, so the browser
+// never sees a half-built symbol and the warmup is never delivered as
+// incremental prints that the audio path would sound. The previous generation is
+// cancelled before the read, so its in-flight events can no longer publish.
+func (r *Replay) Cue(ctx context.Context, request ReplayRequest, warmupUS, targetUS int64, playing bool) (CueReport, error) {
+	started := time.Now()
+	request.Symbol = tape.NormalizeSymbol(request.Symbol)
+	if request.Symbol == "" || warmupUS <= 0 || targetUS < warmupUS || request.EndUS < targetUS {
+		return CueReport{}, fmt.Errorf("invalid cue range")
+	}
+	if request.Source != "historical" || request.Provider == "all" || request.Provider == "" {
+		return CueReport{}, fmt.Errorf("external cue requires a specific historical provider")
+	}
+	if request.Speed <= 0 {
+		request.Speed = 1
+	}
+	// Cancelling first means a superseded generation stops applying events while
+	// this cue reads, rather than racing the swap below.
+	r.mu.Lock()
+	if r.cancel != nil {
+		r.cancel()
+		r.cancel = nil
+	}
+	r.generation++
+	generation := r.generation
+	r.mu.Unlock()
+	stage := r.store.PrepareRebuild(request.Symbol)
+	if stage == nil {
+		r.abortCue(generation, "cue rejected an unusable symbol")
+		return CueReport{}, fmt.Errorf("invalid cue symbol")
+	}
+
+	rows, err := r.database.Events(ctx, request.Symbol, request.Source, request.Provider, warmupUS, targetUS)
+	if err != nil {
+		r.abortCue(generation, "cue read failed: "+err.Error())
+		return CueReport{}, err
+	}
+	defer rows.Close()
+	cursor := replayCursor{}
+	rowCount := 0
+	for rows.Next() {
+		event, scanErr := storage.ScanEvent(rows)
+		if scanErr != nil {
+			r.abortCue(generation, "cue read failed: "+scanErr.Error())
+			return CueReport{}, scanErr
+		}
+		r.applyEventTo(stage, event)
+		cursor = replayCursor{eventUS: event.EventUS, kind: event.Kind, id: event.ID, valid: true}
+		rowCount++
+	}
+	if err := rows.Err(); err != nil {
+		r.abortCue(generation, "cue read failed: "+err.Error())
+		return CueReport{}, err
+	}
+
+	r.mu.Lock()
+	if generation != r.generation {
+		r.mu.Unlock()
+		return CueReport{}, fmt.Errorf("cue superseded by a newer generation")
+	}
+	if !stage.Commit() {
+		r.mu.Unlock()
+		return CueReport{}, fmt.Errorf("cue superseded by a newer tape generation")
+	}
+	r.request = request
+	r.cursor = cursor
+	r.resumeUS = targetUS
+	stateName := "paused"
+	if playing {
+		stateName = "replaying"
+	}
+	r.state = ReplayState{State: stateName, Symbol: request.Symbol, Source: request.Source, Provider: request.Provider, StartUS: targetUS, EndUS: request.EndUS, PositionUS: targetUS, Speed: request.Speed, Message: "external replay", Generation: generation}
+	r.setFeedStatus(stateName, "external replay")
+	r.mu.Unlock()
+	if playing {
+		// launch publishes its own generation. Report that one, or a later sync
+		// would see a mismatch against a stale value and rebuild instead of
+		// absorbing the drift it was sent to correct.
+		r.launch(request, targetUS, cursor, "replaying")
+		_, _, generation, _ = r.Position()
+	}
+	report := CueReport{Generation: generation, Rows: rowCount, Duration: time.Since(started), PositionUS: targetUS}
+	log.Printf("external cue symbol=%s target_us=%d warmup_us=%d rows=%d generation=%d playing=%v duration=%s",
+		request.Symbol, targetUS, warmupUS, report.Rows, report.Generation, playing, report.Duration.Round(time.Millisecond))
+	return report, nil
+}
+
+// abortCue restores a truthful state after a reconstruction fails. The previous
+// generation was already cancelled by then, so leaving the status at "replaying"
+// would report playback that no longer exists - a controller polling status, or
+// an operator watching the clock, would both be told the replay is still moving.
+// The cursor and resume position are untouched, so the session can be resumed.
+// A newer generation owns the state instead and is left alone.
+func (r *Replay) abortCue(generation uint64, reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if generation != r.generation || r.state.State != "replaying" {
+		return
+	}
+	r.state.State = "paused"
+	r.state.Message = reason
+	r.state.Generation = generation
+	// Keep replay ownership until the public feed status agrees with the replay
+	// state. Otherwise a newer cue can publish "replaying" in between these two
+	// updates and then have this stale failure overwrite it with "paused".
+	r.setFeedStatus("paused", reason)
+}
+
+// Track advances the authoritative historical clock without touching the tape.
+// Fast follow uses it above the detailed speed threshold, where the detailed
+// renderer would only fall further behind, and where the tape is explicitly
+// labelled as suppressed rather than presented as current.
+func (r *Replay) Track(symbol string, targetUS int64) error {
+	symbol = tape.NormalizeSymbol(symbol)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if symbol == "" || symbol != r.state.Symbol {
+		return fmt.Errorf("track requires the cued symbol")
+	}
+	if targetUS <= 0 || targetUS > r.request.EndUS {
+		return fmt.Errorf("track timestamp is outside the cued range")
+	}
+	if r.cancel != nil {
+		r.cancel()
+		r.cancel = nil
+	}
+	r.generation++
+	r.state.State = "paused"
+	r.state.Message = "fast follow"
+	r.state.PositionUS = targetUS
+	r.state.Generation = r.generation
+	r.resumeUS = targetUS
+	r.setFeedStatus("paused", "fast follow")
+	return nil
+}
+
+// Position reports the authoritative replay clock so a controller can measure
+// its own drift against it.
+func (r *Replay) Position() (symbol string, positionUS int64, generation uint64, playing bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.state.Symbol, r.state.PositionUS, r.state.Generation, r.state.State == "replaying"
 }
 
 type RenderAudioEvent struct {
@@ -209,13 +366,13 @@ func (r *Replay) PrepareRender(request ReplayRequest, warmupUS int64) error {
 	r.state = ReplayState{
 		State: "paused", Symbol: request.Symbol, Source: request.Source, Provider: request.Provider,
 		StartUS: request.StartUS, EndUS: request.EndUS, PositionUS: warmupUS,
-		Speed: request.Speed, Message: fmt.Sprintf("deterministic render %s/%s", request.Provider, request.Source),
+		Speed: request.Speed, Message: fmt.Sprintf("deterministic render %s/%s", request.Provider, request.Source), Generation: r.generation,
 	}
+	r.setFeedStatus("paused", "deterministic render")
 	r.mu.Unlock()
 
 	r.store.Activate(request.Symbol)
 	r.store.Clear(request.Symbol)
-	r.setFeedStatus("paused", "deterministic render")
 	_, err = r.StepRender(request.StartUS)
 	return err
 }
@@ -247,13 +404,20 @@ func (r *Replay) StepRender(targetUS int64) (uint64, error) {
 }
 
 func (r *Replay) applyEvent(request ReplayRequest, event storage.Event) {
+	r.applyEventTo(r.store.SymbolSink(request.Symbol), event)
+}
+
+// applyEventTo is the single event-application rule. Streaming replay, render
+// warmup, and external cue reconstruction all use it, so a rebuilt tape is
+// identical to one that was replayed print by print.
+func (r *Replay) applyEventTo(sink tape.Sink, event storage.Event) {
 	receivedUS := event.ReceivedUS
 	if receivedUS <= 0 || event.Source == "historical" {
 		receivedUS = event.EventUS
 	}
 	received := time.UnixMicro(receivedUS)
 	if event.Kind == "quote" {
-		r.store.UpdateQuote(request.Symbol, event.Bid, event.Ask, event.BidSize, event.AskSize)
+		sink.UpdateQuote(event.Bid, event.Ask, event.BidSize, event.AskSize)
 		return
 	}
 	if !event.ChartEligible {
@@ -264,10 +428,10 @@ func (r *Replay) applyEvent(request ReplayRequest, event storage.Event) {
 		exchangeMS = event.MarketTimeUS / 1000
 	}
 	if event.Source == "historical" {
-		r.store.AddTrade(request.Symbol, time.UnixMilli(exchangeMS), received, event.Price, event.Size)
+		sink.AddTrade(time.UnixMilli(exchangeMS), received, event.Price, event.Size)
 		return
 	}
-	r.store.AddRecordedTrade(request.Symbol, time.UnixMilli(exchangeMS), received, event.Price, event.Size, event.Class, event.Side, event.Bid, event.Ask)
+	sink.AddRecordedTrade(time.UnixMilli(exchangeMS), received, event.Price, event.Size, event.Class, event.Side, event.Bid, event.Ask)
 }
 
 func (r *Replay) Pause() error {
@@ -283,8 +447,9 @@ func (r *Replay) Pause() error {
 	r.generation++
 	r.state.State = "paused"
 	r.state.Message = "paused"
-	r.mu.Unlock()
+	r.state.Generation = r.generation
 	r.setFeedStatus("paused", "replay paused")
+	r.mu.Unlock()
 	return nil
 }
 
@@ -305,7 +470,7 @@ func (r *Replay) Resume() error {
 	return nil
 }
 
-func (r *Replay) Seek(targetUS int64) error {
+func (r *Replay) SeekTo(targetUS int64) error {
 	r.mu.RLock()
 	request := r.request
 	r.mu.RUnlock()
@@ -333,10 +498,11 @@ func (r *Replay) stop(updateStatus bool) {
 	r.generation++
 	r.state.State = "stopped"
 	r.state.Message = "stopped"
-	r.mu.Unlock()
+	r.state.Generation = r.generation
 	if updateStatus {
 		r.setFeedStatus("stopped", "replay stopped")
 	}
+	r.mu.Unlock()
 }
 
 func (r *Replay) launch(request ReplayRequest, fromUS int64, cursor replayCursor, stateName string) {
@@ -358,10 +524,10 @@ func (r *Replay) launch(request ReplayRequest, fromUS int64, cursor replayCursor
 	r.state = ReplayState{
 		State: stateName, Symbol: request.Symbol, Source: request.Source, Provider: request.Provider,
 		StartUS: request.StartUS, EndUS: request.EndUS, PositionUS: position,
-		Speed: request.Speed, Message: fmt.Sprintf("%.2fx %s/%s", request.Speed, request.Provider, request.Source),
+		Speed: request.Speed, Message: fmt.Sprintf("%.2fx %s/%s", request.Speed, request.Provider, request.Source), Generation: generation,
 	}
-	r.mu.Unlock()
 	r.setFeedStatus("replaying", fmt.Sprintf("%.2fx %s/%s", request.Speed, request.Provider, request.Source))
+	r.mu.Unlock()
 	go r.play(ctx, generation, request, fromUS, cursor)
 }
 
@@ -391,8 +557,9 @@ func (r *Replay) play(ctx context.Context, generation uint64, request ReplayRequ
 		if err := waitUntil(ctx, due); err != nil {
 			return
 		}
-		r.applyEvent(request, event)
-		r.updatePosition(generation, event)
+		if !r.applyCurrent(generation, request, event) {
+			return
+		}
 	}
 	if err := rows.Err(); err != nil && !errorsIsCancellation(err) {
 		r.finish(generation, "error", err.Error())
@@ -401,15 +568,17 @@ func (r *Replay) play(ctx context.Context, generation uint64, request ReplayRequ
 	r.finish(generation, "complete", "replay complete")
 }
 
-func (r *Replay) updatePosition(generation uint64, event storage.Event) {
+func (r *Replay) applyCurrent(generation uint64, request ReplayRequest, event storage.Event) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if generation != r.generation {
-		return
+		return false
 	}
+	r.applyEvent(request, event)
 	r.cursor = replayCursor{eventUS: event.EventUS, kind: event.Kind, id: event.ID, valid: true}
 	r.resumeUS = event.EventUS
 	r.state.PositionUS = event.EventUS
+	return true
 }
 
 func (r *Replay) finish(generation uint64, stateName, message string) {
@@ -421,10 +590,17 @@ func (r *Replay) finish(generation uint64, stateName, message string) {
 	r.cancel = nil
 	r.state.State = stateName
 	r.state.Message = message
-	r.mu.Unlock()
 	r.setFeedStatus(stateName, message)
+	r.mu.Unlock()
 }
 
+// setFeedStatus publishes the state the browser renders. Every caller that also
+// changes r.state must call this while still holding r.mu, so the two can never
+// be reordered: publishing after the lock is released lets a newer transition
+// land in between and then be overwritten by an already stale status, leaving
+// the browser and a polling controller permanently disagreeing. The play
+// goroutine is why this matters - finish runs there, ordered against a cue by
+// nothing else. Startup's "ready" is the one caller with no state to agree with.
 func (r *Replay) setFeedStatus(stateName, message string) {
 	r.store.SetStatus(tape.FeedStatus{Mode: "replay", State: stateName, Connected: stateName != "error", Message: message})
 }

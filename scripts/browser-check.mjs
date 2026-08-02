@@ -96,6 +96,78 @@ try {
   if (JSON.stringify(dayMapCorners) !== JSON.stringify(expectedDayMapCorners)) {
     throw new Error(`day-map corner cycle failed: ${JSON.stringify(dayMapCorners)}`);
   }
+  // Generic external replay badge. The controlling application is never named,
+  // the tape may not look current while fast-follow suppression is active, and
+  // a browser that has not unlocked audio may not read as FOLLOWING.
+  const externalBadgeCheck = await command('Runtime.evaluate', {
+    expression: `(() => {
+      const badge = window.__tapeReadingExternalBadge;
+      const base = { attached: true, symbol: 'AAPL', target_us: Date.UTC(2026, 6, 2, 13, 35, 42) * 1000 };
+      return {
+        idle: badge({ attached: false, state: '' }, true, true, 'AAPL'),
+        following: badge({ ...base, state: 'following' }, true, true, 'AAPL'),
+        cueing: badge({ ...base, state: 'cueing' }, true, true, 'AAPL'),
+        paused: badge({ ...base, state: 'paused' }, true, true, 'AAPL'),
+        fast: badge({ ...base, state: 'fast_follow', fast_follow: true }, true, true, 'AAPL'),
+        incomplete: badge({ ...base, state: 'data_incomplete' }, true, true, 'AAPL'),
+        locked: badge({ ...base, state: 'following' }, false, true, 'AAPL'),
+        mutedLock: badge({ ...base, state: 'following' }, false, false, 'AAPL'),
+        failed: badge({ ...base, state: 'error', error: 'cue superseded' }, true, true, 'AAPL'),
+        detached: badge({ attached: false, state: 'detached' }, true, true, 'AAPL'),
+        // A first cue that is refused never attaches. The operator still has to
+        // be told, or a rejected cue is indistinguishable from no cue at all.
+        refusedFirstCue: badge({ ...base, attached: false, state: 'data_incomplete' }, true, true, 'AAPL'),
+        failedFirstCue: badge({ ...base, attached: false, state: 'error', error: 'no such symbol' }, true, true, 'AAPL'),
+        idleUnattached: badge({ attached: false, state: '' }, true, true, 'AAPL')
+      };
+    })()`, returnByValue: true
+  });
+  const externalBadge = externalBadgeCheck.result.value;
+  const expectedBadgeLabels = {
+    following: 'FOLLOWING', cueing: 'CUEING', paused: 'PAUSED', fast: 'FAST FOLLOW',
+    incomplete: 'DATA INCOMPLETE', locked: 'AUDIO LOCKED', mutedLock: 'FOLLOWING', detached: 'DETACHED'
+  };
+  for (const [key, label] of Object.entries(expectedBadgeLabels)) {
+    if (externalBadge[key]?.label !== label || externalBadge[key]?.visible !== true) {
+      throw new Error(`external badge ${key} failed: ${JSON.stringify(externalBadge)}`);
+    }
+  }
+  if (externalBadge.idle.visible || externalBadge.idleUnattached.visible) {
+    throw new Error(`the external badge must stay hidden without a controller: ${JSON.stringify(externalBadge.idle)}`);
+  }
+  if (!externalBadge.refusedFirstCue.visible || externalBadge.refusedFirstCue.label !== 'DATA INCOMPLETE') {
+    throw new Error(`a refused first cue must still be reported: ${JSON.stringify(externalBadge.refusedFirstCue)}`);
+  }
+  if (!externalBadge.failedFirstCue.visible || !externalBadge.failedFirstCue.label.startsWith('ERROR')) {
+    throw new Error(`a failed first cue must still be reported: ${JSON.stringify(externalBadge.failedFirstCue)}`);
+  }
+  if (!externalBadge.failed.label.startsWith('ERROR')) {
+    throw new Error(`external badge error state failed: ${JSON.stringify(externalBadge.failed)}`);
+  }
+  // Suppression is on exactly when fast follow is, so the tape can never be
+  // presented as current at a speed the detailed renderer cannot keep.
+  if (!externalBadge.fast.suppressed || externalBadge.following.suppressed || externalBadge.paused.suppressed) {
+    throw new Error(`fast-follow suppression failed: ${JSON.stringify(externalBadge)}`);
+  }
+  if (!externalBadge.following.text.startsWith('EXTERNAL REPLAY · AAPL · ') ||
+      !/ · \d{2}:\d{2}:\d{2} · FOLLOWING$/.test(externalBadge.following.text)) {
+    throw new Error(`external badge text failed: ${JSON.stringify(externalBadge.following)}`);
+  }
+  const suppressionStyle = await command('Runtime.evaluate', {
+    expression: `(() => {
+      const panel = document.querySelector('#tapePanel');
+      panel.classList.add('fast-follow');
+      const overlay = getComputedStyle(panel, '::after');
+      const opacity = parseFloat(getComputedStyle(panel).opacity);
+      const label = overlay.content;
+      panel.classList.remove('fast-follow');
+      return { opacity, label, restored: parseFloat(getComputedStyle(panel).opacity) };
+    })()`, returnByValue: true
+  });
+  const suppression = suppressionStyle.result.value;
+  if (suppression.opacity >= 1 || !/FAST FOLLOW/.test(suppression.label) || suppression.restored < 1) {
+    throw new Error(`fast-follow tape suppression styling failed: ${JSON.stringify(suppression)}`);
+  }
   const candleVolumeCheck = await command('Runtime.evaluate', {
     expression: `[999, 1300, 100100, 1120000].map(window.__tapeReadingCandleVolume)`, returnByValue: true
   });

@@ -2,6 +2,8 @@
 
 A compact tape reader for split-second scalping with IBKR or Massive market data. It renders tick bars, rolling 5/15/60-second tape pressure, and a narrow color-coded time-and-sales stream. Live trades and quotes can be recorded to SQLite and replayed later.
 
+Local journals and review tools can use the documented [external historical replay control protocol](docs/EXTERNAL_REPLAY_CONTROL.md) to cue a symbol and exact timestamp.
+
 ![IREN historical replay showing the one-minute chart, tick bars, tape pressure, reference levels, and time and sales](docs/assets/iren-2026-07-22-0930-0932.gif)
 
 _Deterministic IREN replay for July 22, 2026, from 09:30–09:32 ET with the optional reference levels enabled._

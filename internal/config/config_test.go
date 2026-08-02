@@ -139,3 +139,57 @@ func TestValidateAudioGainRanges(t *testing.T) {
 		t.Fatal("expected minimum gain validation error")
 	}
 }
+
+func TestExternalReplayDefaultsAreOffAndLoopbackOnly(t *testing.T) {
+	defaults := Defaults()
+	if defaults.ExternalReplay.Enabled {
+		t.Fatal("external replay control must be off unless it is explicitly enabled")
+	}
+	if !defaults.ExternalReplay.LoopbackOnly {
+		t.Fatal("external replay control must default to loopback-only")
+	}
+	if defaults.ExternalReplay.Token != "" {
+		t.Fatal("a control token must never come from a default or from YAML")
+	}
+	if err := defaults.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExternalReplayTokenComesOnlyFromTheEnvironment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	// A token written into YAML must not be loaded, even when it is present.
+	if err := os.WriteFile(path, []byte("external_replay:\n  enabled: true\n  token: leaked-from-yaml\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TAPE_EXTERNAL_REPLAY_TOKEN", "from-environment")
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ExternalReplay.Token != "from-environment" {
+		t.Fatalf("token = %q", loaded.ExternalReplay.Token)
+	}
+	if !loaded.ExternalReplay.Enabled {
+		t.Fatal("enabled did not load")
+	}
+}
+
+func TestExternalReplayValidationBounds(t *testing.T) {
+	for name, mutate := range map[string]func(*Config){
+		"warmup":             func(c *Config) { c.ExternalReplay.DefaultWarmup = "soon" },
+		"warmup zero":        func(c *Config) { c.ExternalReplay.DefaultWarmup = "0s" },
+		"tolerance":          func(c *Config) { c.ExternalReplay.SyncTolerance = "" },
+		"tolerance negative": func(c *Config) { c.ExternalReplay.SyncTolerance = "-1ms" },
+		"speed low":          func(c *Config) { c.ExternalReplay.MaxDetailedSpeed = 0 },
+		"speed high": func(c *Config) {
+			c.ExternalReplay.MaxDetailedSpeed = 21
+		},
+	} {
+		cfg := Defaults()
+		mutate(&cfg)
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("%s: expected a validation error", name)
+		}
+	}
+}

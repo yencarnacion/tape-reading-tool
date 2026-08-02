@@ -102,8 +102,8 @@ func run() error {
 	defer stop()
 
 	var database *storage.Database
-	if mode == "live" || mode == "massive" || mode == "replay" || mode == "render" || mode == "download" {
-		if !cfg.Storage.Enabled && mode != "download" && mode != "replay" && mode != "render" {
+	if mode == "live" || mode == "massive" || mode == "replay" || mode == "render" || mode == "download" || mode == "download-bars" || mode == "coverage" {
+		if !cfg.Storage.Enabled && mode != "download" && mode != "download-bars" && mode != "coverage" && mode != "replay" && mode != "render" {
 			log.Printf("SQLite live recording disabled")
 		} else {
 			var err error
@@ -120,7 +120,29 @@ func run() error {
 		}
 	}
 
-	if mode == "download" {
+	// coverage is read-only inspection of what has already been downloaded. It
+	// never contacts a provider and never downloads anything.
+	if mode == "coverage" {
+		symbol := tape.NormalizeSymbol(*symbolFlag)
+		records, err := database.CoverageRecords(ctx, symbol, strings.ToLower(strings.TrimSpace(*providerFlag)))
+		if err != nil {
+			return err
+		}
+		location, _ := time.LoadLocation(cfg.App.Timezone)
+		if len(records) == 0 {
+			fmt.Printf("no completed downloads recorded in %s\n", database.Path())
+			return nil
+		}
+		fmt.Printf("%-8s %-8s %-11s %-19s %-19s %10s\n", "SYMBOL", "PROVIDER", "KIND", "START", "END", "ROWS")
+		for _, record := range records {
+			fmt.Printf("%-8s %-8s %-11s %-19s %-19s %10d\n", record.Symbol, record.Provider, record.Kind,
+				time.UnixMicro(record.StartUS).In(location).Format("2006-01-02 15:04:05"),
+				time.UnixMicro(record.EndUS).In(location).Format("2006-01-02 15:04:05"), record.RowCount)
+		}
+		return nil
+	}
+
+	if mode == "download" || mode == "download-bars" {
 		location, _ := time.LoadLocation(cfg.App.Timezone)
 		start, err := parseDateTime(*startFlag, location)
 		if err != nil {
@@ -138,7 +160,17 @@ func run() error {
 		options := feed.HistoricalOptions{Symbol: symbol, Start: start, End: end, UseRTH: *useRTH, RequestInterval: interval}
 		provider := strings.ToLower(strings.TrimSpace(*providerFlag))
 		if provider == "" {
-			provider = "ibkr"
+			if mode == "download-bars" {
+				provider = "massive"
+			} else {
+				provider = "ibkr"
+			}
+		}
+		if mode == "download-bars" {
+			if provider != "massive" {
+				return fmt.Errorf("download-bars provider must be massive")
+			}
+			return feed.DownloadMassiveMinuteBars(ctx, cfg.Massive, database, options)
 		}
 		switch provider {
 		case "ibkr":
@@ -164,7 +196,7 @@ func run() error {
 	case "render":
 		source = feed.NewReplay(database, store, cfg.Replay.Source, cfg.Replay.Provider, cfg.Replay.Speed)
 	default:
-		return fmt.Errorf("unknown mode %q; use live, massive, demo, replay, render, or download", mode)
+		return fmt.Errorf("unknown mode %q; use live, massive, demo, replay, render, download, download-bars, or coverage", mode)
 	}
 	log.Printf("starting mode=%s http_addr=%s default_symbol=%s", mode, cfg.App.Addr, cfg.Tape.DefaultSymbol)
 	if mode == "live" {
@@ -180,6 +212,7 @@ func run() error {
 	chartMode := mode == "live" || mode == "demo"
 	xtra := (chartMode || mode == "replay" || mode == "render") && *xtraFlag
 	appServer := server.New(cfg, store, source, chartMode && (*chartFlag || xtra), xtra)
+	appServer.SetMode(mode)
 	appServer.AttachRecorder(database)
 	// Reserving the pane at startup keeps the live panes at a fixed size for the
 	// whole session, so entering a rewind never reflows them.
