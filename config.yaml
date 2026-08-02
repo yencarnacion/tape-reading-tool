@@ -59,6 +59,13 @@ replay:
   speed: 1
   chart_right_gap_bars: 5
 
+external_replay:
+  enabled: false
+  loopback_only: true
+  default_warmup: 180s
+  max_detailed_speed: 4
+  sync_tolerance: 750ms
+
 rewind:
   enabled: true
   buffer_seconds: 180

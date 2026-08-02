@@ -277,3 +277,72 @@ func TestOpenRejectsOlderSchemaWithoutDeletingIt(t *testing.T) {
 		t.Fatalf("the older database must never be deleted: %v", err)
 	}
 }
+
+func TestOpenMigratesSchemaThreeAndPreservesRows(t *testing.T) {
+	cfg := config.Defaults().Storage
+	cfg.Path = filepath.Join(t.TempDir(), "tape.db")
+	db, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 7, 1, 13, 30, 0, 0, time.UTC).UnixMicro()
+	if err := db.InsertTrades(context.Background(), []TradeRecord{{Symbol: "AAPL", EventUS: base, Price: 200, Size: 10, Source: "historical", Provider: "massive"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec("UPDATE metadata SET value='3' WHERE key='schema_version'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rangeValue, err := db.DataRange(context.Background(), "AAPL", "historical", "massive")
+	if err != nil || rangeValue.Trades != 1 {
+		t.Fatalf("preserved range=%+v err=%v", rangeValue, err)
+	}
+	if err := db.UpsertMinuteBars(context.Background(), "AAPL", "massive", []MinuteBar{{TimeUS: base, Open: 1, High: 2, Low: 1, Close: 2, Volume: 3}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCoverageUnionAndMinuteBarMergePreventsFutureLeakage(t *testing.T) {
+	db := testDatabase(t)
+	ctx := context.Background()
+	minute := time.Date(2026, 7, 1, 13, 35, 0, 0, time.UTC).UnixMicro()
+	size := int64(time.Minute / time.Microsecond)
+	for _, c := range []Coverage{{Symbol: "AAPL", Provider: "massive", Kind: "minute_bars", StartUS: minute - size, EndUS: minute + size - 1, RowCount: 2}, {Symbol: "AAPL", Provider: "massive", Kind: "trades", StartUS: minute - size, EndUS: minute - 1, RowCount: 1}} {
+		if err := db.MarkCoverage(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.UpsertMinuteBars(ctx, "AAPL", "massive", []MinuteBar{{TimeUS: minute - size, Open: 9, High: 10, Low: 9, Close: 10, Volume: 100}, {TimeUS: minute, Open: 10, High: 99, Low: 1, Close: 50, Volume: 9999}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertTrades(ctx, []TradeRecord{{Symbol: "AAPL", EventUS: minute + 5e6, MarketTimeUS: minute + 5e6, Price: 10, Size: 10, Source: "historical", Provider: "massive"}, {Symbol: "AAPL", EventUS: minute + 10e6, MarketTimeUS: minute + 10e6, Price: 11, Size: 20, Source: "historical", Provider: "massive"}}); err != nil {
+		t.Fatal(err)
+	}
+	bars, err := db.MinuteBars(ctx, "AAPL", "historical", "massive", minute-size, minute+10e6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bars) != 2 || bars[1].High != 11 || bars[1].Low != 10 || bars[1].Close != 11 || bars[1].Volume != 30 {
+		t.Fatalf("future aggregate leaked: %+v", bars)
+	}
+	if err := db.MarkCoverage(ctx, Coverage{Symbol: "AAPL", Provider: "massive", Kind: "quotes", StartUS: 100, EndUS: 199}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkCoverage(ctx, Coverage{Symbol: "AAPL", Provider: "massive", Kind: "quotes", StartUS: 200, EndUS: 299}); err != nil {
+		t.Fatal(err)
+	}
+	covered, missing, err := db.CoverageIntervals(ctx, "AAPL", "massive", "quotes", 100, 350)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(covered) != 1 || covered[0].EndUS != 299 || len(missing) != 1 || missing[0].StartUS != 300 {
+		t.Fatalf("covered=%+v missing=%+v", covered, missing)
+	}
+}

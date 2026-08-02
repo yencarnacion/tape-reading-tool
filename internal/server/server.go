@@ -43,6 +43,9 @@ type Server struct {
 	processStartUS int64
 	uiEventMu      sync.Mutex
 	uiEventAt      map[string]time.Time
+	mode           string
+	externalMu     sync.Mutex
+	external       externalReplayState
 }
 
 type rvolHistoryCache struct {
@@ -119,6 +122,9 @@ func (s *Server) Serve(ctx context.Context) error {
 	mux.HandleFunc("/api/tape/range", s.handleTapeRange)
 	mux.HandleFunc("/api/ui-event", s.handleUIEvent)
 	mux.HandleFunc("/api/replay", s.handleReplay)
+	mux.HandleFunc("/api/external-replay/status", s.handleExternalReplayStatus)
+	mux.HandleFunc("/api/external-replay/control", s.handleExternalReplayControl)
+	mux.HandleFunc("/api/historical/coverage/check", s.handleCoverageCheck)
 	mux.HandleFunc("/api/render", s.handleRender)
 	mux.HandleFunc("/api/rvol-history", s.handleRVOLHistory)
 	mux.HandleFunc("/api/daily-history", s.handleDailyHistory)
@@ -155,6 +161,8 @@ func (s *Server) Serve(ctx context.Context) error {
 		return err
 	}
 }
+
+func (s *Server) SetMode(mode string) { s.mode = strings.ToLower(mode) }
 
 func (s *Server) handleRender(w http.ResponseWriter, r *http.Request) {
 	replay, ok := s.feed.(*feed.Replay)
@@ -366,6 +374,7 @@ func (s *Server) handleTicker(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ticker must be 1-16 letters, digits, dot, or hyphen", http.StatusBadRequest)
 		return
 	}
+	s.detachExternalForManualAction()
 	s.store.Activate(symbol)
 	s.feed.SetSymbol(symbol)
 	s.recordUIEvent(storage.UIEventRecord{Symbol: symbol, Kind: storage.UIEventSymbol, ValueText: symbol})
@@ -604,6 +613,7 @@ func (s *Server) handleReplay(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	s.detachExternalForManualAction()
 	var err error
 	switch strings.ToLower(request.Action) {
 	case "start":

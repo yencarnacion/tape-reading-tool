@@ -83,8 +83,14 @@ func DownloadMassiveHistorical(ctx context.Context, cfg config.MassiveConfig, da
 	if err != nil {
 		return err
 	}
+	if err := database.MarkCoverage(ctx, storage.Coverage{Symbol: symbol, Provider: "massive", Kind: "trades", StartUS: startUS, EndUS: endUS, RowCount: int64(trades)}); err != nil {
+		return err
+	}
 	quotes, err := downloadMassiveQuotes(ctx, client, database, symbol, options)
 	if err != nil {
+		return err
+	}
+	if err := database.MarkCoverage(ctx, storage.Coverage{Symbol: symbol, Provider: "massive", Kind: "quotes", StartUS: startUS, EndUS: endUS, RowCount: int64(quotes)}); err != nil {
 		return err
 	}
 	log.Printf("Massive historical complete symbol=%s trades=%d quotes=%d database=%s", symbol, trades, quotes, database.Path())

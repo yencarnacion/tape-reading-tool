@@ -12,15 +12,16 @@ import (
 )
 
 type Config struct {
-	App     AppConfig     `yaml:"app" json:"app"`
-	IBKR    IBKRConfig    `yaml:"ibkr" json:"ibkr"`
-	Tape    TapeConfig    `yaml:"tape" json:"tape"`
-	Display DisplayConfig `yaml:"display" json:"display"`
-	Audio   AudioConfig   `yaml:"audio" json:"audio"`
-	Storage StorageConfig `yaml:"storage" json:"storage"`
-	Replay  ReplayConfig  `yaml:"replay" json:"replay"`
-	Rewind  RewindConfig  `yaml:"rewind" json:"rewind"`
-	Massive MassiveConfig `yaml:"massive" json:"massive"`
+	App            AppConfig            `yaml:"app" json:"app"`
+	IBKR           IBKRConfig           `yaml:"ibkr" json:"ibkr"`
+	Tape           TapeConfig           `yaml:"tape" json:"tape"`
+	Display        DisplayConfig        `yaml:"display" json:"display"`
+	Audio          AudioConfig          `yaml:"audio" json:"audio"`
+	Storage        StorageConfig        `yaml:"storage" json:"storage"`
+	Replay         ReplayConfig         `yaml:"replay" json:"replay"`
+	Rewind         RewindConfig         `yaml:"rewind" json:"rewind"`
+	Massive        MassiveConfig        `yaml:"massive" json:"massive"`
+	ExternalReplay ExternalReplayConfig `yaml:"external_replay" json:"external_replay"`
 }
 
 type AppConfig struct {
@@ -91,6 +92,15 @@ type ReplayConfig struct {
 	ChartRightGapBars int     `yaml:"chart_right_gap_bars" json:"chart_right_gap_bars"`
 }
 
+type ExternalReplayConfig struct {
+	Enabled          bool    `yaml:"enabled" json:"enabled"`
+	LoopbackOnly     bool    `yaml:"loopback_only" json:"loopback_only"`
+	DefaultWarmup    string  `yaml:"default_warmup" json:"default_warmup"`
+	MaxDetailedSpeed float64 `yaml:"max_detailed_speed" json:"max_detailed_speed"`
+	SyncTolerance    string  `yaml:"sync_tolerance" json:"sync_tolerance"`
+	Token            string  `yaml:"-" json:"-"`
+}
+
 // RewindConfig sizes the browser's Live Rewind buffer. Retention is bounded by
 // receipt time rather than by print count, because the count-bounded server ring
 // collapses to a few seconds exactly when a rewind is most wanted.
@@ -137,7 +147,8 @@ func Defaults() Config {
 			Enabled: true, Path: "data/tape.db", QueueSize: 262144,
 			BatchSize: 2048, FlushInterval: "50ms", HistoricalRequestInterval: "11s",
 		},
-		Replay: ReplayConfig{Source: "live", Provider: "all", Speed: 1, ChartRightGapBars: 5},
+		Replay:         ReplayConfig{Source: "live", Provider: "all", Speed: 1, ChartRightGapBars: 5},
+		ExternalReplay: ExternalReplayConfig{LoopbackOnly: true, DefaultWarmup: "180s", MaxDetailedSpeed: 4, SyncTolerance: "750ms"},
 		// 180 seconds keeps every rolling horizon valid at the deepest 30-second
 		// rewind: the 60-second window plus its own 60-second pace baseline.
 		Rewind:  RewindConfig{Enabled: true, BufferSeconds: 180, AutoReturnSeconds: 20, MaxPrintsPerSecond: 2000},
@@ -231,6 +242,15 @@ func (c Config) Validate() error {
 	if c.Replay.ChartRightGapBars < 5 || c.Replay.ChartRightGapBars > 100 {
 		return errors.New("replay.chart_right_gap_bars must be between 5 and 100")
 	}
+	if _, err := time.ParseDuration(c.ExternalReplay.DefaultWarmup); err != nil {
+		return fmt.Errorf("external_replay.default_warmup: %w", err)
+	}
+	if _, err := time.ParseDuration(c.ExternalReplay.SyncTolerance); err != nil {
+		return fmt.Errorf("external_replay.sync_tolerance: %w", err)
+	}
+	if c.ExternalReplay.MaxDetailedSpeed < 1 || c.ExternalReplay.MaxDetailedSpeed > 20 {
+		return errors.New("external_replay.max_detailed_speed must be between 1 and 20")
+	}
 	if c.Rewind.BufferSeconds < 5 || c.Rewind.BufferSeconds > 600 {
 		return errors.New("rewind.buffer_seconds must be between 5 and 600")
 	}
@@ -309,6 +329,7 @@ func applyEnv(c *Config) error {
 	if value := strings.TrimSpace(os.Getenv("MASSIVE_API_KEY")); value != "" {
 		c.Massive.APIKey = value
 	}
+	c.ExternalReplay.Token = strings.TrimSpace(os.Getenv("TAPE_EXTERNAL_REPLAY_TOKEN"))
 	if value := strings.TrimSpace(os.Getenv("PORT")); value != "" {
 		port, err := strconv.Atoi(value)
 		if err != nil || port < 1 || port > 65535 {

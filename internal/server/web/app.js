@@ -24,7 +24,7 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     replayMarketPanel: $('replayMarketPanel'), replayChart: $('replayChartCanvas'), replayChartEmpty: $('replayChartEmpty'),
     dailyChart: $('dailyChartCanvas'), dailyChartEmpty: $('dailyChartEmpty'), minuteChartTab: $('minuteChartTab'), dailyChartTab: $('dailyChartTab'),
     tapePanel: $('tapePanel'), tapeRows: $('tapeRows'), sizeHeading: $('sizeHeading'),
-    tickerForm: $('tickerForm'), tickerInput: $('tickerInput'), historySelect: $('historySelect'),
+    tickerForm: $('tickerForm'), tickerInput: $('tickerInput'), historySelect: $('historySelect'), externalReplayBadge: $('externalReplayBadge'),
     historyBack: $('historyBack'), historyForward: $('historyForward'), tickSelect: $('tickSelect'),
     soundButton: $('soundButton'), replayButton: $('replayButton'), controlsButton: $('controlsButton'), connectionState: $('connectionState'),
     nbbo: $('nbbo'), bestBid: $('bestBid'), bestBidSize: $('bestBidSize'), nbboSpread: $('nbboSpread'), nbboSpreadDollars: $('nbboSpreadDollars'), bestAsk: $('bestAsk'), bestAskSize: $('bestAskSize'),
@@ -59,6 +59,7 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     navSymbols: [], navIndex: -1, lastMetricUpdate: 0,
     prefixBase: { volume: 0, buyer: 0, seller: 0, prints: 0 }, midpoints: [],
     serverClockUS: 0, serverClockAt: 0, replay: null, replayConfig: null, pendingReplayReset: false,
+    externalTargetUS: 0,
     minuteBars: [], dailyBars: [], marketChartView: 'minute', dailyHistorySymbol: '', dailyHistoryPending: false, dirtyDailyChart: true,
     replayChartEndUS: 0, replayChartKey: '', dirtyReplayChart: true, marketChartEnabled: false, xtraEnabled: false,
     rvolWarmup: { symbol: '', ready: false, pending: false, attempt: 0, token: 0, timer: null, controller: null },
@@ -1746,6 +1747,12 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
       elements.tickerInput.select();
     });
     elements.tickerInput.addEventListener('focus', () => elements.tickerInput.select());
+    elements.externalReplayBadge.addEventListener('click', async () => {
+      // Ordinary replay transport is intentionally a manual action and the
+      // server detaches ownership before applying it.
+      await replayAction({ action: 'pause' }).catch(() => {});
+      await refreshExternalReplayStatus();
+    });
     elements.historySelect.addEventListener('change', () => switchSymbol(elements.historySelect.value, true));
     elements.historyBack.addEventListener('click', () => {
       if (state.navIndex <= 0) return;
@@ -1903,6 +1910,31 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
         stepRewind(event.key === ',' ? -1 : 1);
       }
     });
+  }
+
+  async function refreshExternalReplayStatus() {
+    try {
+      const response = await fetch('/api/external-replay/status', { cache: 'no-store' });
+      if (!response.ok) return;
+      const payload = await response.json();
+      const control = payload.control || {};
+      const visible = Boolean(control.attached) || control.state === 'detached';
+      elements.externalReplayBadge.hidden = !visible;
+      elements.tapePanel.classList.toggle('fast-follow', Boolean(control.fast_follow));
+      elements.externalReplayBadge.classList.toggle('fast', Boolean(control.fast_follow));
+      elements.externalReplayBadge.classList.toggle('locked', Boolean(control.attached && state.settings?.audio?.enabled && !audio.ready));
+      const targetUS = Number(control.target_us) || 0;
+      if (control.attached && targetUS && targetUS !== state.externalTargetUS) {
+        state.externalTargetUS = targetUS;
+        refreshReplayRange(false).catch(() => {});
+      }
+      if (!visible) return;
+      const at = control.target_us ? formatReplayTime(control.target_us) : '--:--:--';
+      let label = String(control.state || 'detached').replaceAll('_', ' ').toUpperCase();
+      if (control.attached && state.settings?.audio?.enabled && !audio.ready && !control.fast_follow) label = 'AUDIO LOCKED';
+      elements.externalReplayBadge.textContent = control.attached
+        ? `EXTERNAL REPLAY · ${control.symbol || state.symbol} · ${at} · ${label}` : 'EXTERNAL REPLAY · DETACHED';
+    } catch (_) {}
   }
 
   // Fire and forget: a display change is recorded on the receipt timeline so a
@@ -2567,6 +2599,8 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
   bindControls();
   new ResizeObserver(() => { state.dirtyChart = true; state.dirtyReplayChart = true; state.dirtyDayContext = true; state.dirtyDailyChart = true; }).observe(elements.visualStack);
   connect();
+  refreshExternalReplayStatus();
+  setInterval(refreshExternalReplayStatus, 500);
   updateNavButtons();
   updateSoundButton();
   requestAnimationFrame(animationLoop);

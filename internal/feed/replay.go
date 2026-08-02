@@ -30,6 +30,63 @@ type ReplayState struct {
 	PositionUS int64   `json:"position_us"`
 	Speed      float64 `json:"speed"`
 	Message    string  `json:"message,omitempty"`
+	Generation uint64  `json:"generation"`
+}
+
+// Cue reconstructs a bounded window synchronously through an exact target.
+// No events are streamed while reconstruction is in progress, so the browser
+// observes one new symbol generation rather than a mixed-symbol transition.
+func (r *Replay) Cue(request ReplayRequest, warmupUS, targetUS int64, playing bool) error {
+	request.Symbol = tape.NormalizeSymbol(request.Symbol)
+	if request.Symbol == "" || warmupUS <= 0 || targetUS < warmupUS || request.EndUS < targetUS {
+		return fmt.Errorf("invalid cue range")
+	}
+	if request.Source != "historical" || request.Provider == "all" {
+		return fmt.Errorf("external cue requires a specific historical provider")
+	}
+	rows, err := r.database.Events(context.Background(), request.Symbol, request.Source, request.Provider, warmupUS, targetUS)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	events := make([]storage.Event, 0, 8192)
+	for rows.Next() {
+		event, scanErr := storage.ScanEvent(rows)
+		if scanErr != nil {
+			return scanErr
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	if r.cancel != nil {
+		r.cancel()
+		r.cancel = nil
+	}
+	r.generation++
+	generation := r.generation
+	r.request = request
+	r.cursor = replayCursor{}
+	r.resumeUS = targetUS
+	r.store.Activate(request.Symbol)
+	r.store.Clear(request.Symbol)
+	for _, event := range events {
+		r.applyEvent(request, event)
+		r.cursor = replayCursor{eventUS: event.EventUS, kind: event.Kind, id: event.ID, valid: true}
+	}
+	stateName := "paused"
+	if playing {
+		stateName = "replaying"
+	}
+	r.state = ReplayState{State: stateName, Symbol: request.Symbol, Source: request.Source, Provider: request.Provider, StartUS: targetUS, EndUS: request.EndUS, PositionUS: targetUS, Speed: request.Speed, Message: "external replay", Generation: generation}
+	r.mu.Unlock()
+	r.setFeedStatus(stateName, "external replay")
+	if playing {
+		r.launch(request, targetUS, r.cursor, "replaying")
+	}
+	return nil
 }
 
 type RenderAudioEvent struct {
@@ -209,7 +266,7 @@ func (r *Replay) PrepareRender(request ReplayRequest, warmupUS int64) error {
 	r.state = ReplayState{
 		State: "paused", Symbol: request.Symbol, Source: request.Source, Provider: request.Provider,
 		StartUS: request.StartUS, EndUS: request.EndUS, PositionUS: warmupUS,
-		Speed: request.Speed, Message: fmt.Sprintf("deterministic render %s/%s", request.Provider, request.Source),
+		Speed: request.Speed, Message: fmt.Sprintf("deterministic render %s/%s", request.Provider, request.Source), Generation: r.generation,
 	}
 	r.mu.Unlock()
 
@@ -358,7 +415,7 @@ func (r *Replay) launch(request ReplayRequest, fromUS int64, cursor replayCursor
 	r.state = ReplayState{
 		State: stateName, Symbol: request.Symbol, Source: request.Source, Provider: request.Provider,
 		StartUS: request.StartUS, EndUS: request.EndUS, PositionUS: position,
-		Speed: request.Speed, Message: fmt.Sprintf("%.2fx %s/%s", request.Speed, request.Provider, request.Source),
+		Speed: request.Speed, Message: fmt.Sprintf("%.2fx %s/%s", request.Speed, request.Provider, request.Source), Generation: generation,
 	}
 	r.mu.Unlock()
 	r.setFeedStatus("replaying", fmt.Sprintf("%.2fx %s/%s", request.Speed, request.Provider, request.Source))
@@ -391,14 +448,28 @@ func (r *Replay) play(ctx context.Context, generation uint64, request ReplayRequ
 		if err := waitUntil(ctx, due); err != nil {
 			return
 		}
-		r.applyEvent(request, event)
-		r.updatePosition(generation, event)
+		if !r.applyCurrent(generation, request, event) {
+			return
+		}
 	}
 	if err := rows.Err(); err != nil && !errorsIsCancellation(err) {
 		r.finish(generation, "error", err.Error())
 		return
 	}
 	r.finish(generation, "complete", "replay complete")
+}
+
+func (r *Replay) applyCurrent(generation uint64, request ReplayRequest, event storage.Event) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if generation != r.generation {
+		return false
+	}
+	r.applyEvent(request, event)
+	r.cursor = replayCursor{eventUS: event.EventUS, kind: event.Kind, id: event.ID, valid: true}
+	r.resumeUS = event.EventUS
+	r.state.PositionUS = event.EventUS
+	return true
 }
 
 func (r *Replay) updatePosition(generation uint64, event storage.Event) {

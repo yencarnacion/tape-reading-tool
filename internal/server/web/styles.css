@@ -70,6 +70,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .ticker-form input { width: 86px; height: 32px; padding: 0 7px; color: var(--yellow); font-size: 17px; font-weight: 850; text-transform: uppercase; }
 .go-button { min-width: 34px; padding: 0 7px; color: #07110e; background: var(--green); border-color: var(--green); }
 .history-select { width: 34px; min-width: 34px; height: 32px; padding: 0 3px; color: var(--muted); }
+.external-replay-badge { color: #07110e; background: var(--yellow); border-color: var(--yellow); white-space: nowrap; }
+.external-replay-badge.fast { color: #fff; background: var(--red); border-color: var(--red); }
+.external-replay-badge.locked { color: var(--yellow); background: #2b2616; }
+.tape-panel.fast-follow { opacity: .42; }
+.tape-panel.fast-follow::after { content: 'FAST FOLLOW · DETAILED TAPE SUPPRESSED'; position: absolute; inset: 45% 8%; display: grid; place-items: center; color: #fff; background: #b32636e6; font-weight: 900; letter-spacing: .08em; z-index: 8; }
 .toolbar select { height: 32px; padding: 0 7px; font-size: 12px; font-weight: 750; }
 .sound-button.active { color: #06110d; background: var(--green); border-color: var(--green); }
 .sound-button.muted { color: var(--red); }
@@ -347,7 +352,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .pressure-track { right: 5px; bottom: 2px; left: 5px; }
 }
 
-.tape-panel { min-width: 0; display: flex; flex-direction: column; overflow: hidden; border-left: 1px solid var(--line); background: #0d1014; }
+.tape-panel { position: relative; min-width: 0; display: flex; flex-direction: column; overflow: hidden; border-left: 1px solid var(--line); background: #0d1014; }
 .tape-header { height: 29px; flex: 0 0 29px; display: grid; grid-template-columns: 68px minmax(0, 1fr); column-gap: 5px; align-items: center; padding: 0 6px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; font-weight: 800; }
 .tape-header span:last-child { text-align: right; }
 .tape-rows { min-height: 0; flex: 1 1 auto; overflow: hidden; font: 700 16px/22px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
