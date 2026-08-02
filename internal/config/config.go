@@ -148,7 +148,7 @@ func Defaults() Config {
 			BatchSize: 2048, FlushInterval: "50ms", HistoricalRequestInterval: "11s",
 		},
 		Replay:         ReplayConfig{Source: "live", Provider: "all", Speed: 1, ChartRightGapBars: 5},
-		ExternalReplay: ExternalReplayConfig{LoopbackOnly: true, DefaultWarmup: "180s", MaxDetailedSpeed: 4, SyncTolerance: "750ms"},
+		ExternalReplay: ExternalReplayConfig{Enabled: true, LoopbackOnly: true, DefaultWarmup: "180s", MaxDetailedSpeed: 4, SyncTolerance: "750ms"},
 		// 180 seconds keeps every rolling horizon valid at the deepest 30-second
 		// rewind: the 60-second window plus its own 60-second pace baseline.
 		Rewind:  RewindConfig{Enabled: true, BufferSeconds: 180, AutoReturnSeconds: 20, MaxPrintsPerSecond: 2000},

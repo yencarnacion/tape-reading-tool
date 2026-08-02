@@ -50,9 +50,10 @@ IBKR_CLIENT_ID=97
 DEFAULT_TICKER=AAPL
 PORT=8097
 MASSIVE_API_KEY=replace_with_your_massive_api_key
+TAPE_EXTERNAL_REPLAY_TOKEN=replace_with_your_private_random_token
 ```
 
-Keep the real Massive key only in `.env`; `.env` and the `data/` recording directory are ignored by Git. The app loads `.env` automatically. `config.yaml` deliberately leaves `massive.api_key` blank.
+Keep the real Massive key and control token only in `.env`; `.env` and the `data/` recording directory are ignored by Git. The app loads `.env` automatically. `config.yaml` deliberately leaves `massive.api_key` blank. Generate the token with `openssl rand -hex 32` and use the same value for DaiDai's `DAIDAI_TAPE_CONTROL_TOKEN`.
 
 Common socket ports are `7497` for TWS paper, `7496` for TWS live, `4002` for Gateway paper, and `4001` for Gateway live. Confirm the port in the API settings of the running TWS/Gateway instance.
 

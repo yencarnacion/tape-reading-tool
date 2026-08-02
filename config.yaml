@@ -60,7 +60,7 @@ replay:
   chart_right_gap_bars: 5
 
 external_replay:
-  enabled: false
+  enabled: true
   loopback_only: true
   default_warmup: 180s
   max_detailed_speed: 4

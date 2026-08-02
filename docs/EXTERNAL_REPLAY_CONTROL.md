@@ -4,7 +4,7 @@ Tape Reading Tool can be cued by a local journal, review program, scanner, or ed
 
 ## Configuration and security
 
-External control is off by default:
+External control is enabled by default for the local DaiDai integration:
 
 ```yaml
 external_replay:
@@ -15,7 +15,7 @@ external_replay:
   sync_tolerance: 750ms
 ```
 
-Optionally set `TAPE_EXTERNAL_REPLAY_TOKEN` in `.env`. It is read only from the environment; a `token:` key in YAML is ignored. When configured, every control request must include `X-Tape-Control-Token`, compared in constant time. The endpoints do not enable CORS, and the intended control path is local server-to-server HTTP rather than a browser. Loopback restriction is on by default; do not disable it on an untrusted network.
+Set `TAPE_EXTERNAL_REPLAY_TOKEN` in `.env` and use the same random value for DaiDai's `DAIDAI_TAPE_CONTROL_TOKEN`. It is read only from the environment; a `token:` key in YAML is ignored. When configured, every control request must include `X-Tape-Control-Token`, compared in constant time. The endpoints do not enable CORS, and the intended control path is local server-to-server HTTP rather than a browser. Loopback restriction is on by default; do not disable it on an untrusted network.
 
 Read-only status and coverage remain available on loopback without a token so a controller can tell "not ready" from "not authorised". Mutating control always follows the configured policy.
 
