@@ -324,6 +324,9 @@ func TestFailedCueDoesNotDisturbANewerCue(t *testing.T) {
 	if status.Generation != generation || status.Message == "stale failure" {
 		t.Fatalf("an older cue's failure overwrote the newer one: %+v", status)
 	}
+	if feedStatus := store.Status(); feedStatus.Message == "stale failure" || feedStatus.State != status.State {
+		t.Fatalf("an older cue's failure overwrote the newer feed status: %+v", feedStatus)
+	}
 	if trades := store.Snapshot("AAPL", 0).Trades; len(trades) != 31 {
 		t.Fatalf("the newer cue's tape was disturbed: %d trades", len(trades))
 	}

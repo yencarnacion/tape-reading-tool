@@ -140,14 +140,16 @@ func (r *Replay) Cue(ctx context.Context, request ReplayRequest, warmupUS, targe
 // A newer generation owns the state instead and is left alone.
 func (r *Replay) abortCue(generation uint64, reason string) {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	if generation != r.generation || r.state.State != "replaying" {
-		r.mu.Unlock()
 		return
 	}
 	r.state.State = "paused"
 	r.state.Message = reason
 	r.state.Generation = generation
-	r.mu.Unlock()
+	// Keep replay ownership until the public feed status agrees with the replay
+	// state. Otherwise a newer cue can publish "replaying" in between these two
+	// updates and then have this stale failure overwrite it with "paused".
 	r.setFeedStatus("paused", reason)
 }
 
