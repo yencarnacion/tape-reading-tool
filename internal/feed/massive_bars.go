@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 
 	"github.com/massive-com/client-go/v3/rest"
 	"github.com/massive-com/client-go/v3/rest/gen"
@@ -54,6 +55,9 @@ func DownloadMassiveMinuteBars(ctx context.Context, cfg config.MassiveConfig, da
 	}
 	if response.JSON200 == nil {
 		return fmt.Errorf("Massive minute bars returned no result")
+	}
+	if response.JSON200.NextUrl != nil && strings.TrimSpace(*response.JSON200.NextUrl) != "" {
+		return fmt.Errorf("Massive minute-bar range exceeds one complete response; split it into smaller explicit ranges")
 	}
 	bars := make([]storage.MinuteBar, 0, response.JSON200.ResultsCount)
 	if response.JSON200.Results != nil {

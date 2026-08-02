@@ -177,9 +177,11 @@ func TestExternalReplayTokenComesOnlyFromTheEnvironment(t *testing.T) {
 
 func TestExternalReplayValidationBounds(t *testing.T) {
 	for name, mutate := range map[string]func(*Config){
-		"warmup":    func(c *Config) { c.ExternalReplay.DefaultWarmup = "soon" },
-		"tolerance": func(c *Config) { c.ExternalReplay.SyncTolerance = "" },
-		"speed low": func(c *Config) { c.ExternalReplay.MaxDetailedSpeed = 0 },
+		"warmup":             func(c *Config) { c.ExternalReplay.DefaultWarmup = "soon" },
+		"warmup zero":        func(c *Config) { c.ExternalReplay.DefaultWarmup = "0s" },
+		"tolerance":          func(c *Config) { c.ExternalReplay.SyncTolerance = "" },
+		"tolerance negative": func(c *Config) { c.ExternalReplay.SyncTolerance = "-1ms" },
+		"speed low":          func(c *Config) { c.ExternalReplay.MaxDetailedSpeed = 0 },
 		"speed high": func(c *Config) {
 			c.ExternalReplay.MaxDetailedSpeed = 21
 		},

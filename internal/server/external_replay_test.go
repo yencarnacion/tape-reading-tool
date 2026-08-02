@@ -565,6 +565,25 @@ func TestSyncCorrectsSmallForwardDriftWithoutRebuilding(t *testing.T) {
 	}
 }
 
+func TestSyncSpeedChangeRebuildsAndAppliesAuthoritativeSpeed(t *testing.T) {
+	fixture := newExternalFixture(t, func(cfg *config.Config) { cfg.ExternalReplay.SyncTolerance = "750ms" })
+	if code := fixture.control(t, fixture.cue("AAPL", 1, 20*time.Second, false, 1), nil, "").Code; code != http.StatusOK {
+		t.Fatalf("cue = %d", code)
+	}
+	generation := fixture.store.Generation("AAPL")
+	syncRequest := fixture.cue("AAPL", 2, 20*time.Second+500*time.Millisecond, false, 2)
+	syncRequest["action"] = "sync"
+	if response := fixture.control(t, syncRequest, nil, ""); response.Code != http.StatusOK {
+		t.Fatalf("speed sync = %d: %s", response.Code, response.Body.String())
+	}
+	if fixture.store.Generation("AAPL") == generation {
+		t.Fatal("a speed change must rebuild instead of advertising an unapplied speed")
+	}
+	if status := fixture.replay.Status(); status.Speed != 2 {
+		t.Fatalf("replay speed = %v, want 2", status.Speed)
+	}
+}
+
 func TestManualTransportAndTickerDetachButDisplaySettingsDoNot(t *testing.T) {
 	for _, action := range []string{"pause", "stop", "seek"} {
 		fixture := newExternalFixture(t, nil)
@@ -612,11 +631,19 @@ func TestAudioReadinessIsReportedRatherThanAssumed(t *testing.T) {
 		body := fmt.Sprintf(`{"audio_ready":%v}`, ready)
 		request := httptest.NewRequest(http.MethodPost, "/api/external-replay/ui", bytes.NewBufferString(body))
 		request.Header.Set("Content-Type", "application/json")
+		request.RemoteAddr = "127.0.0.1:54321"
 		response := httptest.NewRecorder()
 		fixture.server.handleExternalReplayUI(response, request)
 		if response.Code != http.StatusOK {
 			t.Fatalf("ui status = %d: %s", response.Code, response.Body.String())
 		}
+	}
+	remoteRequest := httptest.NewRequest(http.MethodPost, "/api/external-replay/ui", bytes.NewBufferString(`{"audio_ready":true}`))
+	remoteRequest.RemoteAddr = "203.0.113.4:54321"
+	remoteResponse := httptest.NewRecorder()
+	fixture.server.handleExternalReplayUI(remoteResponse, remoteRequest)
+	if remoteResponse.Code != http.StatusForbidden {
+		t.Fatalf("remote UI heartbeat = %d, want %d", remoteResponse.Code, http.StatusForbidden)
 	}
 	post(false)
 	if status := fixture.status(t); status["ui_audio_ready"] != false {
@@ -752,5 +779,29 @@ func TestDriftIsCorrectedWhilePlaying(t *testing.T) {
 	}
 	if control["state"] != externalStateFollowing || control["playing"] != true {
 		t.Fatalf("control = %+v", control)
+	}
+}
+
+func TestTransportOnlySyncPublishesTheNewReplayGeneration(t *testing.T) {
+	fixture := newExternalFixture(t, func(cfg *config.Config) { cfg.ExternalReplay.SyncTolerance = "750ms" })
+	if response := fixture.control(t, fixture.cue("AAPL", 1, 20*time.Second, true, 1), nil, ""); response.Code != http.StatusOK {
+		t.Fatalf("cue = %d: %s", response.Code, response.Body.String())
+	}
+	_, positionUS, before, playing := fixture.replay.Position()
+	if !playing {
+		t.Fatal("expected playing replay")
+	}
+	pause := fixture.cue("AAPL", 2, time.Duration(positionUS-fixture.baseUS+100_000)*time.Microsecond, false, 1)
+	pause["action"] = "sync"
+	if response := fixture.control(t, pause, nil, ""); response.Code != http.StatusOK {
+		t.Fatalf("pause sync = %d: %s", response.Code, response.Body.String())
+	}
+	_, _, after, playing := fixture.replay.Position()
+	if playing || after == before {
+		t.Fatalf("pause did not advance generation: before=%d after=%d playing=%v", before, after, playing)
+	}
+	control := fixture.controlState(t)
+	if uint64(control["generation"].(float64)) != after {
+		t.Fatalf("control generation=%v replay generation=%d", control["generation"], after)
 	}
 }

@@ -289,7 +289,10 @@ func TestOpenMigratesSchemaThreeAndPreservesRows(t *testing.T) {
 	if err := db.InsertTrades(context.Background(), []TradeRecord{{Symbol: "AAPL", EventUS: base, Price: 200, Size: 10, Source: "historical", Provider: "massive"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.db.Exec("UPDATE metadata SET value='3' WHERE key='schema_version'"); err != nil {
+	// Recreate the actual previous layout: the durable event tables exist, but
+	// the new bar and coverage tables do not.
+	if _, err := db.db.Exec(`DROP TABLE minute_bars; DROP TABLE download_coverage;
+      UPDATE metadata SET value='3' WHERE key='schema_version'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {

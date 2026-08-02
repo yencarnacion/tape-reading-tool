@@ -75,6 +75,11 @@ func DownloadMassiveHistorical(ctx context.Context, cfg config.MassiveConfig, da
 		return fmt.Errorf("valid symbol, start, and end are required")
 	}
 	startUS, endUS := options.Start.UnixMicro(), options.End.UnixMicro()
+	for _, kind := range []string{"trades", "quotes"} {
+		if err := database.InvalidateCoverage(ctx, symbol, "massive", kind, startUS, endUS); err != nil {
+			return err
+		}
+	}
 	if err := database.DeleteRange(ctx, symbol, "historical", "massive", startUS, endUS); err != nil {
 		return err
 	}
@@ -83,14 +88,14 @@ func DownloadMassiveHistorical(ctx context.Context, cfg config.MassiveConfig, da
 	if err != nil {
 		return err
 	}
-	if err := markDownloadCoverage(ctx, database, symbol, "trades", options, int64(trades)); err != nil {
+	if err := markDownloadCoverage(ctx, database, symbol, "massive", "trades", options, int64(trades)); err != nil {
 		return err
 	}
 	quotes, err := downloadMassiveQuotes(ctx, client, database, symbol, options)
 	if err != nil {
 		return err
 	}
-	if err := markDownloadCoverage(ctx, database, symbol, "quotes", options, int64(quotes)); err != nil {
+	if err := markDownloadCoverage(ctx, database, symbol, "massive", "quotes", options, int64(quotes)); err != nil {
 		return err
 	}
 	log.Printf("Massive historical complete symbol=%s trades=%d quotes=%d database=%s", symbol, trades, quotes, database.Path())
@@ -283,7 +288,7 @@ func massiveQuotesIterator(ctx context.Context, client *rest.Client, symbol stri
 // for. A regular-hours download deliberately discards extended-hours records, so
 // claiming the whole requested span would later read as "no prints happened"
 // rather than "that period was never downloaded".
-func markDownloadCoverage(ctx context.Context, database *storage.Database, symbol, kind string, options HistoricalOptions, rows int64) error {
+func markDownloadCoverage(ctx context.Context, database *storage.Database, symbol, provider, kind string, options HistoricalOptions, rows int64) error {
 	intervals := []storage.Interval{{StartUS: options.Start.UnixMicro(), EndUS: options.End.UnixMicro()}}
 	if options.UseRTH {
 		intervals = regularSessionIntervals(options.Start, options.End)
@@ -294,7 +299,7 @@ func markDownloadCoverage(ctx context.Context, database *storage.Database, symbo
 			count = 0
 		}
 		if err := database.MarkCoverage(ctx, storage.Coverage{
-			Symbol: symbol, Provider: "massive", Kind: kind,
+			Symbol: symbol, Provider: provider, Kind: kind,
 			StartUS: interval.StartUS, EndUS: interval.EndUS, RowCount: count,
 		}); err != nil {
 			return err

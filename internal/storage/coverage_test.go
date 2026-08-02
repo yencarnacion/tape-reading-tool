@@ -2,9 +2,33 @@ package storage
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 )
+
+func TestInvalidateCoveragePreservesOnlyUnaffectedRemainders(t *testing.T) {
+	database := testDatabase(t)
+	ctx := context.Background()
+	if err := database.MarkCoverage(ctx, Coverage{
+		Symbol: "AAPL", Provider: "massive", Kind: "quotes",
+		StartUS: 100, EndUS: 500, CompletedUS: 42, RowCount: 99,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.InvalidateCoverage(ctx, "AAPL", "massive", "quotes", 200, 299); err != nil {
+		t.Fatal(err)
+	}
+	covered, missing, err := database.CoverageIntervals(ctx, "AAPL", "massive", "quotes", 100, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCovered := []Interval{{StartUS: 100, EndUS: 199}, {StartUS: 300, EndUS: 500}}
+	wantMissing := []Interval{{StartUS: 200, EndUS: 299}}
+	if !reflect.DeepEqual(covered, wantCovered) || !reflect.DeepEqual(missing, wantMissing) {
+		t.Fatalf("covered=%+v missing=%+v, want covered=%+v missing=%+v", covered, missing, wantCovered, wantMissing)
+	}
+}
 
 const minuteSizeUS = int64(time.Minute / time.Microsecond)
 

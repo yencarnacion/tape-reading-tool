@@ -417,6 +417,7 @@ func (r *Replay) Pause() error {
 	r.generation++
 	r.state.State = "paused"
 	r.state.Message = "paused"
+	r.state.Generation = r.generation
 	r.mu.Unlock()
 	r.setFeedStatus("paused", "replay paused")
 	return nil
@@ -439,7 +440,7 @@ func (r *Replay) Resume() error {
 	return nil
 }
 
-func (r *Replay) Seek(targetUS int64) error {
+func (r *Replay) SeekTo(targetUS int64) error {
 	r.mu.RLock()
 	request := r.request
 	r.mu.RUnlock()
@@ -467,6 +468,7 @@ func (r *Replay) stop(updateStatus bool) {
 	r.generation++
 	r.state.State = "stopped"
 	r.state.Message = "stopped"
+	r.state.Generation = r.generation
 	r.mu.Unlock()
 	if updateStatus {
 		r.setFeedStatus("stopped", "replay stopped")

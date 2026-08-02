@@ -45,7 +45,7 @@ func TestReplayPauseResumeSeekAndHistoricalQuoteClassification(t *testing.T) {
 		t.Fatal(err)
 	}
 	seekUS := base + 5e6
-	if err := replay.Seek(seekUS); err != nil {
+	if err := replay.SeekTo(seekUS); err != nil {
 		t.Fatal(err)
 	}
 	if err := replay.Pause(); err != nil {

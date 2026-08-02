@@ -136,6 +136,11 @@ func DownloadHistorical(ctx context.Context, cfg config.IBKRConfig, database *st
 		PrimaryExchange: cfg.PrimaryExchange, Currency: cfg.Currency,
 	}
 	startUS, endUS := options.Start.UnixMicro(), options.End.UnixMicro()
+	for _, kind := range []string{"trades", "quotes"} {
+		if err := database.InvalidateCoverage(ctx, symbol, "ibkr", kind, startUS, endUS); err != nil {
+			return err
+		}
+	}
 	if err := database.DeleteRange(ctx, symbol, "historical", "ibkr", startUS, endUS); err != nil {
 		return fmt.Errorf("clear historical range: %w", err)
 	}
@@ -144,8 +149,14 @@ func DownloadHistorical(ctx context.Context, cfg config.IBKRConfig, database *st
 	if err != nil {
 		return err
 	}
+	if err := markDownloadCoverage(ctx, database, symbol, "ibkr", "trades", options, int64(tradeCount)); err != nil {
+		return err
+	}
 	quoteCount, err := downloadHistoricalQuotes(ctx, client, wrapper, database, contract, options)
 	if err != nil {
+		return err
+	}
+	if err := markDownloadCoverage(ctx, database, symbol, "ibkr", "quotes", options, int64(quoteCount)); err != nil {
 		return err
 	}
 	log.Printf("IBKR historical complete symbol=%s trades=%d quotes=%d database=%s", symbol, tradeCount, quoteCount, database.Path())

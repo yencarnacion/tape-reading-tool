@@ -580,6 +580,81 @@ func (d *Database) MarkCoverage(ctx context.Context, c Coverage) error {
 	return err
 }
 
+// InvalidateCoverage removes a range that is about to be replaced while
+// preserving completed coverage on either side. This must happen before a
+// downloader deletes existing rows: if the replacement later fails, coverage
+// must describe the remaining durable data rather than the old successful
+// request.
+func (d *Database) InvalidateCoverage(ctx context.Context, symbol, provider, kind string, startUS, endUS int64) error {
+	provider, err := resolveProvider(provider)
+	if err != nil {
+		return err
+	}
+	symbol = strings.ToUpper(strings.TrimSpace(symbol))
+	if symbol == "" || !validCoverageKind(kind) || startUS <= 0 || endUS < startUS {
+		return fmt.Errorf("invalid coverage invalidation")
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT start_us,end_us,completed_us FROM download_coverage
+      WHERE symbol=? AND provider=? AND kind=? AND end_us>=? AND start_us<=?`,
+		symbol, provider, kind, startUS, endUS)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	type remainder struct{ start, end, completed int64 }
+	remainders := make([]remainder, 0, 4)
+	for rows.Next() {
+		var existingStart, existingEnd, completed int64
+		if err := rows.Scan(&existingStart, &existingEnd, &completed); err != nil {
+			rows.Close()
+			tx.Rollback()
+			return err
+		}
+		if existingStart < startUS {
+			remainders = append(remainders, remainder{existingStart, startUS - 1, completed})
+		}
+		if existingEnd > endUS {
+			remainders = append(remainders, remainder{endUS + 1, existingEnd, completed})
+		}
+	}
+	if err := rows.Close(); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM download_coverage
+      WHERE symbol=? AND provider=? AND kind=? AND end_us>=? AND start_us<=?`,
+		symbol, provider, kind, startUS, endUS); err != nil {
+		tx.Rollback()
+		return err
+	}
+	for _, item := range remainders {
+		table, timestampColumn := kind, "event_us"
+		if kind == "minute_bars" {
+			table, timestampColumn = "minute_bars", "minute_us"
+		}
+		var rowCount int64
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table+`
+		  WHERE symbol=? AND provider=? AND source='historical' AND `+timestampColumn+`>=? AND `+timestampColumn+`<=?`,
+			symbol, provider, item.start, item.end).Scan(&rowCount); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO download_coverage
+		  (symbol,provider,kind,start_us,end_us,completed_us,row_count) VALUES(?,?,?,?,?,?,?)
+		  ON CONFLICT(symbol,provider,kind,start_us,end_us) DO UPDATE SET
+		  completed_us=excluded.completed_us,row_count=excluded.row_count`,
+			symbol, provider, kind, item.start, item.end, item.completed, rowCount); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func validCoverageKind(kind string) bool {
 	return kind == "minute_bars" || kind == "trades" || kind == "quotes"
 }

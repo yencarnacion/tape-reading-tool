@@ -129,6 +129,10 @@ func (s *Server) handleExternalReplayUI(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.externalClientAllowed(r) {
+		http.Error(w, "external replay UI status is loopback-only", http.StatusForbidden)
+		return
+	}
 	defer r.Body.Close()
 	var request struct {
 		AudioReady bool `json:"audio_ready"`
@@ -255,7 +259,8 @@ func (s *Server) handleExternalReplayControl(w http.ResponseWriter, r *http.Requ
 		symbol, positionUS, generation, _ := replay.Position()
 		drift := request.TargetUS - positionUS
 		sameGeneration := generation == current.Generation
-		if symbol == request.Symbol && sameGeneration && drift >= 0 && drift <= tolerance.Microseconds() && fast == current.FastFollow && !fast {
+		if symbol == request.Symbol && sameGeneration && drift >= 0 && drift <= tolerance.Microseconds() &&
+			fast == current.FastFollow && !fast && request.Speed == current.Speed {
 			s.externalMu.Lock()
 			s.external.Sequence = request.Sequence
 			s.external.TargetUS = request.TargetUS
@@ -272,6 +277,11 @@ func (s *Server) handleExternalReplayControl(w http.ResponseWriter, r *http.Requ
 			s.externalMu.Unlock()
 			if err := s.applyExternalTransport(replay, request.Playing); err != nil {
 				s.recordExternalError(err.Error())
+			} else {
+				_, _, transportGeneration, _ := replay.Position()
+				s.externalMu.Lock()
+				s.external.Generation = transportGeneration
+				s.externalMu.Unlock()
 			}
 			writeJSON(w, http.StatusOK, s.externalStatus())
 			return

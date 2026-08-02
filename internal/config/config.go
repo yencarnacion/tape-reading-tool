@@ -242,11 +242,15 @@ func (c Config) Validate() error {
 	if c.Replay.ChartRightGapBars < 5 || c.Replay.ChartRightGapBars > 100 {
 		return errors.New("replay.chart_right_gap_bars must be between 5 and 100")
 	}
-	if _, err := time.ParseDuration(c.ExternalReplay.DefaultWarmup); err != nil {
+	if duration, err := time.ParseDuration(c.ExternalReplay.DefaultWarmup); err != nil {
 		return fmt.Errorf("external_replay.default_warmup: %w", err)
+	} else if duration <= 0 {
+		return errors.New("external_replay.default_warmup must be positive")
 	}
-	if _, err := time.ParseDuration(c.ExternalReplay.SyncTolerance); err != nil {
+	if duration, err := time.ParseDuration(c.ExternalReplay.SyncTolerance); err != nil {
 		return fmt.Errorf("external_replay.sync_tolerance: %w", err)
+	} else if duration <= 0 {
+		return errors.New("external_replay.sync_tolerance must be positive")
 	}
 	if c.ExternalReplay.MaxDetailedSpeed < 1 || c.ExternalReplay.MaxDetailedSpeed > 20 {
 		return errors.New("external_replay.max_detailed_speed must be between 1 and 20")

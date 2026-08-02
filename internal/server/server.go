@@ -629,7 +629,7 @@ func (s *Server) handleReplay(w http.ResponseWriter, r *http.Request) {
 	case "resume":
 		err = replay.Resume()
 	case "seek":
-		err = replay.Seek(request.TargetUS)
+		err = replay.SeekTo(request.TargetUS)
 	case "stop":
 		replay.Stop()
 	default:
