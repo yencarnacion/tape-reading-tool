@@ -133,15 +133,36 @@ export function appendMinuteBar(bars, event, limit = 2000) {
   const size = Math.max(0, Number(event.z) || 0);
   if (!marketUS || !Number.isFinite(price) || price <= 0) return null;
   const timeUS = Math.floor(marketUS / 6e7) * 6e7;
-  let bar = bars[bars.length - 1];
-  if (!bar || bar.timeUS !== timeUS) {
-    bar = { timeUS, open: price, high: price, low: price, close: price, volume: 0, dollarVolume: 0 };
-    bars.push(bar);
+  // Delivery is ordered by receipt time, but candles use exchange time. A late
+  // report can therefore belong to an earlier minute. Appending it at the end
+  // creates a duplicate old candle, and the next ordinary print creates a
+  // duplicate current candle. Keep the array ordered and merge by minute.
+  const index = lowerBound(bars, timeUS, (candidate) => Number(candidate.timeUS));
+  let bar = bars[index];
+  if (!bar || Number(bar.timeUS) !== timeUS) {
+    bar = {
+      timeUS, open: price, high: price, low: price, close: price,
+      volume: 0, dollarVolume: 0, _openTimeUS: marketUS, _closeTimeUS: marketUS
+    };
+    bars.splice(index, 0, bar);
     if (bars.length > limit) bars.splice(0, bars.length - limit);
+  } else {
+    // These timestamps are client-only aggregation metadata. Bars hydrated
+    // from an authoritative snapshot do not have them; in that case a prior
+    // completed candle keeps its established open/close while still accepting
+    // the late print's high, low, and volume.
+    if (Number.isFinite(bar._openTimeUS) && marketUS < bar._openTimeUS) {
+      bar.open = price;
+      bar._openTimeUS = marketUS;
+    }
+    if ((Number.isFinite(bar._closeTimeUS) && marketUS >= bar._closeTimeUS) ||
+        (!Number.isFinite(bar._closeTimeUS) && index === bars.length - 1)) {
+      bar.close = price;
+      bar._closeTimeUS = marketUS;
+    }
   }
   bar.high = Math.max(bar.high, price);
   bar.low = Math.min(bar.low, price);
-  bar.close = price;
   bar.volume += size;
   bar.dollarVolume += price * size;
   return bar;

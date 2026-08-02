@@ -15,6 +15,32 @@ const { RewindBuffer, createRewindSource, rewindBufferBytes } = await import('..
 
 const BASE_US = 1_784_726_400_000_000; // 2026-07-22 13:30:00Z, a fixed instant.
 
+// Minute candles use exchange time while events arrive in receipt-time order.
+// These are the three shapes observed in COIN on 2026-07-31: a report crossing
+// the next minute, another ordinary print in the current minute, and a much
+// older sale reported late. None may create a duplicate, near-empty candle.
+{
+  const bars = [];
+  const trade = (marketUS, price, size) => ({ t: marketUS / 1000, p: price, z: size });
+  const minute0 = BASE_US;
+  const minute1 = minute0 + 60e6;
+  model.appendMinuteBar(bars, trade(minute0 + 58e6, 100, 10));
+  model.appendMinuteBar(bars, trade(minute1 + 200e3, 101, 20));
+  model.appendMinuteBar(bars, trade(minute0 + 59e6, 100.5, 3));
+  model.appendMinuteBar(bars, trade(minute1 + 500e3, 101.5, 30));
+
+  assert.deepEqual(bars.map((bar) => bar.timeUS), [minute0, minute1], 'late boundary report keeps unique sorted minutes');
+  assert.equal(bars[0].volume, 13, 'late boundary report merges into completed-minute volume');
+  assert.equal(bars[0].close, 100.5, 'exchange-time order determines the completed-minute close');
+  assert.equal(bars[1].volume, 50, 'current minute is not split after a late report');
+  assert.equal(bars[1].close, 101.5, 'current-minute close continues normally');
+
+  const oldMinute = minute0 - 14 * 60e6;
+  model.appendMinuteBar(bars, trade(oldMinute + 3e6, 99, 874));
+  assert.deepEqual(bars.map((bar) => bar.timeUS), [oldMinute, minute0, minute1], 'very late sale inserts at its exchange minute');
+  assert.equal(new Set(bars.map((bar) => bar.timeUS)).size, bars.length, 'minute aggregation never duplicates a timestamp');
+}
+
 // Replay seek deliberately publishes one empty stream snapshot before the new
 // range starts arriving. Every source accessor and rolling metric must remain
 // valid during that frame so the browser animation loop can continue.
