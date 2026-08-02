@@ -206,6 +206,8 @@ Manual ticker and transport operations are ordered against whole external contro
 
 A `409` for incomplete data returns the exact missing intervals per data kind and sets the badge to `DATA INCOMPLETE`.
 
+A cue cancels the running generation before it reads, so a cue that then fails — including one abandoned when the controller disconnects or times out mid-request — leaves playback stopped. The replay reports `paused` with the reason rather than continuing to advertise playback that no longer exists, the cued position is kept so the session can be resumed manually, and `control.state` becomes `error`. Reissue the cue with the next sequence to recover.
+
 ## Limitations
 
 - Control is local HTTP, not a durable distributed coordination protocol.

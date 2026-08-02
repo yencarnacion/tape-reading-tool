@@ -73,11 +73,13 @@ func (r *Replay) Cue(ctx context.Context, request ReplayRequest, warmupUS, targe
 	r.mu.Unlock()
 	stage := r.store.PrepareRebuild(request.Symbol)
 	if stage == nil {
+		r.abortCue(generation, "cue rejected an unusable symbol")
 		return CueReport{}, fmt.Errorf("invalid cue symbol")
 	}
 
 	rows, err := r.database.Events(ctx, request.Symbol, request.Source, request.Provider, warmupUS, targetUS)
 	if err != nil {
+		r.abortCue(generation, "cue read failed: "+err.Error())
 		return CueReport{}, err
 	}
 	defer rows.Close()
@@ -86,6 +88,7 @@ func (r *Replay) Cue(ctx context.Context, request ReplayRequest, warmupUS, targe
 	for rows.Next() {
 		event, scanErr := storage.ScanEvent(rows)
 		if scanErr != nil {
+			r.abortCue(generation, "cue read failed: "+scanErr.Error())
 			return CueReport{}, scanErr
 		}
 		r.applyEventTo(stage, event)
@@ -93,6 +96,7 @@ func (r *Replay) Cue(ctx context.Context, request ReplayRequest, warmupUS, targe
 		rowCount++
 	}
 	if err := rows.Err(); err != nil {
+		r.abortCue(generation, "cue read failed: "+err.Error())
 		return CueReport{}, err
 	}
 
@@ -126,6 +130,25 @@ func (r *Replay) Cue(ctx context.Context, request ReplayRequest, warmupUS, targe
 	log.Printf("external cue symbol=%s target_us=%d warmup_us=%d rows=%d generation=%d playing=%v duration=%s",
 		request.Symbol, targetUS, warmupUS, report.Rows, report.Generation, playing, report.Duration.Round(time.Millisecond))
 	return report, nil
+}
+
+// abortCue restores a truthful state after a reconstruction fails. The previous
+// generation was already cancelled by then, so leaving the status at "replaying"
+// would report playback that no longer exists - a controller polling status, or
+// an operator watching the clock, would both be told the replay is still moving.
+// The cursor and resume position are untouched, so the session can be resumed.
+// A newer generation owns the state instead and is left alone.
+func (r *Replay) abortCue(generation uint64, reason string) {
+	r.mu.Lock()
+	if generation != r.generation || r.state.State != "replaying" {
+		r.mu.Unlock()
+		return
+	}
+	r.state.State = "paused"
+	r.state.Message = reason
+	r.state.Generation = generation
+	r.mu.Unlock()
+	r.setFeedStatus("paused", reason)
 }
 
 // Track advances the authoritative historical clock without touching the tape.

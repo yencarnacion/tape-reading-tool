@@ -225,3 +225,106 @@ func TestResetSubscriptionsRejectsStaleRequestIDs(t *testing.T) {
 		t.Fatalf("subscriptions survived reconnect: %+v", f.subs)
 	}
 }
+
+func newCueFixture(t *testing.T) (*Replay, *tape.Store, int64) {
+	t.Helper()
+	cfg := config.Defaults().Storage
+	cfg.Path = filepath.Join(t.TempDir(), "replay.db")
+	cfg.FlushInterval = "5ms"
+	database, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	base := time.Date(2026, 7, 2, 13, 30, 0, 0, time.UTC).UnixMicro()
+	trades := make([]storage.TradeRecord, 0, 60)
+	for i := range 60 {
+		at := base + int64(i)*int64(time.Second/time.Microsecond)
+		trades = append(trades, storage.TradeRecord{
+			Symbol: "AAPL", EventUS: at, MarketTimeUS: at, ExchangeTimeMS: at / 1000,
+			Price: 100 + float64(i)*0.01, Size: 100, Source: "historical", Provider: "massive",
+		})
+	}
+	if err := database.InsertTrades(context.Background(), trades); err != nil {
+		t.Fatal(err)
+	}
+	for range 200 {
+		dataRange, err := database.DataRange(context.Background(), "AAPL", "historical", "massive")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dataRange.Trades >= 60 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	store := tape.NewStore("AAPL", 1000, 4)
+	return NewReplay(database, store, "historical", "massive", 1), store, base
+}
+
+func cueRequest(base int64) ReplayRequest {
+	return ReplayRequest{
+		Symbol: "AAPL", Source: "historical", Provider: "massive",
+		StartUS: base, EndUS: base + 60*int64(time.Second/time.Microsecond), Speed: 1,
+	}
+}
+
+// A cue cancels the running generation before it reads. If the read then fails -
+// a controller that disconnects mid-cue cancels the request context - the status
+// must stop claiming the replay is still moving, because both a polling
+// controller and the operator's clock would otherwise be told playback continues.
+func TestFailedCueStopsReportingPlaybackAndStaysResumable(t *testing.T) {
+	replay, _, base := newCueFixture(t)
+	if _, err := replay.Cue(context.Background(), cueRequest(base), base, base+10e6, true); err != nil {
+		t.Fatal(err)
+	}
+	waitReplayState(t, replay, "replaying")
+	playingAt := replay.Status().PositionUS
+
+	dead, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := replay.Cue(dead, cueRequest(base), base, base+20e6, true); err == nil {
+		t.Fatal("a cue on a cancelled context must fail")
+	}
+	time.Sleep(120 * time.Millisecond)
+
+	status := replay.Status()
+	if status.State == "replaying" {
+		t.Fatalf("status still claims playback after the cue failed: %+v", status)
+	}
+	if status.PositionUS < playingAt {
+		t.Fatalf("the failed cue rewound the reported position: %d then %d", playingAt, status.PositionUS)
+	}
+	if status.Message == "" {
+		t.Fatal("the failure was not explained")
+	}
+	// The session is left recoverable rather than wedged.
+	if err := replay.Resume(); err != nil {
+		t.Fatalf("resume after a failed cue: %v", err)
+	}
+	waitReplayState(t, replay, "replaying")
+}
+
+// A failure must never demote a newer generation that already took ownership.
+func TestFailedCueDoesNotDisturbANewerCue(t *testing.T) {
+	replay, store, base := newCueFixture(t)
+	if _, err := replay.Cue(context.Background(), cueRequest(base), base, base+10e6, true); err != nil {
+		t.Fatal(err)
+	}
+	waitReplayState(t, replay, "replaying")
+
+	// A newer cue lands while an older one is about to report its failure.
+	if _, err := replay.Cue(context.Background(), cueRequest(base), base, base+30e6, false); err != nil {
+		t.Fatal(err)
+	}
+	generation := replay.Status().Generation
+	replay.abortCue(generation-1, "stale failure")
+
+	status := replay.Status()
+	if status.Generation != generation || status.Message == "stale failure" {
+		t.Fatalf("an older cue's failure overwrote the newer one: %+v", status)
+	}
+	if trades := store.Snapshot("AAPL", 0).Trades; len(trades) != 31 {
+		t.Fatalf("the newer cue's tape was disturbed: %d trades", len(trades))
+	}
+}
