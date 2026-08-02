@@ -26,7 +26,7 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     tapePanel: $('tapePanel'), tapeRows: $('tapeRows'), sizeHeading: $('sizeHeading'),
     tickerForm: $('tickerForm'), tickerInput: $('tickerInput'), historySelect: $('historySelect'), externalReplayBadge: $('externalReplayBadge'),
     historyBack: $('historyBack'), historyForward: $('historyForward'), tickSelect: $('tickSelect'),
-    soundButton: $('soundButton'), replayButton: $('replayButton'), controlsButton: $('controlsButton'), connectionState: $('connectionState'),
+    soundButton: $('soundButton'), replayButton: $('replayButton'), replayPlayButton: $('replayPlayButton'), replayPauseButton: $('replayPauseButton'), controlsButton: $('controlsButton'), connectionState: $('connectionState'),
     nbbo: $('nbbo'), bestBid: $('bestBid'), bestBidSize: $('bestBidSize'), nbboSpread: $('nbboSpread'), nbboSpreadDollars: $('nbboSpreadDollars'), bestAsk: $('bestAsk'), bestAskSize: $('bestAskSize'),
     lastPrice: $('lastPrice'), priceChange: $('priceChange'), maxDelta: $('maxDelta'), minDelta: $('minDelta'), tapeRate: $('tapeRate'),
     marketClock: $('marketClock'), marketClockLabel: $('marketClockLabel'), marketClockTime: $('marketClockTime'),
@@ -1574,6 +1574,8 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     const replayMode = status?.mode === 'replay';
     const relativeVolumeMode = ['live', 'massive', 'demo', 'replay'].includes(String(status?.mode || '').toLowerCase());
     elements.replayButton.hidden = !replayMode;
+    elements.replayPlayButton.hidden = !replayMode;
+    elements.replayPauseButton.hidden = !replayMode;
     elements.relativeVolume.hidden = !relativeVolumeMode;
     // The rewind pane lives in this slot, so the slot is present for the whole
     // session rather than appearing when a rewind starts.
@@ -1793,6 +1795,12 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     elements.replayButton.addEventListener('click', async () => {
       elements.replayDialog.showModal();
       await refreshReplayRange();
+    });
+    elements.replayPlayButton.addEventListener('click', async () => {
+      await replayAction({ action: 'resume' });
+    });
+    elements.replayPauseButton.addEventListener('click', async () => {
+      await replayAction({ action: 'pause' });
     });
     elements.replayProvider.addEventListener('change', refreshReplayRange);
     elements.replaySource.addEventListener('change', refreshReplayRange);
@@ -2039,6 +2047,7 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
       state.replay = await response.json();
       updateReplayControls(state.replay);
       if (payload.action === 'start' || payload.action === 'seek') await refreshReplayRange(false);
+      await refreshExternalReplayStatus();
     } catch (error) {
       elements.replayStatus.textContent = String(error.message || error).trim();
     }
@@ -2052,6 +2061,8 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     elements.replayPause.classList.toggle('active', paused);
     elements.replayPause.disabled = !['replaying', 'paused'].includes(replay.state);
     elements.replayStop.disabled = !['replaying', 'paused'].includes(replay.state);
+    elements.replayPlayButton.disabled = !paused;
+    elements.replayPauseButton.disabled = replay.state !== 'replaying';
     if (replay.message) elements.replayStatus.textContent = `${String(replay.state || '').toUpperCase()} · ${replay.message}`;
   }
 
@@ -2569,6 +2580,12 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
   }
 
   window.__tapeReadingCandleVolume = formatCandleVolume;
+  // Exposed solely for deterministic browser validation.
+  window.__tapeReadingReplayToolbar = {
+    update: (replay) => updateReplayControls(replay),
+    setMode: (mode) => setConnection({ ...state.status, mode }),
+    mode: () => state.status?.mode || ''
+  };
   // Exposed solely for deterministic browser validation.
   window.__tapeReadingRewind = {
     state() {

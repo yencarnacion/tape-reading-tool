@@ -43,6 +43,79 @@ try {
   await waitForApp();
 
   const results = [];
+  const replayToolbarCheck = await command('Runtime.evaluate', {
+    expression: `(async () => {
+      const api = window.__tapeReadingReplayToolbar;
+      const play = document.querySelector('#replayPlayButton');
+      const pause = document.querySelector('#replayPauseButton');
+      const replay = document.querySelector('#replayButton');
+      const controls = document.querySelector('#controlsButton');
+      const initialMode = api.mode();
+      const states = {};
+      api.setMode('replay');
+      for (const replayState of ['ready', 'paused', 'replaying', 'stopped']) {
+        api.update({ state: replayState, position_us: 123456789 });
+        states[replayState] = { playDisabled: play.disabled, pauseDisabled: pause.disabled };
+      }
+      const order = [replay, play, pause, controls].map((element) => element.id);
+      const modes = {};
+      for (const mode of ['live', 'demo', 'render', 'massive', 'replay']) {
+        api.setMode(mode);
+        modes[mode] = { replay: replay.hidden, play: play.hidden, pause: pause.hidden };
+      }
+
+      api.setMode('replay');
+      api.update({ state: 'paused', position_us: 123456789 });
+      const originalFetch = window.fetch;
+      const requests = [];
+      window.fetch = async (url, options = {}) => {
+        if (url === '/api/replay') {
+          requests.push(JSON.parse(options.body));
+          return new Response(JSON.stringify({ state: 'replaying', position_us: 123456789 }), {
+            status: 200, headers: { 'Content-Type': 'application/json' }
+          });
+        }
+        if (url === '/api/external-replay/status') {
+          return new Response(JSON.stringify({ enabled: true, control: { attached: false, state: 'detached' } }), {
+            status: 200, headers: { 'Content-Type': 'application/json' }
+          });
+        }
+        return originalFetch(url, options);
+      };
+      play.click();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      window.fetch = originalFetch;
+      const result = {
+        states, order, modes, requests,
+        positionUS: 123456789,
+        dialogStart: document.querySelector('#replayStart').value,
+        playLabel: play.textContent,
+        pauseLabel: pause.textContent
+      };
+      api.setMode(initialMode);
+      return result;
+    })()`, awaitPromise: true, returnByValue: true
+  });
+  const replayToolbar = replayToolbarCheck.result.value;
+  if (JSON.stringify(replayToolbar.order) !== JSON.stringify(['replayButton', 'replayPlayButton', 'replayPauseButton', 'controlsButton']) ||
+      !replayToolbar.states.ready.playDisabled || !replayToolbar.states.ready.pauseDisabled ||
+      replayToolbar.states.paused.playDisabled || !replayToolbar.states.paused.pauseDisabled ||
+      !replayToolbar.states.replaying.playDisabled || replayToolbar.states.replaying.pauseDisabled ||
+      !replayToolbar.states.stopped.playDisabled || !replayToolbar.states.stopped.pauseDisabled) {
+    throw new Error(`replay toolbar state mapping failed: ${JSON.stringify(replayToolbar)}`);
+  }
+  for (const mode of ['live', 'demo', 'render', 'massive']) {
+    if (!replayToolbar.modes[mode].replay || !replayToolbar.modes[mode].play || !replayToolbar.modes[mode].pause) {
+      throw new Error(`replay toolbar must be absent in ${mode} mode: ${JSON.stringify(replayToolbar.modes)}`);
+    }
+  }
+  if (replayToolbar.modes.replay.replay || replayToolbar.modes.replay.play || replayToolbar.modes.replay.pause) {
+    throw new Error(`replay toolbar must be visible in replay mode: ${JSON.stringify(replayToolbar.modes.replay)}`);
+  }
+  if (replayToolbar.requests.length !== 1 || replayToolbar.requests[0].action !== 'resume' ||
+      Object.keys(replayToolbar.requests[0]).length !== 1 || replayToolbar.positionUS !== 123456789) {
+    throw new Error(`toolbar PLAY restarted instead of resuming the cued position: ${JSON.stringify(replayToolbar)}`);
+  }
   const scaleCheck = await command('Runtime.evaluate', {
     expression: `(() => {
       const update = window.__tapeReadingScale;
@@ -416,6 +489,26 @@ try {
   for (const width of [384, 634, 902, 1372]) {
     await command('Emulation.setDeviceMetricsOverride', { width, height: 1080, deviceScaleFactor: 1, mobile: false });
     await waitForApp();
+    const replayToolbarLayout = await command('Runtime.evaluate', {
+      expression: `(() => {
+        const api = window.__tapeReadingReplayToolbar;
+        const initialMode = api.mode();
+        api.setMode('replay');
+        const toolbar = document.querySelector('.toolbar');
+        const buttons = ['replayButton', 'replayPlayButton', 'replayPauseButton', 'controlsButton']
+          .map((id) => document.querySelector('#' + id).getBoundingClientRect().toJSON());
+        const result = {
+          scrollWidth: toolbar.scrollWidth, clientWidth: toolbar.clientWidth,
+          oneRow: buttons.every((rect) => Math.abs(rect.top - buttons[0].top) < 1)
+        };
+        api.setMode(initialMode);
+        return result;
+      })()`, returnByValue: true
+    });
+    const toolbarLayout = replayToolbarLayout.result.value;
+    if (toolbarLayout.scrollWidth > toolbarLayout.clientWidth || !toolbarLayout.oneRow) {
+      throw new Error(`replay toolbar reflowed at ${width}px: ${JSON.stringify(toolbarLayout)}`);
+    }
     if (width === 384) {
       const button = await command('Runtime.evaluate', {
         expression: `(() => { const r = document.querySelector('#soundButton').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,

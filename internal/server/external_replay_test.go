@@ -586,17 +586,35 @@ func TestSyncSpeedChangeRebuildsAndAppliesAuthoritativeSpeed(t *testing.T) {
 }
 
 func TestManualTransportAndTickerDetachButDisplaySettingsDoNot(t *testing.T) {
-	for _, action := range []string{"pause", "stop", "seek"} {
+	for _, test := range []struct {
+		action  string
+		playing bool
+	}{
+		{action: "pause", playing: true},
+		{action: "resume", playing: false},
+		{action: "stop", playing: true},
+		{action: "seek", playing: true},
+	} {
 		fixture := newExternalFixture(t, nil)
-		if code := fixture.control(t, fixture.cue("AAPL", 1, 20*time.Second, true, 1), nil, "").Code; code != http.StatusOK {
-			t.Fatalf("%s: cue = %d", action, code)
+		if code := fixture.control(t, fixture.cue("AAPL", 1, 20*time.Second, test.playing, 1), nil, "").Code; code != http.StatusOK {
+			t.Fatalf("%s: cue = %d", test.action, code)
 		}
-		body := fmt.Sprintf(`{"action":%q,"target_us":%d}`, action, fixture.baseUS+5*int64(time.Second/time.Microsecond))
+		body := fmt.Sprintf(`{"action":%q,"target_us":%d}`, test.action, fixture.baseUS+5*int64(time.Second/time.Microsecond))
 		request := httptest.NewRequest(http.MethodPost, "/api/replay", bytes.NewBufferString(body))
 		request.Header.Set("Content-Type", "application/json")
-		fixture.server.handleReplay(httptest.NewRecorder(), request)
+		response := httptest.NewRecorder()
+		fixture.server.handleReplay(response, request)
+		if test.action == "resume" && response.Code != http.StatusOK {
+			t.Fatalf("%s: replay = %d: %s", test.action, response.Code, response.Body.String())
+		}
 		if control := fixture.controlState(t); control["attached"] != false || control["state"] != externalStateDetached {
-			t.Fatalf("%s: manual transport must detach: %+v", action, control)
+			t.Fatalf("%s: manual transport must detach: %+v", test.action, control)
+		}
+		if test.action == "resume" {
+			status := fixture.replay.Status()
+			if status.State != "replaying" || status.PositionUS < fixture.baseUS+20*int64(time.Second/time.Microsecond) {
+				t.Fatalf("resume must continue from the cued position: %+v", status)
+			}
 		}
 	}
 
