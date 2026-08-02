@@ -177,6 +177,7 @@ func (r *Replay) Track(symbol string, targetUS int64) error {
 	r.state.PositionUS = targetUS
 	r.state.Generation = r.generation
 	r.resumeUS = targetUS
+	r.setFeedStatus("paused", "fast follow")
 	return nil
 }
 

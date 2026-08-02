@@ -392,6 +392,13 @@ func TestFeedStatusAgreesWithReplayStateAcrossTransitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	agree(t, "pause")
+	if err := replay.Track("AAPL", base+15*second); err != nil {
+		t.Fatal(err)
+	}
+	agree(t, "fast follow")
+	if feed := store.Status(); feed.Message != "fast follow" {
+		t.Fatalf("fast follow: browser retained stale message %q", feed.Message)
+	}
 	if err := replay.Resume(); err != nil {
 		t.Fatal(err)
 	}
