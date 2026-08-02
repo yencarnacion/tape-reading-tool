@@ -260,10 +260,13 @@ type storeSink struct {
 // arbitrarily busy warmup into it without retaining the event set in memory,
 // then publish the completed state in one atomic swap.
 type RebuildStage struct {
-	store    *Store
-	symbol   string
-	previous *symbolTape
-	tape     *symbolTape
+	store              *Store
+	symbol             string
+	previous           *symbolTape
+	previousGeneration uint64
+	previousNextSeq    uint64
+	previousQuote      Quote
+	tape               *symbolTape
 }
 
 // PrepareRebuild starts a replacement of one symbol. Nothing the caller streams
@@ -282,14 +285,21 @@ func (s *Store) PrepareRebuild(symbol string) *RebuildStage {
 	previous := s.tapes[symbol]
 	s.mu.RUnlock()
 	staged := newSymbolTape(symbol, s.ringSize)
+	var previousGeneration, previousNextSeq uint64
+	var previousQuote Quote
 	if previous != nil {
 		previous.mu.RLock()
-		staged.generation = previous.generation + 1
-		staged.nextSeq = previous.nextSeq
-		staged.quote.PreviousClose = previous.quote.PreviousClose
+		previousGeneration = previous.generation
+		previousNextSeq = previous.nextSeq
+		previousQuote = previous.quote
+		staged.generation = previousGeneration + 1
+		staged.nextSeq = previousNextSeq
+		staged.quote.PreviousClose = previousQuote.PreviousClose
 		previous.mu.RUnlock()
 	}
-	return &RebuildStage{store: s, symbol: symbol, previous: previous, tape: staged}
+	return &RebuildStage{store: s, symbol: symbol, previous: previous,
+		previousGeneration: previousGeneration, previousNextSeq: previousNextSeq,
+		previousQuote: previousQuote, tape: staged}
 }
 
 func (r *RebuildStage) UpdateQuote(bid, ask, bidSize, askSize float64) {
@@ -316,6 +326,18 @@ func (r *RebuildStage) Commit() bool {
 	defer s.mu.Unlock()
 	if s.tapes[r.symbol] != r.previous {
 		return false
+	}
+	// A writer can mutate the published tape without replacing its pointer.
+	// Refuse that stale stage too, or its copied counter could reuse a sequence
+	// assigned while the rebuild was in progress and discard that write.
+	if r.previous != nil {
+		r.previous.mu.RLock()
+		unchanged := r.previous.generation == r.previousGeneration &&
+			r.previous.nextSeq == r.previousNextSeq && r.previous.quote == r.previousQuote
+		r.previous.mu.RUnlock()
+		if !unchanged {
+			return false
+		}
 	}
 	s.tapes[r.symbol] = r.tape
 	s.active = r.symbol

@@ -197,6 +197,37 @@ func TestPreparedRebuildIsRingBoundedAndStaleStageCannotPublish(t *testing.T) {
 	}
 }
 
+func TestPreparedRebuildCannotReplaceTapeWrittenSincePreparation(t *testing.T) {
+	store := NewStore("AAPL", 1024, 8)
+	at := time.Date(2026, 7, 2, 9, 30, 0, 0, time.UTC)
+	store.AddTrade("AAPL", at, at, 100, 10)
+	stage := store.PrepareRebuild("AAPL")
+	stage.AddTrade(at, at, 200, 10)
+
+	concurrent := store.AddTrade("AAPL", at, at, 101, 10)
+	if stage.Commit() {
+		t.Fatal("a stage prepared before a published write must not replace it")
+	}
+	snapshot := store.Snapshot("AAPL", 0)
+	if len(snapshot.Trades) != 2 || snapshot.Trades[1].Seq != concurrent.Seq || snapshot.Trades[1].Price != concurrent.Price {
+		t.Fatalf("published write was disturbed: %+v", snapshot.Trades)
+	}
+}
+
+func TestPreparedRebuildCannotReplaceQuoteUpdatedSincePreparation(t *testing.T) {
+	store := NewStore("AAPL", 1024, 8)
+	stage := store.PrepareRebuild("AAPL")
+	stage.UpdateQuote(200, 200.02, 10, 10)
+
+	store.UpdateQuote("AAPL", 100, 100.02, 20, 30)
+	if stage.Commit() {
+		t.Fatal("a stage prepared before a published quote update must not replace it")
+	}
+	if quote := store.Snapshot("AAPL", 0).Quote; quote.Bid != 100 || quote.AskSize != 30 {
+		t.Fatalf("published quote was disturbed: %+v", quote)
+	}
+}
+
 func TestSymbolSinkWritesToThePublishedTape(t *testing.T) {
 	store := NewStore("AAPL", 1024, 8)
 	at := time.Date(2026, 7, 2, 9, 30, 0, 0, time.UTC)
