@@ -83,14 +83,14 @@ func DownloadMassiveHistorical(ctx context.Context, cfg config.MassiveConfig, da
 	if err != nil {
 		return err
 	}
-	if err := database.MarkCoverage(ctx, storage.Coverage{Symbol: symbol, Provider: "massive", Kind: "trades", StartUS: startUS, EndUS: endUS, RowCount: int64(trades)}); err != nil {
+	if err := markDownloadCoverage(ctx, database, symbol, "trades", options, int64(trades)); err != nil {
 		return err
 	}
 	quotes, err := downloadMassiveQuotes(ctx, client, database, symbol, options)
 	if err != nil {
 		return err
 	}
-	if err := database.MarkCoverage(ctx, storage.Coverage{Symbol: symbol, Provider: "massive", Kind: "quotes", StartUS: startUS, EndUS: endUS, RowCount: int64(quotes)}); err != nil {
+	if err := markDownloadCoverage(ctx, database, symbol, "quotes", options, int64(quotes)); err != nil {
 		return err
 	}
 	log.Printf("Massive historical complete symbol=%s trades=%d quotes=%d database=%s", symbol, trades, quotes, database.Path())
@@ -277,6 +277,60 @@ func massiveQuotesIterator(ctx context.Context, client *rest.Client, symbol stri
 		return nil, err
 	}
 	return rest.NewIteratorFromResponse(client, response), nil
+}
+
+// markDownloadCoverage records only what the request actually asked the provider
+// for. A regular-hours download deliberately discards extended-hours records, so
+// claiming the whole requested span would later read as "no prints happened"
+// rather than "that period was never downloaded".
+func markDownloadCoverage(ctx context.Context, database *storage.Database, symbol, kind string, options HistoricalOptions, rows int64) error {
+	intervals := []storage.Interval{{StartUS: options.Start.UnixMicro(), EndUS: options.End.UnixMicro()}}
+	if options.UseRTH {
+		intervals = regularSessionIntervals(options.Start, options.End)
+	}
+	for _, interval := range intervals {
+		count := rows
+		if len(intervals) != 1 {
+			count = 0
+		}
+		if err := database.MarkCoverage(ctx, storage.Coverage{
+			Symbol: symbol, Provider: "massive", Kind: kind,
+			StartUS: interval.StartUS, EndUS: interval.EndUS, RowCount: count,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// regularSessionIntervals splits a request into its 09:30–16:00 Eastern parts so
+// coverage describes exactly the periods a regular-hours download retained.
+func regularSessionIntervals(start, end time.Time) []storage.Interval {
+	location, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		return nil
+	}
+	intervals := make([]storage.Interval, 0, 8)
+	day := start.In(location)
+	day = time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, location)
+	for ; !day.After(end.In(location)); day = day.AddDate(0, 0, 1) {
+		if day.Weekday() == time.Saturday || day.Weekday() == time.Sunday {
+			continue
+		}
+		open := time.Date(day.Year(), day.Month(), day.Day(), 9, 30, 0, 0, location)
+		close := time.Date(day.Year(), day.Month(), day.Day(), 16, 0, 0, 0, location)
+		if open.Before(start) {
+			open = start
+		}
+		if close.After(end) {
+			close = end
+		}
+		if !close.After(open) {
+			continue
+		}
+		intervals = append(intervals, storage.Interval{StartUS: open.UnixMicro(), EndUS: close.UnixMicro() - 1})
+	}
+	return intervals
 }
 
 func massiveHistoricalRetryDelay(attempt int) time.Duration {

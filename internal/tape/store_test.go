@@ -67,7 +67,7 @@ func TestRingSinceReportsOverrun(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		store.AddTrade("AAPL", now, now, 10+float64(i), 1)
 	}
-	trades, _, dropped, more := store.Since("AAPL", 0, 10)
+	trades, _, dropped, more, _ := store.Since("AAPL", 0, 10)
 	if dropped != 2 {
 		t.Fatalf("dropped = %d, want 2", dropped)
 	}
@@ -78,7 +78,7 @@ func TestRingSinceReportsOverrun(t *testing.T) {
 		t.Fatalf("unexpected retained trades: %+v", trades)
 	}
 
-	first, _, dropped, more := store.Since("AAPL", 2, 2)
+	first, _, dropped, more, _ := store.Since("AAPL", 2, 2)
 	if dropped != 0 || !more || len(first) != 2 || first[0].Seq != 3 || first[1].Seq != 4 {
 		t.Fatalf("unexpected limited batch: trades=%+v dropped=%d more=%v", first, dropped, more)
 	}

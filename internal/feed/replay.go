@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"sync"
 	"time"
 
@@ -33,33 +34,35 @@ type ReplayState struct {
 	Generation uint64  `json:"generation"`
 }
 
-// Cue reconstructs a bounded window synchronously through an exact target.
-// No events are streamed while reconstruction is in progress, so the browser
-// observes one new symbol generation rather than a mixed-symbol transition.
-func (r *Replay) Cue(request ReplayRequest, warmupUS, targetUS int64, playing bool) error {
+// CueReport describes one completed reconstruction. The external control API
+// turns it into the diagnostics an operator needs when a cue is slow or a
+// generation is superseded.
+type CueReport struct {
+	Generation uint64
+	Rows       int
+	Duration   time.Duration
+	PositionUS int64
+}
+
+// Cue reconstructs a bounded window through an exact target and publishes it as
+// one new generation. Reconstruction runs on a detached tape, so the browser
+// never sees a half-built symbol and the warmup is never delivered as
+// incremental prints that the audio path would sound. The previous generation is
+// cancelled before the read, so its in-flight events can no longer publish.
+func (r *Replay) Cue(ctx context.Context, request ReplayRequest, warmupUS, targetUS int64, playing bool) (CueReport, error) {
+	started := time.Now()
 	request.Symbol = tape.NormalizeSymbol(request.Symbol)
 	if request.Symbol == "" || warmupUS <= 0 || targetUS < warmupUS || request.EndUS < targetUS {
-		return fmt.Errorf("invalid cue range")
+		return CueReport{}, fmt.Errorf("invalid cue range")
 	}
-	if request.Source != "historical" || request.Provider == "all" {
-		return fmt.Errorf("external cue requires a specific historical provider")
+	if request.Source != "historical" || request.Provider == "all" || request.Provider == "" {
+		return CueReport{}, fmt.Errorf("external cue requires a specific historical provider")
 	}
-	rows, err := r.database.Events(context.Background(), request.Symbol, request.Source, request.Provider, warmupUS, targetUS)
-	if err != nil {
-		return err
+	if request.Speed <= 0 {
+		request.Speed = 1
 	}
-	defer rows.Close()
-	events := make([]storage.Event, 0, 8192)
-	for rows.Next() {
-		event, scanErr := storage.ScanEvent(rows)
-		if scanErr != nil {
-			return scanErr
-		}
-		events = append(events, event)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
+	// Cancelling first means a superseded generation stops applying events while
+	// this cue reads, rather than racing the swap below.
 	r.mu.Lock()
 	if r.cancel != nil {
 		r.cancel()
@@ -67,15 +70,40 @@ func (r *Replay) Cue(request ReplayRequest, warmupUS, targetUS int64, playing bo
 	}
 	r.generation++
 	generation := r.generation
-	r.request = request
-	r.cursor = replayCursor{}
-	r.resumeUS = targetUS
-	r.store.Activate(request.Symbol)
-	r.store.Clear(request.Symbol)
-	for _, event := range events {
-		r.applyEvent(request, event)
-		r.cursor = replayCursor{eventUS: event.EventUS, kind: event.Kind, id: event.ID, valid: true}
+	r.mu.Unlock()
+
+	rows, err := r.database.Events(ctx, request.Symbol, request.Source, request.Provider, warmupUS, targetUS)
+	if err != nil {
+		return CueReport{}, err
 	}
+	defer rows.Close()
+	events := make([]storage.Event, 0, 8192)
+	for rows.Next() {
+		event, scanErr := storage.ScanEvent(rows)
+		if scanErr != nil {
+			return CueReport{}, scanErr
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return CueReport{}, err
+	}
+
+	r.mu.Lock()
+	if generation != r.generation {
+		r.mu.Unlock()
+		return CueReport{}, fmt.Errorf("cue superseded by a newer generation")
+	}
+	cursor := replayCursor{}
+	r.store.Rebuild(request.Symbol, func(sink tape.Sink) {
+		for _, event := range events {
+			r.applyEventTo(sink, event)
+			cursor = replayCursor{eventUS: event.EventUS, kind: event.Kind, id: event.ID, valid: true}
+		}
+	})
+	r.request = request
+	r.cursor = cursor
+	r.resumeUS = targetUS
 	stateName := "paused"
 	if playing {
 		stateName = "replaying"
@@ -84,9 +112,51 @@ func (r *Replay) Cue(request ReplayRequest, warmupUS, targetUS int64, playing bo
 	r.mu.Unlock()
 	r.setFeedStatus(stateName, "external replay")
 	if playing {
-		r.launch(request, targetUS, r.cursor, "replaying")
+		// launch publishes its own generation. Report that one, or a later sync
+		// would see a mismatch against a stale value and rebuild instead of
+		// absorbing the drift it was sent to correct.
+		r.launch(request, targetUS, cursor, "replaying")
+		_, _, generation, _ = r.Position()
 	}
+	report := CueReport{Generation: generation, Rows: len(events), Duration: time.Since(started), PositionUS: targetUS}
+	log.Printf("external cue symbol=%s target_us=%d warmup_us=%d rows=%d generation=%d playing=%v duration=%s",
+		request.Symbol, targetUS, warmupUS, report.Rows, report.Generation, playing, report.Duration.Round(time.Millisecond))
+	return report, nil
+}
+
+// Track advances the authoritative historical clock without touching the tape.
+// Fast follow uses it above the detailed speed threshold, where the detailed
+// renderer would only fall further behind, and where the tape is explicitly
+// labelled as suppressed rather than presented as current.
+func (r *Replay) Track(symbol string, targetUS int64) error {
+	symbol = tape.NormalizeSymbol(symbol)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if symbol == "" || symbol != r.state.Symbol {
+		return fmt.Errorf("track requires the cued symbol")
+	}
+	if targetUS <= 0 || targetUS > r.request.EndUS {
+		return fmt.Errorf("track timestamp is outside the cued range")
+	}
+	if r.cancel != nil {
+		r.cancel()
+		r.cancel = nil
+	}
+	r.generation++
+	r.state.State = "paused"
+	r.state.Message = "fast follow"
+	r.state.PositionUS = targetUS
+	r.state.Generation = r.generation
+	r.resumeUS = targetUS
 	return nil
+}
+
+// Position reports the authoritative replay clock so a controller can measure
+// its own drift against it.
+func (r *Replay) Position() (symbol string, positionUS int64, generation uint64, playing bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.state.Symbol, r.state.PositionUS, r.state.Generation, r.state.State == "replaying"
 }
 
 type RenderAudioEvent struct {
@@ -304,13 +374,20 @@ func (r *Replay) StepRender(targetUS int64) (uint64, error) {
 }
 
 func (r *Replay) applyEvent(request ReplayRequest, event storage.Event) {
+	r.applyEventTo(r.store.SymbolSink(request.Symbol), event)
+}
+
+// applyEventTo is the single event-application rule. Streaming replay, render
+// warmup, and external cue reconstruction all use it, so a rebuilt tape is
+// identical to one that was replayed print by print.
+func (r *Replay) applyEventTo(sink tape.Sink, event storage.Event) {
 	receivedUS := event.ReceivedUS
 	if receivedUS <= 0 || event.Source == "historical" {
 		receivedUS = event.EventUS
 	}
 	received := time.UnixMicro(receivedUS)
 	if event.Kind == "quote" {
-		r.store.UpdateQuote(request.Symbol, event.Bid, event.Ask, event.BidSize, event.AskSize)
+		sink.UpdateQuote(event.Bid, event.Ask, event.BidSize, event.AskSize)
 		return
 	}
 	if !event.ChartEligible {
@@ -321,10 +398,10 @@ func (r *Replay) applyEvent(request ReplayRequest, event storage.Event) {
 		exchangeMS = event.MarketTimeUS / 1000
 	}
 	if event.Source == "historical" {
-		r.store.AddTrade(request.Symbol, time.UnixMilli(exchangeMS), received, event.Price, event.Size)
+		sink.AddTrade(time.UnixMilli(exchangeMS), received, event.Price, event.Size)
 		return
 	}
-	r.store.AddRecordedTrade(request.Symbol, time.UnixMilli(exchangeMS), received, event.Price, event.Size, event.Class, event.Side, event.Bid, event.Ask)
+	sink.AddRecordedTrade(time.UnixMilli(exchangeMS), received, event.Price, event.Size, event.Class, event.Side, event.Bid, event.Ask)
 }
 
 func (r *Replay) Pause() error {
@@ -470,17 +547,6 @@ func (r *Replay) applyCurrent(generation uint64, request ReplayRequest, event st
 	r.resumeUS = event.EventUS
 	r.state.PositionUS = event.EventUS
 	return true
-}
-
-func (r *Replay) updatePosition(generation uint64, event storage.Event) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if generation != r.generation {
-		return
-	}
-	r.cursor = replayCursor{eventUS: event.EventUS, kind: event.Kind, id: event.ID, valid: true}
-	r.resumeUS = event.EventUS
-	r.state.PositionUS = event.EventUS
 }
 
 func (r *Replay) finish(generation uint64, stateName, message string) {

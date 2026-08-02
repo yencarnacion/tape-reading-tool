@@ -46,6 +46,10 @@ type Server struct {
 	mode           string
 	externalMu     sync.Mutex
 	external       externalReplayState
+	uiAudio        uiAudioState
+	// externalControlMu serializes whole control operations. externalMu only
+	// guards the state struct itself and must never be held across a rebuild.
+	externalControlMu sync.Mutex
 }
 
 type rvolHistoryCache struct {
@@ -124,6 +128,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	mux.HandleFunc("/api/replay", s.handleReplay)
 	mux.HandleFunc("/api/external-replay/status", s.handleExternalReplayStatus)
 	mux.HandleFunc("/api/external-replay/control", s.handleExternalReplayControl)
+	mux.HandleFunc("/api/external-replay/ui", s.handleExternalReplayUI)
 	mux.HandleFunc("/api/historical/coverage/check", s.handleCoverageCheck)
 	mux.HandleFunc("/api/render", s.handleRender)
 	mux.HandleFunc("/api/rvol-history", s.handleRVOLHistory)
@@ -581,6 +586,7 @@ func (s *Server) handleReplay(w http.ResponseWriter, r *http.Request) {
 			chartEndUS = dataRange.StartUS
 		}
 		chartStartUS := replayChartDayStart(chartEndUS, dataRange.StartUS, s.cfg.App.Timezone)
+		chartStartUS = s.extendChartStartWithCachedBars(r.Context(), symbol, source, provider, chartStartUS, chartEndUS)
 		chartBars, err := replay.MinuteBars(r.Context(), symbol, source, provider, chartStartUS, chartEndUS)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -634,6 +640,30 @@ func (s *Server) handleReplay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, replay.Status())
+}
+
+// extendChartStartWithCachedBars reaches back to compact minute bars that have
+// no detailed prints, which is the whole point of caching them: a replay that
+// only downloaded the regular session still gets its premarket context, and with
+// -xtra it gets the previous session behind the reference levels. Detailed
+// prints are unaffected; only the chart window moves.
+func (s *Server) extendChartStartWithCachedBars(ctx context.Context, symbol, source, provider string, chartStartUS, chartEndUS int64) int64 {
+	if s.recorder == nil || source != "historical" || provider == "" || provider == "all" || chartEndUS <= 0 {
+		return chartStartUS
+	}
+	// Five calendar days always contains the previous trading session, including
+	// a long weekend or a holiday. Without -xtra there are no prior-session
+	// levels to draw, so the window stays inside the current session's premarket.
+	lookback := 12 * time.Hour
+	if s.liveXtra {
+		lookback = 5 * 24 * time.Hour
+	}
+	lookbackUS := chartStartUS - int64(lookback/time.Microsecond)
+	firstUS, _, count, err := s.recorder.MinuteBarRange(ctx, symbol, provider, lookbackUS, chartEndUS)
+	if err != nil || count == 0 || firstUS <= 0 || firstUS >= chartStartUS {
+		return chartStartUS
+	}
+	return firstUS
 }
 
 func replayChartDayStart(positionUS, dataStartUS int64, timezone string) int64 {
@@ -714,7 +744,13 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			for drain := 0; drain < 8; drain++ {
-				trades, quote, dropped, more := s.store.Since(symbol, seq, s.cfg.Tape.WebSocketMaxBatch)
+				trades, quote, dropped, more, current := s.store.Since(symbol, seq, s.cfg.Tape.WebSocketMaxBatch)
+				// The tape was replaced between the generation check above and
+				// this read. Sending its contents as deltas would deliver a whole
+				// reconstruction print by print; the next tick sends a snapshot.
+				if current != generation {
+					break
+				}
 				quoteChanged := quote != lastQuote
 				if len(trades) == 0 && dropped == 0 && !quoteChanged {
 					break

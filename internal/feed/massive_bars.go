@@ -24,6 +24,12 @@ func DownloadMassiveMinuteBars(ctx context.Context, cfg config.MassiveConfig, da
 	if symbol == "" || !options.End.After(options.Start) {
 		return fmt.Errorf("valid symbol, start, and end are required")
 	}
+	// Bars are the extended-hours chart context that detailed prints do not
+	// cover, so a regular-hours restriction would defeat the purpose rather than
+	// narrow it.
+	if options.UseRTH {
+		return fmt.Errorf("download-bars always covers extended hours; remove -rth")
+	}
 	client := rest.NewWithOptions(cfg.APIKey, rest.WithTrace(false), rest.WithPagination(true))
 	var response *gen.GetStocksAggregatesResponse
 	var err error
