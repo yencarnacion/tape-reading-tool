@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -898,5 +899,92 @@ func TestDetachPausesTheSessionItOwnsAndIsRepeatable(t *testing.T) {
 	detach["sequence"] = 3
 	if code := fixture.control(t, detach, nil, "").Code; code != http.StatusOK {
 		t.Fatalf("a repeated detach must stay safe: %d", code)
+	}
+}
+
+// The lock is only worth having if the observable end state is coherent. Run a
+// real cue against a real manual ticker change and assert the pair can never
+// leave the display attached to one symbol while showing another.
+func TestConcurrentCueAndManualTickerLeaveACoherentState(t *testing.T) {
+	for attempt := range 40 {
+		fixture := newExternalFixture(t, nil)
+		var wait sync.WaitGroup
+		wait.Add(2)
+		go func() {
+			defer wait.Done()
+			fixture.control(t, fixture.cue("AAPL", uint64(attempt+1), 30*time.Second, false, 1), nil, "")
+		}()
+		go func() {
+			defer wait.Done()
+			request := httptest.NewRequest(http.MethodPost, "/api/ticker", bytes.NewBufferString(`{"symbol":"NVDA"}`))
+			request.Header.Set("Content-Type", "application/json")
+			fixture.server.handleTicker(httptest.NewRecorder(), request)
+		}()
+		wait.Wait()
+
+		control := fixture.controlState(t)
+		active := fixture.store.Active()
+		if control["attached"] == true && control["symbol"] != active {
+			t.Fatalf("attempt %d: attached to %v while showing %s", attempt, control["symbol"], active)
+		}
+		if control["attached"] == false && control["state"] != externalStateDetached && control["state"] != externalStatePaused {
+			t.Fatalf("attempt %d: unattached in state %v", attempt, control["state"])
+		}
+		// A manual action that ran last must stay authoritative: a cue that was
+		// mid-rebuild may not reattach behind it.
+		if active == "NVDA" && control["attached"] == true {
+			t.Fatalf("attempt %d: a cue retook control after the manual ticker change", attempt)
+		}
+	}
+}
+
+// The staged rebuild is bounded by the tape ring, so a warmup busier than the
+// ring publishes the newest prints rather than growing without limit.
+func TestCueWarmupIsBoundedByTheTapeRing(t *testing.T) {
+	fixture := newExternalFixture(t, func(cfg *config.Config) {
+		cfg.Tape.RingSize = 20
+		cfg.Tape.SnapshotTrades = 20
+	})
+	if code := fixture.control(t, fixture.cue("AAPL", 1, 50*time.Second, false, 1), nil, "").Code; code != http.StatusOK {
+		t.Fatalf("cue = %d", code)
+	}
+	snapshot := fixture.store.Snapshot("AAPL", 0)
+	if len(snapshot.Trades) != 20 {
+		t.Fatalf("a 51-print warmup published %d trades into a 20-print ring", len(snapshot.Trades))
+	}
+	// The ring must hold the prints closest to the target, not the oldest ones.
+	last := snapshot.Trades[len(snapshot.Trades)-1]
+	wantLastUS := fixture.baseUS + 50*int64(time.Second/time.Microsecond)
+	if last.ExchangeTimeMS != wantLastUS/1000 {
+		t.Fatalf("the newest warmup print is not at the target: %+v", last)
+	}
+	if control := fixture.controlState(t); control["last_cue_rows"].(float64) < 51 {
+		t.Fatalf("diagnostics must count every row streamed, not the ring: %+v", control)
+	}
+}
+
+// A cue superseded while it is still reading must never publish over the newer
+// one, and must not leave the display mid-rebuild.
+func TestSupersededCueNeverPublishes(t *testing.T) {
+	fixture := newExternalFixture(t, nil)
+	if code := fixture.control(t, fixture.cue("AAPL", 1, 10*time.Second, false, 1), nil, "").Code; code != http.StatusOK {
+		t.Fatalf("first cue = %d", code)
+	}
+	stale := fixture.replay
+	// Prepare a stage from the published tape, then let a newer cue replace it.
+	stage := fixture.store.PrepareRebuild("AAPL")
+	stage.AddTrade(time.UnixMicro(fixture.baseUS), time.UnixMicro(fixture.baseUS), 1, 1)
+	if code := fixture.control(t, fixture.cue("AAPL", 2, 30*time.Second, false, 1), nil, "").Code; code != http.StatusOK {
+		t.Fatalf("second cue = %d", code)
+	}
+	if stage.Commit() {
+		t.Fatal("a stage prepared before the newer cue published over it")
+	}
+	snapshot := fixture.store.Snapshot("AAPL", 0)
+	if len(snapshot.Trades) != 31 {
+		t.Fatalf("the newer cue's tape was disturbed: %d trades", len(snapshot.Trades))
+	}
+	if _, positionUS, _, _ := stale.Position(); positionUS != fixture.baseUS+30*int64(time.Second/time.Microsecond) {
+		t.Fatalf("replay position = %d", positionUS)
 	}
 }

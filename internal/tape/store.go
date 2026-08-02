@@ -266,6 +266,13 @@ type RebuildStage struct {
 	tape     *symbolTape
 }
 
+// PrepareRebuild starts a replacement of one symbol. Nothing the caller streams
+// into the stage is visible until Commit, so a connected browser never observes
+// a partially rebuilt symbol: the previous generation stays published until the
+// new one is complete, and the finished state then arrives as a single snapshot
+// instead of a burst of deltas that the audio path would sound as fresh prints.
+// Sequence numbers continue past the replaced tape so a stale delta can never be
+// mistaken for a new one. A nil result means the symbol was not usable.
 func (s *Store) PrepareRebuild(symbol string) *RebuildStage {
 	symbol = NormalizeSymbol(symbol)
 	if symbol == "" {
@@ -332,24 +339,6 @@ func (w storeSink) AddTrade(exchangeTime, received time.Time, price, size float6
 
 func (w storeSink) AddRecordedTrade(exchangeTime, received time.Time, price, size float64, class Classification, side int8, bid, ask float64) {
 	w.store.AddRecordedTrade(w.symbol, exchangeTime, received, price, size, class, side, bid, ask)
-}
-
-// Rebuild replaces one symbol atomically and activates it. The caller applies a
-// whole reconstruction to a detached tape, so a connected browser never observes
-// a partially rebuilt symbol: the previous generation stays published until the
-// new one is complete, and the finished state then arrives as a single snapshot
-// instead of a burst of deltas that the audio path would sound as fresh prints.
-// Sequence numbers continue past the replaced tape so a stale delta can never be
-// mistaken for a new one.
-func (s *Store) Rebuild(symbol string, apply func(Sink)) bool {
-	stage := s.PrepareRebuild(symbol)
-	if stage == nil {
-		return false
-	}
-	if apply != nil {
-		apply(stage)
-	}
-	return stage.Commit()
 }
 
 // Clear resets one symbol without reusing sequence numbers. Generation tells

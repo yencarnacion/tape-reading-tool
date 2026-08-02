@@ -50,6 +50,10 @@ func observeLikeTheWebSocket(store *Store, symbol string, stop <-chan struct{}, 
 // A reconstruction must be invisible until it is finished. If a browser can
 // observe the new generation while it is still filling, the remainder of the
 // warmup arrives as incremental prints and the audio engine sounds them.
+//
+// This drives the staged API exactly the way the replay cue does - prepare,
+// stream every event in, then publish - so the guarantee is anchored to the
+// path production takes rather than to a convenience wrapper.
 func TestRebuildIsNeverObservedPartially(t *testing.T) {
 	store := NewStore("AAPL", 65536, 8)
 	at := time.Date(2026, 7, 2, 9, 30, 0, 0, time.UTC)
@@ -62,13 +66,17 @@ func TestRebuildIsNeverObservedPartially(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	const warmupPrints = 40000
-	store.Rebuild("AAPL", func(sink Sink) {
-		sink.UpdateQuote(99.99, 100.01, 10, 10)
-		for i := range warmupPrints {
-			moment := at.Add(time.Duration(i) * time.Millisecond)
-			sink.AddTrade(moment, moment, 100+float64(i%7)*0.01, 100)
-		}
-	})
+	stage := store.PrepareRebuild("AAPL")
+	stage.UpdateQuote(99.99, 100.01, 10, 10)
+	for i := range warmupPrints {
+		moment := at.Add(time.Duration(i) * time.Millisecond)
+		stage.AddTrade(moment, moment, 100+float64(i%7)*0.01, 100)
+	}
+	// The observer has been watching throughout the stream above; nothing may
+	// have reached it until this call.
+	if !stage.Commit() {
+		t.Fatal("the staged rebuild did not publish")
+	}
 	time.Sleep(20 * time.Millisecond)
 	close(stop)
 
@@ -95,11 +103,13 @@ func TestRebuildReplacesContentAndNeverReusesSequences(t *testing.T) {
 	before := store.Snapshot("AAPL", 0)
 	beforeGeneration := store.Generation("AAPL")
 
-	store.Rebuild("AAPL", func(sink Sink) {
-		for i := range 3 {
-			sink.AddTrade(at, at, 500+float64(i), 50)
-		}
-	})
+	stage := store.PrepareRebuild("AAPL")
+	for i := range 3 {
+		stage.AddTrade(at, at, 500+float64(i), 50)
+	}
+	if !stage.Commit() {
+		t.Fatal("rebuild did not publish")
+	}
 	after := store.Snapshot("AAPL", 0)
 	if len(after.Trades) != 3 {
 		t.Fatalf("rebuild left %d trades", len(after.Trades))
@@ -129,7 +139,11 @@ func TestRebuildLeavesOtherSymbolsUntouched(t *testing.T) {
 	store.AddTrade("NVDA", at, at, 500, 100)
 	nvdaGeneration := store.Generation("NVDA")
 
-	store.Rebuild("AAPL", func(sink Sink) { sink.AddTrade(at, at, 100, 100) })
+	stage := store.PrepareRebuild("AAPL")
+	stage.AddTrade(at, at, 100, 100)
+	if !stage.Commit() {
+		t.Fatal("rebuild did not publish")
+	}
 
 	nvda := store.Snapshot("NVDA", 0)
 	if len(nvda.Trades) != 1 || nvda.Trades[0].Price != 500 {
@@ -149,7 +163,11 @@ func TestRebuildPreservesThePreviousClose(t *testing.T) {
 	store := NewStore("AAPL", 1024, 8)
 	at := time.Date(2026, 7, 2, 9, 30, 0, 0, time.UTC)
 	store.UpdatePreviousClose("AAPL", 123.45)
-	store.Rebuild("AAPL", func(sink Sink) { sink.AddTrade(at, at, 100, 100) })
+	stage := store.PrepareRebuild("AAPL")
+	stage.AddTrade(at, at, 100, 100)
+	if !stage.Commit() {
+		t.Fatal("rebuild did not publish")
+	}
 	if close := store.Snapshot("AAPL", 0).Quote.PreviousClose; close != 123.45 {
 		t.Fatalf("previous close = %v", close)
 	}
@@ -213,11 +231,13 @@ func TestRebuildIsRaceFreeUnderConcurrentReaders(t *testing.T) {
 		}()
 	}
 	for round := range 25 {
-		store.Rebuild("AAPL", func(sink Sink) {
-			for i := range 200 {
-				sink.AddTrade(at, at, 100+float64(round)+float64(i)*0.001, 10)
-			}
-		})
+		stage := store.PrepareRebuild("AAPL")
+		for i := range 200 {
+			stage.AddTrade(at, at, 100+float64(round)+float64(i)*0.001, 10)
+		}
+		if !stage.Commit() {
+			t.Fatalf("round %d did not publish", round)
+		}
 	}
 	stop.Store(true)
 	for range 4 {
