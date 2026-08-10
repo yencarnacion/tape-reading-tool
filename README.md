@@ -288,7 +288,7 @@ Time and sales uses the latest top-of-book quote at receipt time:
 
 At-bid and below-bid size is negative delta. At-ask and above-ask size is positive delta. Prints between the quote use the standard tick rule: an uptick is positive, a downtick is negative, and an unchanged print carries the previous direction.
 
-The dollar notional shown under each delta is the bar's own signed execution notional: every print contributes its price times its size times its direction. It is not the share delta multiplied by a closing price, so above `1T`, where a bar holds prints at several prices, it reports the dollars that actually changed hands.
+The dollar value shown with each delta is the bar's signed net execution notional: every print contributes its price times its size times its direction. It is buyer-initiated notional minus seller-initiated notional, not the share delta multiplied by a closing price. Above `1T`, where a bar holds prints at several prices, that distinction matters.
 
 ## Performance model
 
