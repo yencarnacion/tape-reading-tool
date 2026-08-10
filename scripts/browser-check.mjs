@@ -249,6 +249,23 @@ try {
   if (JSON.stringify(candleVolumes) !== JSON.stringify(expectedCandleVolumes)) {
     throw new Error(`candle-volume formatting failed: ${JSON.stringify(candleVolumes)}`);
   }
+  const addedReadoutsCheck = await command('Runtime.evaluate', {
+    expression: `({
+      dollars: [-1250000, 0, 12345].map(window.__tapeReadingSignedDollars),
+      dayVolume: window.__tapeReadingVolumeSinceFourAM([
+        {timeUS: Date.parse('2026-08-10T03:59:00-04:00') * 1000, volume: 100},
+        {timeUS: Date.parse('2026-08-10T04:00:00-04:00') * 1000, volume: 200},
+        {timeUS: Date.parse('2026-08-10T09:31:00-04:00') * 1000, volume: 300}
+      ]),
+      maxDollarNode: Boolean(document.querySelector('#maxDeltaDollars')),
+      minDollarNode: Boolean(document.querySelector('#minDeltaDollars'))
+    })`, returnByValue: true
+  });
+  const addedReadouts = addedReadoutsCheck.result.value;
+  if (JSON.stringify(addedReadouts.dollars) !== JSON.stringify(['-$1.25M', '$0', '+$12.3K']) ||
+      addedReadouts.dayVolume !== 500 || !addedReadouts.maxDollarNode || !addedReadouts.minDollarNode) {
+    throw new Error(`day-volume/delta-notional readouts failed: ${JSON.stringify(addedReadouts)}`);
+  }
   // Live Rewind. The pane must never move, resize, or cover the live tick
   // chart, the live rolling horizons, or live time and sales, and it must not
   // force the live canvas to redraw.
