@@ -617,6 +617,32 @@ try {
             dollars.textContent = priorDollars;
             return fit;
           }),
+          // Live Rewind mirrors the same two readouts. Its pane is hidden until
+          // a rewind starts, so it is revealed for the measurement and put back
+          // before anything else reads the page.
+          rewindReadoutFit: (() => {
+            const panel = document.querySelector('#rewindPanel');
+            const readout = document.querySelector('.rewind-readout');
+            if (!panel || !readout) return null;
+            const wasHidden = panel.hidden;
+            const ids = ['rewindMaxDelta', 'rewindMinDelta', 'rewindMaxDeltaDollars', 'rewindMinDeltaDollars'];
+            const prior = ids.map((id) => [document.getElementById(id), document.getElementById(id).textContent]);
+            panel.hidden = false;
+            for (const id of ids) {
+              document.getElementById(id).textContent = id.endsWith('Dollars') ? '-$999.9K' : '-999K';
+            }
+            const fit = {
+              overflowRight: readout.getBoundingClientRect().right - (panel.getBoundingClientRect().right - 8),
+              overflowTop: panel.getBoundingClientRect().top - readout.getBoundingClientRect().top,
+              // The rewind clock is drawn in the same corner of the same pane.
+              overClock: readout.getBoundingClientRect().bottom -
+                document.querySelector('#rewindClock').getBoundingClientRect().top,
+              dollarFontSize: parseFloat(getComputedStyle(document.getElementById('rewindMaxDeltaDollars')).fontSize)
+            };
+            for (const [node, text] of prior) node.textContent = text;
+            panel.hidden = wasHidden;
+            return fit;
+          })(),
           replayRvol: document.querySelector('#relativeVolumeValue')?.textContent,
           replayRvolState: document.querySelector('#relativeVolumeState')?.textContent,
           replayRvolVisible: getComputedStyle(document.querySelector('#relativeVolume')).display !== 'none',
@@ -687,6 +713,11 @@ try {
     if (checked.deltaFit.some((cell) => cell.valueOverflow > 0 || cell.dollarOverflow > 0 ||
         cell.dollarBelowRow > 0.5 || cell.valueFontSize < checked.lastPriceFontSize || cell.dollarFontSize < 12)) {
       throw new Error(`delta readouts are clipped or undersized at ${width}px: ${JSON.stringify(checked.deltaFit)}`);
+    }
+    if (checked.rewindReadoutFit && (checked.rewindReadoutFit.overflowRight > 0.5 ||
+        checked.rewindReadoutFit.overflowTop > 0.5 || checked.rewindReadoutFit.overClock > 0.5 ||
+        checked.rewindReadoutFit.dollarFontSize < 10)) {
+      throw new Error(`rewind readout does not fit its pane at ${width}px: ${JSON.stringify(checked.rewindReadoutFit)}`);
     }
     const expectedRollingFontSize = checked.rollingPanelClientWidth > 430 ? 20 : 15;
     if (checked.rollingValueFontSize < expectedRollingFontSize || checked.rollingWindowFontSize < (checked.rollingPanelClientWidth > 430 ? 21 : 17)) {

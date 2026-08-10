@@ -45,6 +45,7 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     rewindTicks: $('rewindTicks'), rewindSpeed: $('rewindSpeed'), rewindPlay: $('rewindPlay'),
     rewindStepBack: $('rewindStepBack'), rewindStepForward: $('rewindStepForward'), rewindExit: $('rewindExit'),
     rewindLast: $('rewindLast'), rewindMaxDelta: $('rewindMaxDelta'), rewindMinDelta: $('rewindMinDelta'),
+    rewindMaxDeltaDollars: $('rewindMaxDeltaDollars'), rewindMinDeltaDollars: $('rewindMinDeltaDollars'),
     rewindRate: $('rewindRate'), rewindBid: $('rewindBid'), rewindAsk: $('rewindAsk'),
     rewindNotice: $('rewindNotice'), rewindClockTime: $('rewindClockTime'),
     replayDialog: $('replayDialog'), replayProvider: $('replayProvider'), replaySource: $('replaySource'),
@@ -952,9 +953,11 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     setScale: (value) => { state.rewind.scale = value; },
     setDirty: (value) => { state.rewind.dirty = value; },
     layoutRolling: (top, bottom) => positionRollingPanel(rewindRollingPanel, top, bottom),
-    setDeltaMetrics: (maximum, minimum) => {
+    setDeltaMetrics: (maximum, minimum, maximumDollars, minimumDollars) => {
       elements.rewindMaxDelta.textContent = formatSigned(maximum);
       elements.rewindMinDelta.textContent = formatSigned(minimum);
+      elements.rewindMaxDeltaDollars.textContent = formatSignedDollars(maximumDollars);
+      elements.rewindMinDeltaDollars.textContent = formatSignedDollars(minimumDollars);
     }
   };
 

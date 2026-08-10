@@ -215,10 +215,16 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .rewind-toolbar button.active { color: var(--rewind-ink); border-color: var(--rewind); background: var(--rewind); }
 #rewindExit { margin-left: auto; }
 .rewind-badge { padding: 0 7px; color: var(--rewind-ink); background: var(--rewind); border-radius: 2px; font: 900 12px/21px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .02em; white-space: nowrap; }
-/* Sits in the empty left half of the pane's own clock bar, so it costs no plot
-   height and never overlaps the time axis. */
-.rewind-readout { position: absolute; z-index: 4; bottom: 8px; left: 8px; display: grid; grid-template-columns: repeat(3, auto); gap: 1px 12px; color: var(--muted); font-size: 9px; font-weight: 800; white-space: nowrap; }
+/* Sat in the left half of the pane's own clock bar, which only has room for it
+   in a wide pane: at 264px the rewind time was painted straight through the
+   delta column. It clears the 54px clock band now and carries its own backing,
+   because above the band it overlaps the plot instead. */
+.rewind-readout { position: absolute; z-index: 4; bottom: 58px; left: 6px; display: grid; grid-template-columns: repeat(3, auto); align-items: baseline; gap: 1px 8px; padding: 3px 5px; background: rgba(11, 14, 18, .88); color: var(--muted); font-size: 9px; font-weight: 800; white-space: nowrap; }
 .rewind-readout b { color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; }
+/* The notional sits under its share delta, as it does in the live header. Placed
+   beside it instead, the readout runs ~19px past the right edge of the 264px
+   pane of the compact layout, where this pane is narrowest. */
+.rewind-readout b.notional { display: block; color: var(--muted); font-size: 10px; }
 .rewind-notice { position: absolute; z-index: 3; top: 32px; left: 7px; right: 7px; padding: 3px 6px; color: var(--rewind); background: rgba(8, 10, 13, .94); border: 1px solid var(--rewind); font-size: 10px; font-weight: 800; }
 .rewind-notice[hidden] { display: none; }
 .rewind-clock { z-index: 3; background: #0b0e12; }
