@@ -288,6 +288,8 @@ Time and sales uses the latest top-of-book quote at receipt time:
 
 At-bid and below-bid size is negative delta. At-ask and above-ask size is positive delta. Prints between the quote use the standard tick rule: an uptick is positive, a downtick is negative, and an unchanged print carries the previous direction.
 
+The dollar notional shown under each delta is the bar's own signed execution notional: every print contributes its price times its size times its direction. It is not the share delta multiplied by a closing price, so above `1T`, where a bar holds prints at several prices, it reports the dollars that actually changed hands.
+
 ## Performance model
 
 Live feed callbacks do constant, bounded work: quote lookup, classification, one ring write, and a non-blocking enqueue to the recorder. Each symbol uses a fixed-size ring rather than an ever-growing slice. WebSocket clients pull from sequence numbers in batches, so a slow client cannot block the feed callback or allocate a queue per print. If a client falls behind the ring, the UI reports the overwritten count as `LAGGED`.
