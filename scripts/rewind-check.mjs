@@ -450,9 +450,18 @@ function fill(buffer, trades) {
   );
   const lastBar = model.aggregateTickBars(source, 1, trades[1800].s, 10).at(-1);
   assert.deepStrictEqual(lastBar, {
-    count: 1, open: 42.12, high: 42.12, low: 42.12, close: 42.12, volume: 10, delta: -10,
+    count: 1, open: 42.12, high: 42.12, low: 42.12, close: 42.12, volume: 10, delta: -10, dollarDelta: -421.2,
     time: 1784726405000, received: 1784726405811000, className: 'below', firstSeq: 1801
   }, 'the forming tick bar must not drift');
+  const notionalBar = model.aggregateTickBars({
+    each: (_from, _to, callback) => {
+      callback({s: 1, p: 10, z: 100, d: 1, t: 1, r: 1, c: 'ask'});
+      callback({s: 2, p: 20, z: 50, d: -1, t: 2, r: 2, c: 'bid'});
+    }
+  }, 1, 2, 2)[0];
+  assert.equal(notionalBar.delta, 50, 'share delta must retain its existing calculation');
+  assert.equal(notionalBar.dollarDelta, 0,
+    'dollar delta must sum signed execution notionals rather than multiply share delta by the closing price');
   // The price-scale hysteresis the live and replay panes share.
   const initial = model.updatePriceScale(null, 99, 101, 0);
   const expanded = model.updatePriceScale(initial, 94, 101, 10);

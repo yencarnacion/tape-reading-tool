@@ -807,11 +807,11 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
       maxAbsDelta = Math.max(maxAbsDelta, Math.abs(bar.delta));
       if (bar.delta > maxDelta) {
         maxDelta = bar.delta;
-        maxDeltaDollars = bar.delta * bar.close;
+        maxDeltaDollars = bar.dollarDelta;
       }
       if (bar.delta < minDelta) {
         minDelta = bar.delta;
-        minDeltaDollars = bar.delta * bar.close;
+        minDeltaDollars = bar.dollarDelta;
       }
     }
     const pricePadding = Math.max((maximum - minimum) * 0.08, maximum * 0.00008, 0.005);
