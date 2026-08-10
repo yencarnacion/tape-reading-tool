@@ -711,7 +711,8 @@ try {
       throw new Error(`RVOL is hidden for an active feed at ${width}px: ${JSON.stringify(checked)}`);
     }
     if (checked.deltaFit.some((cell) => cell.valueOverflow > 0 || cell.dollarOverflow > 0 ||
-        cell.dollarBelowRow > 0.5 || cell.valueFontSize < checked.lastPriceFontSize || cell.dollarFontSize < 12)) {
+        cell.dollarBelowRow > 0.5 || cell.valueFontSize < checked.lastPriceFontSize ||
+        cell.dollarFontSize < cell.valueFontSize)) {
       throw new Error(`delta readouts are clipped or undersized at ${width}px: ${JSON.stringify(checked.deltaFit)}`);
     }
     if (checked.rewindReadoutFit && (checked.rewindReadoutFit.overflowRight > 0.5 ||
