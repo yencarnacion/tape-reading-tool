@@ -1232,18 +1232,28 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     const currentVolumeWidth = replayContext.measureText(currentVolume).width;
     const dayVolumeWidth = replayContext.measureText(dayVolume).width;
     const dayVolumeLeft = left + currentVolumeWidth + 20;
+    // A narrow pane with a wide current candle leaves no room beside it. Drop
+    // the day total rather than run it under the price axis.
+    const showDayVolume = dayVolumeLeft + dayVolumeWidth <= right;
     replayContext.fillStyle = 'rgba(12,15,19,.88)';
-    replayContext.fillRect(left, volumeTop + 14, currentVolumeWidth + dayVolumeWidth + 30, 29);
+    replayContext.fillRect(left, volumeTop + 14,
+      showDayVolume ? currentVolumeWidth + dayVolumeWidth + 30 : currentVolumeWidth + 8, 29);
     replayContext.fillStyle = '#f2f5f7';
     replayContext.fillText(currentVolume, left + 2, volumeTop + 13);
-    replayContext.fillStyle = '#34c7d9';
-    replayContext.fillText(dayVolume, dayVolumeLeft, volumeTop + 13);
+    if (showDayVolume) {
+      replayContext.fillStyle = '#34c7d9';
+      replayContext.fillText(dayVolume, dayVolumeLeft, volumeTop + 13);
+    }
     replayContext.font = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     replayContext.fillStyle = '#8d96a2';
     replayContext.fillText('VOLUME', left + 2, volumeTop + 3);
-    replayContext.fillStyle = '#34c7d9';
-    replayContext.fillText('DAY VOL · 04:00 ET', dayVolumeLeft, volumeTop + 3);
     replayContext.fillText(formatSize(maxVolume), right + 5, volumeTop + 7);
+    if (showDayVolume) {
+      const dayVolumeLabel = ['DAY VOL · 04:00 ET', 'DAY VOL 04:00', 'DAY VOL']
+        .find((text) => dayVolumeLeft + replayContext.measureText(text).width <= right);
+      replayContext.fillStyle = '#34c7d9';
+      replayContext.fillText(dayVolumeLabel || '', dayVolumeLeft, volumeTop + 3);
+    }
 
     const labelIndexes = visible.length < 3 ? [0] : [0, Math.floor((visible.length - 1) / 2), visible.length - 1];
     replayContext.fillStyle = '#78818c';
@@ -2571,12 +2581,24 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     const latest = bars?.[bars.length - 1];
     const latestParts = latest ? easternMinuteParts(latest.timeUS) : null;
     if (!latestParts) return 0;
-    return bars.reduce((total, bar) => {
-      const parts = easternMinuteParts(bar.timeUS);
-      return parts?.day === latestParts.day && parts.minute >= 4 * 60
-        ? total + Math.max(0, Number(bar.volume) || 0)
-        : total;
-    }, 0);
+    // Minute bars are ordered, so the 04:00 boundary is a binary search.
+    // Formatting every bar's Eastern time would put one Intl call per retained
+    // minute — up to 2200 of them — inside the per-frame chart path.
+    let low = 0;
+    let high = bars.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      const parts = easternMinuteParts(bars[middle].timeUS);
+      const inSession = parts && (parts.day > latestParts.day ||
+        (parts.day === latestParts.day && parts.minute >= 4 * 60));
+      if (inSession) high = middle;
+      else low = middle + 1;
+    }
+    let total = 0;
+    for (let index = low; index < bars.length; index++) {
+      total += Math.max(0, Number(bars[index].volume) || 0);
+    }
+    return total;
   }
 
   function formatRate(value) {

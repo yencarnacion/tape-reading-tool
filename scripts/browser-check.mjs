@@ -253,9 +253,17 @@ try {
     expression: `({
       dollars: [-1250000, 0, 12345].map(window.__tapeReadingSignedDollars),
       dayVolume: window.__tapeReadingVolumeSinceFourAM([
+        {timeUS: Date.parse('2026-08-07T10:00:00-04:00') * 1000, volume: 999},
         {timeUS: Date.parse('2026-08-10T03:59:00-04:00') * 1000, volume: 100},
         {timeUS: Date.parse('2026-08-10T04:00:00-04:00') * 1000, volume: 200},
         {timeUS: Date.parse('2026-08-10T09:31:00-04:00') * 1000, volume: 300}
+      ]),
+      dayVolumeFirstBarAtOpen: window.__tapeReadingVolumeSinceFourAM([
+        {timeUS: Date.parse('2026-08-10T04:00:00-04:00') * 1000, volume: 700}
+      ]),
+      dayVolumeAllBeforeOpen: window.__tapeReadingVolumeSinceFourAM([
+        {timeUS: Date.parse('2026-08-10T03:58:00-04:00') * 1000, volume: 100},
+        {timeUS: Date.parse('2026-08-10T03:59:00-04:00') * 1000, volume: 200}
       ]),
       maxDollarNode: Boolean(document.querySelector('#maxDeltaDollars')),
       minDollarNode: Boolean(document.querySelector('#minDeltaDollars'))
@@ -263,7 +271,8 @@ try {
   });
   const addedReadouts = addedReadoutsCheck.result.value;
   if (JSON.stringify(addedReadouts.dollars) !== JSON.stringify(['-$1.25M', '$0', '+$12.3K']) ||
-      addedReadouts.dayVolume !== 500 || !addedReadouts.maxDollarNode || !addedReadouts.minDollarNode) {
+      addedReadouts.dayVolume !== 500 || addedReadouts.dayVolumeFirstBarAtOpen !== 700 ||
+      addedReadouts.dayVolumeAllBeforeOpen !== 0 || !addedReadouts.maxDollarNode || !addedReadouts.minDollarNode) {
     throw new Error(`day-volume/delta-notional readouts failed: ${JSON.stringify(addedReadouts)}`);
   }
   // Live Rewind. The pane must never move, resize, or cover the live tick
@@ -584,6 +593,30 @@ try {
           last: document.querySelector('#lastPrice')?.textContent,
           maxDelta: document.querySelector('#maxDelta')?.textContent,
           minDelta: document.querySelector('#minDelta')?.textContent,
+          // Both delta readouts carry a share figure and a notional. Measured
+          // against the widest strings the formatters can produce, because the
+          // live values at screenshot time are usually short enough to fit
+          // whatever the layout happens to be.
+          deltaFit: ['maxDelta', 'minDelta'].map((id) => {
+            const value = document.querySelector('#' + id);
+            const dollars = document.querySelector('#' + id + 'Dollars');
+            const priorValue = value.textContent;
+            const priorDollars = dollars.textContent;
+            value.textContent = '-999K';
+            dollars.textContent = '-$999.9K';
+            const fit = {
+              id,
+              valueOverflow: value.scrollWidth - value.clientWidth,
+              dollarOverflow: dollars.scrollWidth - dollars.clientWidth,
+              dollarBelowRow: dollars.getBoundingClientRect().bottom -
+                dollars.closest('.metrics-group').getBoundingClientRect().bottom,
+              valueFontSize: parseFloat(getComputedStyle(value).fontSize),
+              dollarFontSize: parseFloat(getComputedStyle(dollars).fontSize)
+            };
+            value.textContent = priorValue;
+            dollars.textContent = priorDollars;
+            return fit;
+          }),
           replayRvol: document.querySelector('#relativeVolumeValue')?.textContent,
           replayRvolState: document.querySelector('#relativeVolumeState')?.textContent,
           replayRvolVisible: getComputedStyle(document.querySelector('#relativeVolume')).display !== 'none',
@@ -650,6 +683,10 @@ try {
     }
     if (['LIVE', 'PAUSED'].includes(checked.socketState) && !checked.replayRvolVisible) {
       throw new Error(`RVOL is hidden for an active feed at ${width}px: ${JSON.stringify(checked)}`);
+    }
+    if (checked.deltaFit.some((cell) => cell.valueOverflow > 0 || cell.dollarOverflow > 0 ||
+        cell.dollarBelowRow > 0.5 || cell.valueFontSize < checked.lastPriceFontSize || cell.dollarFontSize < 12)) {
+      throw new Error(`delta readouts are clipped or undersized at ${width}px: ${JSON.stringify(checked.deltaFit)}`);
     }
     const expectedRollingFontSize = checked.rollingPanelClientWidth > 430 ? 20 : 15;
     if (checked.rollingValueFontSize < expectedRollingFontSize || checked.rollingWindowFontSize < (checked.rollingPanelClientWidth > 430 ? 21 : 17)) {

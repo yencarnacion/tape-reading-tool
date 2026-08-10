@@ -54,7 +54,7 @@ button:hover { border-color: #5a6470; background: #21262d; }
 #replayPlayButton:disabled:hover, #replayPauseButton:disabled:hover { border-color: var(--line); background: var(--surface-2); }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
-.app { display: grid; grid-template-rows: auto 54px minmax(0, 1fr) 26px; width: 100%; height: 100%; background: var(--bg); }
+.app { display: grid; grid-template-rows: auto 64px minmax(0, 1fr) 26px; width: 100%; height: 100%; background: var(--bg); }
 
 .topbar {
   min-height: 46px;
@@ -95,7 +95,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
-.nbbo { min-width: 0; height: 54px; display: grid; grid-template-columns: minmax(0, 170px) 72px minmax(0, 170px); justify-content: end; border-right: 1px solid var(--line); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.nbbo { min-width: 0; min-height: 54px; display: grid; grid-template-columns: minmax(0, 170px) 72px minmax(0, 170px); justify-content: end; border-right: 1px solid var(--line); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .nbbo-side { min-width: 0; display: flex; flex-direction: column; align-items: flex-end; justify-content: center; padding: 4px 9px; }
 .nbbo-side > span { color: var(--muted); font: 800 9px/12px Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: .04em; }
 .nbbo-side > div { min-width: 0; display: flex; align-items: baseline; justify-content: flex-end; gap: 7px; white-space: nowrap; }
@@ -156,27 +156,28 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .rvol-track { position: absolute; left: 8px; right: 8px; bottom: 6px; height: 3px; overflow: hidden; background: #2b3139; }
 .rvol-track::after { content: ''; position: absolute; z-index: 1; left: 33.333%; top: -1px; width: 1px; height: 5px; background: #e4e8ec; opacity: .8; }
 .rvol-track i { display: block; width: var(--rvol-width); height: 100%; background: var(--rvol-color); }
+/* The delta cells carry a second line, so the row is one notional taller than
+   the 54px readouts beside it. Stacking keeps the share delta at full size at
+   the compact widths this tool is used at. */
 .metrics-group {
-  height: 54px;
+  height: 64px;
   display: grid;
-  grid-template-columns: minmax(150px, 1.2fr) minmax(110px, 1.1fr) minmax(110px, 1.1fr) minmax(58px, .6fr);
+  grid-template-columns: minmax(160px, 1.4fr) minmax(84px, 1fr) minmax(84px, 1fr) minmax(58px, .75fr);
 }
 .metric { min-width: 0; display: flex; flex-direction: column; justify-content: center; padding: 4px 9px; border-right: 1px solid var(--line-soft); }
 .metric:last-child { border-right: 0; }
 .metric span { overflow: hidden; color: var(--muted); font-size: 9px; line-height: 12px; font-weight: 750; white-space: nowrap; }
 .metric strong { overflow: hidden; font: 750 24px/29px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
-.metric.positive, .metric.negative { padding-inline: 6px; }
-.delta-values { min-width: 0; display: flex; align-items: baseline; gap: 4px; white-space: nowrap; }
-.delta-values strong { flex: 0 1 auto; }
-.delta-values output { overflow: hidden; flex: 0 1 auto; color: var(--text); font: 800 17px/22px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+.delta-values { min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+.delta-values output { overflow: hidden; font: 800 13px/15px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .price-values { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
 .price-values strong { flex: 0 1 auto; }
 .price-change { overflow: hidden; flex: 0 1 auto; font: 800 24px/29px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
 .price-change.up { color: var(--price-up); }
 .price-change.down { color: var(--price-down); }
 .price-change.neutral { color: var(--muted); }
-.metric.positive strong { color: var(--green); }
-.metric.negative strong { color: var(--red); }
+.metric.positive strong, .metric.positive .delta-values output { color: var(--green); }
+.metric.negative strong, .metric.negative .delta-values output { color: var(--red); }
 .metric.rate strong { color: var(--cyan); }
 
 .workspace { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) clamp(124px, 23vw, 174px); background: var(--bg); }
@@ -458,8 +459,9 @@ input[type="range"] { width: 100%; height: 5px; padding: 0; accent-color: var(--
   .toolbar button { font-size: 10px; padding: 0 6px; }
   .toolbar select { padding: 0 4px; }
   .connection-state { min-width: 62px; font-size: 9px; }
-  .metrics-group { grid-template-columns: minmax(140px, 1.2fr) minmax(62px, 1fr) minmax(62px, 1fr) minmax(48px, .72fr); }
+  .metrics-group { grid-template-columns: minmax(140px, 1.2fr) minmax(72px, 1fr) minmax(72px, 1fr) minmax(48px, .72fr); }
   .metric strong { font-size: 20px; }
+  .delta-values output { font-size: 12px; line-height: 14px; }
   .price-values { gap: 5px; }
   .price-change { font-size: 20px; line-height: 25px; }
   .metric span { font-size: 8px; }

@@ -16,7 +16,8 @@ _Deterministic IREN replay for July 22, 2026, from 09:30–09:32 ET with the opt
 - Aggregates `1T`, `10T`, `100T`, `1000T`, or custom tick bars in the browser.
 - Shows total, buyer, and seller volume; signed delta and delta percent; shares and prints per second; midpoint movement in ticks; and relative pace for rolling 5, 15, and 60-second horizons.
 - Treats 15 seconds as the primary tradeable pressure cycle, with 5 seconds for ignition and 60 seconds for context.
-- Shows the maximum positive and minimum negative delta in large text.
+- Shows the maximum positive and minimum negative delta in large text, each with its signed dollar notional beneath it.
+- Shows the session volume since 04:00 ET beside the current candle's volume on the one-minute chart.
 - Retains a recent ticker history and caches a configurable number of IBKR subscriptions for fast switching back.
 - Runs the sound path through an `AudioWorklet` mixer with distinct buy/sell timbres and size-sensitive emphasis.
 - Batches WebSocket delivery at frame-scale intervals without threshold-filtering prints.
