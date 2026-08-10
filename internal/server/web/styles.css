@@ -54,7 +54,7 @@ button:hover { border-color: #5a6470; background: #21262d; }
 #replayPlayButton:disabled:hover, #replayPauseButton:disabled:hover { border-color: var(--line); background: var(--surface-2); }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
-.app { display: grid; grid-template-rows: auto 54px minmax(0, 1fr) 26px; width: 100%; height: 100%; background: var(--bg); }
+.app { display: grid; grid-template-rows: auto 64px minmax(0, 1fr) 26px; width: 100%; height: 100%; background: var(--bg); }
 
 .topbar {
   min-height: 46px;
@@ -95,7 +95,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
-.nbbo { min-width: 0; height: 54px; display: grid; grid-template-columns: minmax(0, 170px) 72px minmax(0, 170px); justify-content: end; border-right: 1px solid var(--line); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.nbbo { min-width: 0; min-height: 54px; display: grid; grid-template-columns: minmax(0, 170px) 72px minmax(0, 170px); justify-content: end; border-right: 1px solid var(--line); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .nbbo-side { min-width: 0; display: flex; flex-direction: column; align-items: flex-end; justify-content: center; padding: 4px 9px; }
 .nbbo-side > span { color: var(--muted); font: 800 9px/12px Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: .04em; }
 .nbbo-side > div { min-width: 0; display: flex; align-items: baseline; justify-content: flex-end; gap: 7px; white-space: nowrap; }
@@ -156,23 +156,28 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .rvol-track { position: absolute; left: 8px; right: 8px; bottom: 6px; height: 3px; overflow: hidden; background: #2b3139; }
 .rvol-track::after { content: ''; position: absolute; z-index: 1; left: 33.333%; top: -1px; width: 1px; height: 5px; background: #e4e8ec; opacity: .8; }
 .rvol-track i { display: block; width: var(--rvol-width); height: 100%; background: var(--rvol-color); }
+/* The delta cells carry a second line, so the row is one notional taller than
+   the 54px readouts beside it. Stacking keeps the share delta at full size at
+   the compact widths this tool is used at. */
 .metrics-group {
-  height: 54px;
+  height: 64px;
   display: grid;
-  grid-template-columns: minmax(160px, 1.4fr) minmax(74px, 1fr) minmax(74px, 1fr) minmax(58px, .75fr);
+  grid-template-columns: minmax(160px, 1.4fr) minmax(84px, 1fr) minmax(84px, 1fr) minmax(58px, .75fr);
 }
 .metric { min-width: 0; display: flex; flex-direction: column; justify-content: center; padding: 4px 9px; border-right: 1px solid var(--line-soft); }
 .metric:last-child { border-right: 0; }
 .metric span { overflow: hidden; color: var(--muted); font-size: 9px; line-height: 12px; font-weight: 750; white-space: nowrap; }
 .metric strong { overflow: hidden; font: 750 24px/29px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
+.delta-values { min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+.delta-values output { overflow: hidden; font: 800 13px/15px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .price-values { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
 .price-values strong { flex: 0 1 auto; }
 .price-change { overflow: hidden; flex: 0 1 auto; font: 800 24px/29px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
 .price-change.up { color: var(--price-up); }
 .price-change.down { color: var(--price-down); }
 .price-change.neutral { color: var(--muted); }
-.metric.positive strong { color: var(--green); }
-.metric.negative strong { color: var(--red); }
+.metric.positive strong, .metric.positive .delta-values output { color: var(--green); }
+.metric.negative strong, .metric.negative .delta-values output { color: var(--red); }
 .metric.rate strong { color: var(--cyan); }
 
 .workspace { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) clamp(124px, 23vw, 174px); background: var(--bg); }
@@ -210,10 +215,16 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .rewind-toolbar button.active { color: var(--rewind-ink); border-color: var(--rewind); background: var(--rewind); }
 #rewindExit { margin-left: auto; }
 .rewind-badge { padding: 0 7px; color: var(--rewind-ink); background: var(--rewind); border-radius: 2px; font: 900 12px/21px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .02em; white-space: nowrap; }
-/* Sits in the empty left half of the pane's own clock bar, so it costs no plot
-   height and never overlaps the time axis. */
-.rewind-readout { position: absolute; z-index: 4; bottom: 8px; left: 8px; display: grid; grid-template-columns: repeat(3, auto); gap: 1px 12px; color: var(--muted); font-size: 9px; font-weight: 800; white-space: nowrap; }
+/* Sat in the left half of the pane's own clock bar, which only has room for it
+   in a wide pane: at 264px the rewind time was painted straight through the
+   delta column. It clears the 54px clock band now and carries its own backing,
+   because above the band it overlaps the plot instead. */
+.rewind-readout { position: absolute; z-index: 4; bottom: 58px; left: 6px; display: grid; grid-template-columns: repeat(3, auto); align-items: baseline; gap: 1px 8px; padding: 3px 5px; background: rgba(11, 14, 18, .88); color: var(--muted); font-size: 9px; font-weight: 800; white-space: nowrap; }
 .rewind-readout b { color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; }
+/* The notional sits under its share delta, as it does in the live header. Placed
+   beside it instead, the readout runs ~19px past the right edge of the 264px
+   pane of the compact layout, where this pane is narrowest. */
+.rewind-readout b.notional { display: block; color: var(--muted); font-size: 10px; }
 .rewind-notice { position: absolute; z-index: 3; top: 32px; left: 7px; right: 7px; padding: 3px 6px; color: var(--rewind); background: rgba(8, 10, 13, .94); border: 1px solid var(--rewind); font-size: 10px; font-weight: 800; }
 .rewind-notice[hidden] { display: none; }
 .rewind-clock { z-index: 3; background: #0b0e12; }
@@ -454,8 +465,9 @@ input[type="range"] { width: 100%; height: 5px; padding: 0; accent-color: var(--
   .toolbar button { font-size: 10px; padding: 0 6px; }
   .toolbar select { padding: 0 4px; }
   .connection-state { min-width: 62px; font-size: 9px; }
-  .metrics-group { grid-template-columns: minmax(140px, 1.2fr) minmax(62px, 1fr) minmax(62px, 1fr) minmax(48px, .72fr); }
+  .metrics-group { grid-template-columns: minmax(140px, 1.2fr) minmax(72px, 1fr) minmax(72px, 1fr) minmax(48px, .72fr); }
   .metric strong { font-size: 20px; }
+  .delta-values output { font-size: 12px; line-height: 14px; }
   .price-values { gap: 5px; }
   .price-change { font-size: 20px; line-height: 25px; }
   .metric span { font-size: 8px; }

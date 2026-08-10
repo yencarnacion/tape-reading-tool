@@ -28,7 +28,8 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     historyBack: $('historyBack'), historyForward: $('historyForward'), tickSelect: $('tickSelect'),
     soundButton: $('soundButton'), replayButton: $('replayButton'), replayPlayButton: $('replayPlayButton'), replayPauseButton: $('replayPauseButton'), controlsButton: $('controlsButton'), connectionState: $('connectionState'),
     nbbo: $('nbbo'), bestBid: $('bestBid'), bestBidSize: $('bestBidSize'), nbboSpread: $('nbboSpread'), nbboSpreadDollars: $('nbboSpreadDollars'), bestAsk: $('bestAsk'), bestAskSize: $('bestAskSize'),
-    lastPrice: $('lastPrice'), priceChange: $('priceChange'), maxDelta: $('maxDelta'), minDelta: $('minDelta'), tapeRate: $('tapeRate'),
+    lastPrice: $('lastPrice'), priceChange: $('priceChange'), maxDelta: $('maxDelta'), minDelta: $('minDelta'),
+    maxDeltaDollars: $('maxDeltaDollars'), minDeltaDollars: $('minDeltaDollars'), tapeRate: $('tapeRate'),
     marketClock: $('marketClock'), marketClockLabel: $('marketClockLabel'), marketClockTime: $('marketClockTime'),
     relativeVolume: $('relativeVolume'), relativeVolumeValue: $('relativeVolumeValue'), relativeVolumeState: $('relativeVolumeState'),
     quoteText: $('quoteText'), streamText: $('streamText'),
@@ -44,6 +45,7 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     rewindTicks: $('rewindTicks'), rewindSpeed: $('rewindSpeed'), rewindPlay: $('rewindPlay'),
     rewindStepBack: $('rewindStepBack'), rewindStepForward: $('rewindStepForward'), rewindExit: $('rewindExit'),
     rewindLast: $('rewindLast'), rewindMaxDelta: $('rewindMaxDelta'), rewindMinDelta: $('rewindMinDelta'),
+    rewindMaxDeltaDollars: $('rewindMaxDeltaDollars'), rewindMinDeltaDollars: $('rewindMinDeltaDollars'),
     rewindRate: $('rewindRate'), rewindBid: $('rewindBid'), rewindAsk: $('rewindAsk'),
     rewindNotice: $('rewindNotice'), rewindClockTime: $('rewindClockTime'),
     replayDialog: $('replayDialog'), replayProvider: $('replayProvider'), replaySource: $('replaySource'),
@@ -797,12 +799,20 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     let maxAbsDelta = 0;
     let maxDelta = 0;
     let minDelta = 0;
+    let maxDeltaDollars = 0;
+    let minDeltaDollars = 0;
     for (const bar of visible) {
       minimum = Math.min(minimum, bar.low);
       maximum = Math.max(maximum, bar.high);
       maxAbsDelta = Math.max(maxAbsDelta, Math.abs(bar.delta));
-      maxDelta = Math.max(maxDelta, bar.delta);
-      minDelta = Math.min(minDelta, bar.delta);
+      if (bar.delta > maxDelta) {
+        maxDelta = bar.delta;
+        maxDeltaDollars = bar.dollarDelta;
+      }
+      if (bar.delta < minDelta) {
+        minDelta = bar.delta;
+        minDeltaDollars = bar.dollarDelta;
+      }
     }
     const pricePadding = Math.max((maximum - minimum) * 0.08, maximum * 0.00008, 0.005);
     minimum -= pricePadding;
@@ -894,7 +904,7 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     context.font = '700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     context.fillText(formatPrice(last.close), right + 4, currentY);
 
-    target.setDeltaMetrics(maxDelta, minDelta);
+    target.setDeltaMetrics(maxDelta, minDelta, maxDeltaDollars, minDeltaDollars);
     target.onDrawn?.(visible[visible.length - 1]);
     target.setDirty(Boolean(scale.contracting));
 
@@ -921,9 +931,11 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     setScale: (value) => { state.tickScale = value; },
     setDirty: (value) => { state.dirtyChart = value; },
     layoutRolling: (top, bottom) => positionRollingPanel(elements.rollingPanel, top, bottom),
-    setDeltaMetrics: (maximum, minimum) => {
+    setDeltaMetrics: (maximum, minimum, maximumDollars, minimumDollars) => {
       elements.maxDelta.textContent = formatSigned(maximum);
       elements.minDelta.textContent = formatSigned(minimum);
+      elements.maxDeltaDollars.textContent = formatSignedDollars(maximumDollars);
+      elements.minDeltaDollars.textContent = formatSignedDollars(minimumDollars);
     }
   };
 
@@ -941,9 +953,11 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     setScale: (value) => { state.rewind.scale = value; },
     setDirty: (value) => { state.rewind.dirty = value; },
     layoutRolling: (top, bottom) => positionRollingPanel(rewindRollingPanel, top, bottom),
-    setDeltaMetrics: (maximum, minimum) => {
+    setDeltaMetrics: (maximum, minimum, maximumDollars, minimumDollars) => {
       elements.rewindMaxDelta.textContent = formatSigned(maximum);
       elements.rewindMinDelta.textContent = formatSigned(minimum);
+      elements.rewindMaxDeltaDollars.textContent = formatSignedDollars(maximumDollars);
+      elements.rewindMinDeltaDollars.textContent = formatSignedDollars(minimumDollars);
     }
   };
 
@@ -1214,18 +1228,35 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
 
     const last = visible[visible.length - 1];
     const currentVolume = formatCandleVolume(last.volume);
+    const dayVolume = formatCandleVolume(volumeSinceFourAM(state.minuteBars));
     replayContext.textAlign = 'left';
     replayContext.textBaseline = 'top';
     replayContext.font = '800 24px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     const currentVolumeWidth = replayContext.measureText(currentVolume).width;
+    const dayVolumeWidth = replayContext.measureText(dayVolume).width;
+    const dayVolumeLeft = left + currentVolumeWidth + 20;
+    // A narrow pane with a wide current candle leaves no room beside it. Drop
+    // the day total rather than run it under the price axis.
+    const showDayVolume = dayVolumeLeft + dayVolumeWidth <= right;
     replayContext.fillStyle = 'rgba(12,15,19,.88)';
-    replayContext.fillRect(left, volumeTop + 14, currentVolumeWidth + 8, 29);
+    replayContext.fillRect(left, volumeTop + 14,
+      showDayVolume ? currentVolumeWidth + dayVolumeWidth + 30 : currentVolumeWidth + 8, 29);
     replayContext.fillStyle = '#f2f5f7';
     replayContext.fillText(currentVolume, left + 2, volumeTop + 13);
+    if (showDayVolume) {
+      replayContext.fillStyle = '#34c7d9';
+      replayContext.fillText(dayVolume, dayVolumeLeft, volumeTop + 13);
+    }
     replayContext.font = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     replayContext.fillStyle = '#8d96a2';
     replayContext.fillText('VOLUME', left + 2, volumeTop + 3);
     replayContext.fillText(formatSize(maxVolume), right + 5, volumeTop + 7);
+    if (showDayVolume) {
+      const dayVolumeLabel = ['DAY VOL · 04:00 ET', 'DAY VOL 04:00', 'DAY VOL']
+        .find((text) => dayVolumeLeft + replayContext.measureText(text).width <= right);
+      replayContext.fillStyle = '#34c7d9';
+      replayContext.fillText(dayVolumeLabel || '', dayVolumeLeft, volumeTop + 3);
+    }
 
     const labelIndexes = visible.length < 3 ? [0] : [0, Math.floor((visible.length - 1) / 2), visible.length - 1];
     replayContext.fillStyle = '#78818c';
@@ -2544,6 +2575,35 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     return `${number > 0 ? '+' : number < 0 ? '-' : ''}${formatSize(number)}`;
   }
 
+  function formatSignedDollars(value) {
+    const number = Number(value) || 0;
+    return `${number > 0 ? '+' : number < 0 ? '-' : ''}$${formatCandleVolume(Math.abs(number))}`;
+  }
+
+  function volumeSinceFourAM(bars) {
+    const latest = bars?.[bars.length - 1];
+    const latestParts = latest ? easternMinuteParts(latest.timeUS) : null;
+    if (!latestParts) return 0;
+    // Minute bars are ordered, so the 04:00 boundary is a binary search.
+    // Formatting every bar's Eastern time would put one Intl call per retained
+    // minute — up to 2200 of them — inside the per-frame chart path.
+    let low = 0;
+    let high = bars.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      const parts = easternMinuteParts(bars[middle].timeUS);
+      const inSession = parts && (parts.day > latestParts.day ||
+        (parts.day === latestParts.day && parts.minute >= 4 * 60));
+      if (inSession) high = middle;
+      else low = middle + 1;
+    }
+    let total = 0;
+    for (let index = low; index < bars.length; index++) {
+      total += Math.max(0, Number(bars[index].volume) || 0);
+    }
+    return total;
+  }
+
   function formatRate(value) {
     const number = Math.max(0, Number(value) || 0);
     if (number >= 1000) return formatSize(number);
@@ -2580,6 +2640,8 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
   }
 
   window.__tapeReadingCandleVolume = formatCandleVolume;
+  window.__tapeReadingSignedDollars = formatSignedDollars;
+  window.__tapeReadingVolumeSinceFourAM = volumeSinceFourAM;
   // Exposed solely for deterministic browser validation.
   window.__tapeReadingReplayToolbar = {
     update: (replay) => updateReplayControls(replay),

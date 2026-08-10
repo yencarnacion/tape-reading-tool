@@ -79,7 +79,7 @@ export function appendTickBar(bars, event, tickSize) {
   if (!bar || bar.count >= tickSize) {
     bar = {
       count: 0, open: event.p, high: event.p, low: event.p, close: event.p,
-      volume: 0, delta: 0, time: event.t, received: event.r, className: event.c,
+      volume: 0, delta: 0, dollarDelta: 0, time: event.t, received: event.r, className: event.c,
       firstSeq: event.s
     };
     bars.push(bar);
@@ -90,6 +90,7 @@ export function appendTickBar(bars, event, tickSize) {
   bar.close = event.p;
   bar.volume += event.z;
   bar.delta += event.z * event.d;
+  bar.dollarDelta += event.p * event.z * event.d;
   bar.time = event.t;
   bar.received = event.r;
   bar.className = event.c;

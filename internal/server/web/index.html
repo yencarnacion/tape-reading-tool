@@ -59,8 +59,8 @@
           <span>LAST</span>
           <div class="price-values"><strong id="lastPrice">--</strong><output id="priceChange" class="price-change" aria-live="polite">--</output></div>
         </div>
-        <div class="metric positive"><span>MAX DELTA</span><strong id="maxDelta">0</strong></div>
-        <div class="metric negative"><span>MIN DELTA</span><strong id="minDelta">0</strong></div>
+        <div class="metric positive"><span>MAX DELTA</span><div class="delta-values"><strong id="maxDelta">0</strong><output id="maxDeltaDollars">$0</output></div></div>
+        <div class="metric negative"><span>MIN DELTA</span><div class="delta-values"><strong id="minDelta">0</strong><output id="minDeltaDollars">$0</output></div></div>
         <div class="metric rate"><span>TAPE</span><strong id="tapeRate">0/s</strong></div>
       </div>
     </section>
@@ -122,10 +122,10 @@
             </div>
             <div class="rewind-readout">
               <span>LAST <b id="rewindLast">--</b></span>
-              <span>Δ MAX <b id="rewindMaxDelta">0</b></span>
+              <span>Δ MAX <b id="rewindMaxDelta">0</b> <b id="rewindMaxDeltaDollars" class="notional">$0</b></span>
               <span>BID <b id="rewindBid">--</b></span>
               <span>TAPE <b id="rewindRate">0/s</b></span>
-              <span>Δ MIN <b id="rewindMinDelta">0</b></span>
+              <span>Δ MIN <b id="rewindMinDelta">0</b> <b id="rewindMinDeltaDollars" class="notional">$0</b></span>
               <span>ASK <b id="rewindAsk">--</b></span>
             </div>
             <output id="rewindNotice" class="rewind-notice" hidden></output>
