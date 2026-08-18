@@ -76,7 +76,7 @@ function createADRPanel({ root, host, settings }) {
         } else context = applyEligibleTrades(context, event.trades, { symbol: snapshot.symbol, sessionDateET: phase?.sessionDateET });
         render();
       }
-      else if (event.type === 'modeChanged') { snapshot.mode = event.mode; snapshot.clockUS = event.clockUS || snapshot.clockUS; render(); }
+      else if (event.type === 'modeChanged') { snapshot.mode = event.mode; snapshot.status = { ...(event.status || snapshot.status) }; snapshot.clockUS = event.clockUS || snapshot.clockUS; render(); }
     },
     render(nowUS) { if (snapshot.mode !== 'replay' || snapshot.status?.state !== 'paused') snapshot.clockUS = nowUS || snapshot.clockUS; render(); },
     unmount() { mounted = false; loadGeneration++; requestController?.abort(); root.replaceChildren(); root.classList.remove('adr-closed'); }

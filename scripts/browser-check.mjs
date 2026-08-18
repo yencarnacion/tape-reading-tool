@@ -113,6 +113,36 @@ try {
   if (fallback !== 'tape-pressure') throw new Error(`unknown panel did not fall back to Tape Pressure: ${fallback}`);
   await command('Runtime.evaluate', { expression: `window.__tapeReadingPanels.swap('tape-pressure')` });
 
+  const replayPanelCheck = await command('Runtime.evaluate', {
+    expression: `(async () => {
+      const api = window.__tapeReadingPanels;
+      const at = (iso) => Date.parse(iso) * 1000;
+      const snapshot = (iso) => api.event({ type: 'snapshot', snapshot: {
+        symbol: api.symbol(), mode: 'replay', status: { mode: 'replay', state: 'paused' },
+        clockUS: at(iso), quote: {}, trades: []
+      }});
+      api.swap('adr-rth-extension'); snapshot('2026-07-24T13:36:00Z');
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      api.event({ type: 'tradeBatch', symbol: api.symbol(), clockUS: at('2026-07-24T13:36:00Z'), trades: [{ p: 46, t: Date.parse('2026-07-24T13:36:00Z') }] });
+      const early = document.querySelector('.adr-value')?.textContent;
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      const paused = document.querySelector('.adr-value')?.textContent;
+      api.event({ type: 'tradeBatch', symbol: api.symbol(), clockUS: at('2026-07-24T13:47:00Z'), trades: [{ p: 44, t: Date.parse('2026-07-24T13:47:00Z') }] });
+      const future = document.querySelector('.adr-value')?.textContent;
+      snapshot('2026-07-24T13:36:00Z'); await new Promise((resolve) => setTimeout(resolve, 400));
+      const backward = document.querySelector('.adr-value')?.textContent;
+      api.event({ type: 'modeChanged', mode: 'replay', status: { mode: 'replay', state: 'replaying' }, clockUS: at('2026-07-24T13:36:00Z') });
+      api.event({ type: 'tradeBatch', symbol: api.symbol(), clockUS: at('2026-07-24T13:38:00Z'), trades: [{ p: 46.5, t: Date.parse('2026-07-24T13:38:00Z') }] });
+      const resumed = document.querySelector('.adr-value')?.textContent;
+      api.swap('tape-pressure'); return { early, paused, future, backward, resumed };
+    })()`, awaitPromise: true, returnByValue: true
+  }, 10000);
+  const replayPanel = replayPanelCheck.result.value;
+  if (!/^\d+\.\d{2} ADR$/.test(replayPanel.early || '') || replayPanel.paused !== replayPanel.early ||
+      replayPanel.future !== '0.00 ADR' || replayPanel.backward === replayPanel.future || replayPanel.resumed === replayPanel.backward) {
+    throw new Error(`ADR replay pause/seek/no-look-ahead behavior failed: ${JSON.stringify(replayPanel)}`);
+  }
+
   const results = [];
   const replayToolbarCheck = await command('Runtime.evaluate', {
     expression: `(async () => {

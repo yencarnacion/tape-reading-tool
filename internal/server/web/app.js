@@ -328,6 +328,7 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
           symbol: () => state.symbol,
           debug: () => ({ ...(window.__tapePanelDebug || {}) }),
           swap: (id) => panelHost?.swap(id),
+          event: (event) => panelHost?.event(event),
           injectError: () => panelHost?.active && panelHost.fail(panelHost.active.manifest, new Error('deliberate panel test error'), panelHost.active.generation)
         };
       }
