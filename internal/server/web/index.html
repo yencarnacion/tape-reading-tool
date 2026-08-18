@@ -138,42 +138,9 @@
         </section>
         <section id="chartPanel" class="chart-panel" aria-label="Volume delta, rolling tape pressure, and tick chart">
         <canvas id="chartCanvas"></canvas>
-        <section id="rollingPanel" class="rolling-panel" aria-label="Rolling tape pressure by horizon" title="PACE compares shares per second with the immediately preceding window of the same length.">
-          <header class="rolling-header" aria-hidden="true">
-            <span>WINDOW</span><span>VOLUME / SIDE</span><span>DELTA%</span><span>SHARES/S</span><span>PRINTS/S</span><span>Δ MID</span><span>PACE</span>
-          </header>
-          <div class="rolling-rows">
-            <article class="rolling-row ignition" data-horizon="5">
-              <div class="window-cell"><strong>5s</strong><small>IGNITION</small><b class="winner">BALANCED</b></div>
-              <div class="metric-cell volume-cell" data-label="VOLUME"><output class="volume">0</output><small><span class="buyer-volume">B 0</span><span class="seller-volume">S 0</span></small></div>
-              <div class="metric-cell delta-cell" data-label="DELTA%"><output class="delta-percent">0%</output><small class="signed-delta">Δ 0</small></div>
-              <div class="metric-cell" data-label="SHARES/S"><output class="shares-rate">0</output></div>
-              <div class="metric-cell" data-label="PRINTS/S"><output class="prints-rate">0</output></div>
-              <div class="metric-cell" data-label="Δ MID"><output class="mid-change">0t</output></div>
-              <div class="metric-cell" data-label="PACE"><output class="relative-pace">—</output></div>
-              <div class="pressure-track" aria-hidden="true"><i></i></div>
-            </article>
-            <article class="rolling-row primary" data-horizon="15">
-              <div class="window-cell"><strong>15s</strong><small>PRIMARY</small><b class="winner">BALANCED</b></div>
-              <div class="metric-cell volume-cell" data-label="VOLUME"><output class="volume">0</output><small><span class="buyer-volume">B 0</span><span class="seller-volume">S 0</span></small></div>
-              <div class="metric-cell delta-cell" data-label="DELTA%"><output class="delta-percent">0%</output><small class="signed-delta">Δ 0</small></div>
-              <div class="metric-cell" data-label="SHARES/S"><output class="shares-rate">0</output></div>
-              <div class="metric-cell" data-label="PRINTS/S"><output class="prints-rate">0</output></div>
-              <div class="metric-cell" data-label="Δ MID"><output class="mid-change">0t</output></div>
-              <div class="metric-cell" data-label="PACE"><output class="relative-pace">—</output></div>
-              <div class="pressure-track" aria-hidden="true"><i></i></div>
-            </article>
-            <article class="rolling-row context" data-horizon="60">
-              <div class="window-cell"><strong>60s</strong><small>CONTEXT</small><b class="winner">BALANCED</b></div>
-              <div class="metric-cell volume-cell" data-label="VOLUME"><output class="volume">0</output><small><span class="buyer-volume">B 0</span><span class="seller-volume">S 0</span></small></div>
-              <div class="metric-cell delta-cell" data-label="DELTA%"><output class="delta-percent">0%</output><small class="signed-delta">Δ 0</small></div>
-              <div class="metric-cell" data-label="SHARES/S"><output class="shares-rate">0</output></div>
-              <div class="metric-cell" data-label="PRINTS/S"><output class="prints-rate">0</output></div>
-              <div class="metric-cell" data-label="Δ MID"><output class="mid-change">0t</output></div>
-              <div class="metric-cell" data-label="PACE"><output class="relative-pace">—</output></div>
-              <div class="pressure-track" aria-hidden="true"><i></i></div>
-            </article>
-          </div>
+        <section id="rollingPanel" class="analytics-slot" aria-label="Primary analytics panel slot">
+          <div class="analytics-slot-chrome"><label for="analyticsPanelPicker">PANEL</label><select id="analyticsPanelPicker" aria-label="Analytics panel"></select></div>
+          <div id="analyticsPanelRoot" class="analytics-panel-root"></div>
         </section>
           <div id="chartEmpty" class="chart-empty">WAITING FOR PRINTS</div>
           <div id="marketClock" class="market-clock" aria-label="Market time in New York">

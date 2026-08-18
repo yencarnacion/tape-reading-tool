@@ -1,9 +1,12 @@
 import {
-  HORIZONS, BALANCE_DEADBAND_PERCENT, aggregateTickBars, appendMinuteBar, appendTickBar,
+  aggregateTickBars, appendMinuteBar, appendTickBar,
   calculateCandleRVOL, computeHorizon, computeTapeRate, lowerBound, rewindWindowStart, updatePriceScale
 } from './tape-model.js';
 import { createStreamSource, prefixFromTrade } from './tape-source.js';
 import { RewindBuffer, createRewindSource } from './tape-rewind.js';
+import { PanelHost } from './panel-host.js';
+import { tapePressureManifest, createTapePressureInstance } from './tape-pressure-panel.js';
+import { blankPanelManifest } from './blank-panel.js';
 
 (() => {
   'use strict';
@@ -19,7 +22,8 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
   });
   const $ = (id) => document.getElementById(id);
   const elements = {
-    app: $('app'), workspace: $('workspace'), visualStack: $('visualStack'), chartPanel: $('chartPanel'), chart: $('chartCanvas'), chartEmpty: $('chartEmpty'), rollingPanel: $('rollingPanel'),
+    app: $('app'), workspace: $('workspace'), visualStack: $('visualStack'), chartPanel: $('chartPanel'), chart: $('chartCanvas'), chartEmpty: $('chartEmpty'),
+    analyticsSlot: $('rollingPanel'), analyticsPanelRoot: $('analyticsPanelRoot'), analyticsPanelPicker: $('analyticsPanelPicker'),
     dayContext: $('dayContext'), dayContextCanvas: $('dayContextCanvas'), dayContextSession: $('dayContextSession'), dayContextChange: $('dayContextChange'), dayContextHigh: $('dayContextHigh'), dayContextLow: $('dayContextLow'), dayContextPosition: $('dayContextPosition'),
     replayMarketPanel: $('replayMarketPanel'), replayChart: $('replayChartCanvas'), replayChartEmpty: $('replayChartEmpty'),
     dailyChart: $('dailyChartCanvas'), dailyChartEmpty: $('dailyChartEmpty'), minuteChartTab: $('minuteChartTab'), dailyChartTab: $('dailyChartTab'),
@@ -71,7 +75,7 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
       active: false, playing: false, buffer: null, source: null, targetSeq: 0, targetUS: 0,
       playbackEndUS: 0, holdForLiveClick: false, completed: false,
       speed: 0.25, tickSize: 1, bars: [], scale: null, dirty: false, notice: '',
-      lastInteractionMS: 0, lastFrameMS: 0, token: 0
+      lastInteractionMS: 0, lastFrameMS: 0, token: 0, pressurePanel: null, pressureSource: null
     }
   };
   // The live and replay panes read every panel through this source. Live Rewind
@@ -80,24 +84,13 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
   const DAY_MAP_CORNERS = ['', 'day-map-lower-left', 'day-map-lower-right', 'day-map-upper-right'];
   const DAY_MAP_CORNER_NAMES = ['upper-left', 'lower-left', 'lower-right', 'upper-right'];
 
-  const collectHorizonElements = (panel) => new Map(HORIZONS.map((seconds) => {
-    const row = panel.querySelector(`[data-horizon="${seconds}"]`);
-    return [seconds, {
-      row, winner: row.querySelector('.winner'), volume: row.querySelector('.volume'),
-      buyerVolume: row.querySelector('.buyer-volume'), sellerVolume: row.querySelector('.seller-volume'),
-      deltaPercent: row.querySelector('.delta-percent'), signedDelta: row.querySelector('.signed-delta'), sharesRate: row.querySelector('.shares-rate'),
-      printsRate: row.querySelector('.prints-rate'), midChange: row.querySelector('.mid-change'),
-      relativePace: row.querySelector('.relative-pace')
-    }];
-  }));
-  const horizonElements = collectHorizonElements(elements.rollingPanel);
-  // The rewind pane reuses the live rolling-panel markup so its rows can never
-  // drift from the live rows in structure, columns, or typography.
-  const rewindRollingPanel = elements.rollingPanel.cloneNode(true);
+  // Rewind owns an explicit Tape Pressure instance. It never clones or follows
+  // the replaceable live analytics slot.
+  const rewindRollingPanel = document.createElement('section');
   rewindRollingPanel.id = 'rewindRollingPanel';
   rewindRollingPanel.setAttribute('aria-label', 'Rewound tape pressure by horizon');
   elements.rewindPanel.append(rewindRollingPanel);
-  const rewindHorizonElements = collectHorizonElements(rewindRollingPanel);
+  let panelHost = null;
 
   class TapeAudio {
     constructor() {
@@ -211,13 +204,20 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
         largeSize: Number(audioConfig.large_size) || 1000,
         largeBoost: Number(audioConfig.large_boost) || 1.8,
         maxVoices: Number(audioConfig.max_voices) || 192
-      }
+      },
+      panels: { slots: { primaryAnalytics: { activePanelId: 'tape-pressure' } }, settings: { 'adr-rth-extension': { lookbackSessions: 20 } } }
     };
   }
 
   function mergeSettings(defaults, saved) {
     if (!saved || typeof saved !== 'object') return structuredClone(defaults);
-    const result = { ...defaults, ...saved, audio: { ...defaults.audio, ...(saved.audio || {}) } };
+    const result = {
+      ...defaults, ...saved, audio: { ...defaults.audio, ...(saved.audio || {}) },
+      panels: {
+        slots: { primaryAnalytics: { ...defaults.panels.slots.primaryAnalytics, ...(saved.panels?.slots?.primaryAnalytics || {}) } },
+        settings: { ...defaults.panels.settings, ...(saved.panels?.settings || {}) }
+      }
+    };
     if ((Number(result.audio.profileVersion) || 1) < SOUND_PROFILE_VERSION) {
       for (const [key, legacyValue] of Object.entries(LEGACY_SOUND_DEFAULTS)) {
         if (Number(result.audio[key]) === legacyValue) result.audio[key] = defaults.audio[key];
@@ -238,6 +238,8 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     result.audio.largeSize = clampNumber(result.audio.largeSize, 1, 100000, defaults.audio.largeSize);
     result.audio.largeBoost = clampNumber(result.audio.largeBoost, 1, 4, defaults.audio.largeBoost);
     result.audio.maxVoices = clampInt(result.audio.maxVoices, 8, 512, defaults.audio.maxVoices);
+    if (!['tape-pressure', 'adr-rth-extension', 'blank'].includes(result.panels.slots.primaryAnalytics.activePanelId)) result.panels.slots.primaryAnalytics.activePanelId = 'tape-pressure';
+    result.panels.settings['adr-rth-extension'] = { lookbackSessions: clampInt(result.panels.settings['adr-rth-extension']?.lookbackSessions, 5, 60, 20) };
     return result;
   }
 
@@ -293,6 +295,16 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
         audio.enabled = state.settings.audio.enabled;
         syncControlValues();
         applyLayout();
+        panelHost = new PanelHost({
+          root: elements.analyticsPanelRoot, picker: elements.analyticsPanelPicker,
+          registry: [tapePressureManifest, blankPanelManifest], settings: state.settings.panels, saveSettings,
+          capabilities: {
+            streamSource: () => liveSource,
+            formatters: () => ({ size: formatSize, signedPercent: formatSignedPercent, signed: formatSigned, rate: formatRate, tickChange: formatTickChange, relativePace: formatRelativePace, price: formatPrice }),
+            currentSnapshot: () => ({ symbol: state.symbol, mode: state.status?.mode || '', clockUS: serverNowUS(performance.now()), quote: { ...state.quote }, trades: state.trades.slice() })
+          }
+        });
+        panelHost.swap(state.settings.panels.slots.primaryAnalytics.activePanelId, false);
       }
       const snapshot = message.snapshot;
       const nextSymbol = snapshot.symbol || message.symbol;
@@ -378,6 +390,7 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
         queueMicrotask(() => refreshReplayRange(false));
       }
       updateQuoteText();
+      panelHost?.event({ type: 'snapshot', snapshot: { symbol: state.symbol, mode: state.status?.mode || '', generation: snapshot.generation, clockUS: serverNowUS(performance.now()), quote: { ...state.quote }, trades: state.trades.slice() } });
       return;
     }
     if (message.type === 'trades' && message.symbol === state.symbol) {
@@ -398,6 +411,7 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
         ingestTrades(trades);
       }
       updateQuoteText();
+      panelHost?.event({ type: 'tradeBatch', symbol: state.symbol, trades, quote: message.quote || null, clockUS: serverNowUS(performance.now()) });
       return;
     }
     if (message.type === 'status') {
@@ -420,6 +434,7 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
         }
         setConnection(message.status);
         ensureRVOLWarmup();
+        panelHost?.event({ type: 'modeChanged', mode: message.status.mode, status: { ...message.status }, clockUS: serverNowUS(performance.now()) });
       }
       if (message.history) {
         state.history = message.history;
@@ -930,7 +945,7 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     getScale: () => state.tickScale,
     setScale: (value) => { state.tickScale = value; },
     setDirty: (value) => { state.dirtyChart = value; },
-    layoutRolling: (top, bottom) => positionRollingPanel(elements.rollingPanel, top, bottom),
+    layoutRolling: (top, bottom) => positionRollingPanel(elements.analyticsSlot, top, bottom),
     setDeltaMetrics: (maximum, minimum, maximumDollars, minimumDollars) => {
       elements.maxDelta.textContent = formatSigned(maximum);
       elements.minDelta.textContent = formatSigned(minimum);
@@ -1856,6 +1871,10 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
       audio.enabled = state.settings.audio.enabled;
       syncControlValues();
       commitSettings(true);
+      if (panelHost) {
+        panelHost.settings = state.settings.panels;
+        panelHost.swap('tape-pressure');
+      }
     });
 
     elements.customTicks.addEventListener('change', () => {
@@ -2133,49 +2152,6 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     elements.quoteText.textContent = `BID ${bid} / ASK ${ask}`;
   }
 
-  function updateRollingPanel(nowUS) {
-    if (!nowUS) return;
-    for (const seconds of HORIZONS) {
-      renderHorizonRow(horizonElements.get(seconds), seconds, computeHorizon(liveSource, seconds, nowUS));
-    }
-  }
-
-  // `blankWhenTruncated` is set only by the rewind pane. A window that reaches
-  // past the buffer floor would otherwise display an understated volume, which
-  // reads as a real drop in pressure.
-  function renderHorizonRow(cells, seconds, metric, blankWhenTruncated = false) {
-    if (blankWhenTruncated && metric.truncated) {
-      cells.row.classList.remove('buyer', 'seller');
-      cells.row.classList.add('balanced');
-      cells.row.style.setProperty('--pressure-width', '0%');
-      cells.winner.textContent = 'NO DATA';
-      for (const cell of [cells.volume, cells.deltaPercent, cells.sharesRate, cells.printsRate, cells.midChange, cells.relativePace]) {
-        cell.textContent = '--';
-      }
-      cells.buyerVolume.textContent = 'B --';
-      cells.sellerVolume.textContent = 'S --';
-      cells.signedDelta.textContent = 'Δ --';
-      cells.row.setAttribute('aria-label', `${seconds} seconds: outside the retained rewind buffer.`);
-      return;
-    }
-    const magnitude = Math.abs(metric.deltaPercent);
-    const direction = magnitude < BALANCE_DEADBAND_PERCENT ? 'balanced' : metric.deltaPercent > 0 ? 'buyer' : 'seller';
-    cells.row.classList.remove('buyer', 'seller', 'balanced');
-    cells.row.classList.add(direction);
-    cells.row.style.setProperty('--pressure-width', `${Math.min(50, magnitude / 2)}%`);
-    cells.winner.textContent = direction === 'buyer' ? 'BUY ▶' : direction === 'seller' ? '◀ SELL' : 'BALANCED';
-    cells.volume.textContent = formatSize(metric.volume);
-    cells.buyerVolume.textContent = `B ${formatSize(metric.buyer)}`;
-    cells.sellerVolume.textContent = `S ${formatSize(metric.seller)}`;
-    cells.deltaPercent.textContent = formatSignedPercent(metric.deltaPercent);
-    cells.signedDelta.textContent = `Δ ${formatSigned(metric.delta)}`;
-    cells.sharesRate.textContent = formatRate(metric.sharesRate);
-    cells.printsRate.textContent = formatRate(metric.printsRate);
-    cells.midChange.textContent = formatTickChange(metric.midTicks);
-    cells.relativePace.textContent = formatRelativePace(metric.relativePace);
-    cells.row.setAttribute('aria-label', `${seconds} seconds: ${formatSize(metric.volume)} total volume; ${formatSize(metric.buyer)} buyer initiated; ${formatSize(metric.seller)} seller initiated; delta ${formatSigned(metric.delta)}, ${formatSignedPercent(metric.deltaPercent)}; ${formatRate(metric.sharesRate)} shares per second; ${formatRate(metric.printsRate)} prints per second; midpoint ${formatTickChange(metric.midTicks)}; pace ${formatRelativePace(metric.relativePace)} versus the preceding ${seconds} seconds.`);
-  }
-
   function updateRelativeVolume(nowUS) {
     const metric = calculateCandleRVOL(state.minuteBars, nowUS);
     elements.relativeVolume.classList.remove('building', 'quiet', 'normal', 'elevated', 'surge');
@@ -2202,7 +2178,7 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     const tapeRate = computeTapeRate(liveSource, receiptNowUS);
     elements.tapeRate.textContent = `${tapeRate >= 1000 ? formatSize(tapeRate) : tapeRate}/s`;
     audio.setTapeRate(tapeRate);
-    updateRollingPanel(receiptNowUS);
+    panelHost?.render(receiptNowUS);
     const last = state.trades[state.trades.length - 1];
     elements.lastPrice.textContent = last ? formatPrice(last.p) : '--';
     updatePriceChange(last?.p, state.quote.previous_close);
@@ -2278,6 +2254,9 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
 
   // Releases the columns themselves when rewind is not available at all.
   function releaseRewindBuffer() {
+    state.rewind.pressurePanel?.unmount?.();
+    state.rewind.pressurePanel = null;
+    state.rewind.pressureSource = null;
     state.rewind.buffer = null;
     state.rewind.source = null;
     state.rewind.bars = [];
@@ -2448,9 +2427,15 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
     rewind.bars = aggregateTickBars(source, fromSeq, rewind.targetSeq, rewind.tickSize);
     drawTickChart(rewindChartTarget);
 
-    for (const seconds of HORIZONS) {
-      renderHorizonRow(rewindHorizonElements.get(seconds), seconds, computeHorizon(source, seconds, nowUS), true);
+    if (!rewind.pressurePanel || rewind.pressureSource !== source) {
+      rewind.pressurePanel?.unmount?.();
+      rewind.pressureSource = source;
+      rewind.pressurePanel = createTapePressureInstance(rewindRollingPanel, {
+        source, blankWhenTruncated: true,
+        format: { size: formatSize, signedPercent: formatSignedPercent, signed: formatSigned, rate: formatRate, tickChange: formatTickChange, relativePace: formatRelativePace }
+      });
     }
+    rewind.pressurePanel.render(nowUS);
     const behindSeconds = (source.lastReceivedUS() - nowUS) / 1e6;
     elements.rewindBadge.textContent = `REWIND −${behindSeconds.toFixed(1)}s`;
     elements.rewindBadge.setAttribute('aria-label', `Rewound ${behindSeconds.toFixed(1)} seconds behind live`);
