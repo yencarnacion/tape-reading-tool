@@ -29,6 +29,23 @@ _Deterministic IREN replay for July 22, 2026, from 09:30–09:32 ET with the opt
 
 The program is read-only. It does not place or manage orders.
 
+## Analytics panels
+
+The fixed analytics rectangle inside the tick chart has a keyboard-accessible `PANEL` picker. It switches instantly between **Tape Pressure**, **ADR from RTH Low**, and **Blank** without reloading the page, reconnecting the WebSocket or market-data feed, clearing the chart/tape, or interrupting replay and audio. The stable panel slot does not resize the surrounding panes, and the selected panel and its settings are stored with the existing browser display settings.
+
+Tape Pressure remains the default. The ADR panel compares the current chart-eligible price with the running regular-session low and normalizes that move by the arithmetic mean of `High / Low - 1` for 20 prior completed RTH sessions. Its lookback can be changed from 5 through 60 sessions. It works through the same core-owned clock and data capabilities in IBKR live, Massive live, demo, historical replay, and deterministic render modes. When complete history from 09:30 ET or enough prior sessions cannot be proven, the panel shows an explicit incomplete, insufficient, or unavailable state instead of a number.
+
+Live Rewind deliberately retains its own fixed Tape Pressure instance regardless of the live analytics selection. ADR continues to follow live time while the rewind pane reads earlier tape.
+
+The version-1 panel architecture and ADR data rules are documented in [Panel API v1](docs/PANEL_API_V1.md) and [ADR from RTH Low](docs/ADR_RTH_EXTENSION.md). Relevant verification commands are:
+
+```bash
+node scripts/adr-panel-check.mjs
+go test ./...
+go test -race ./...
+node scripts/browser-check.mjs
+```
+
 ## Requirements
 
 - Go 1.23 or newer.

@@ -34,6 +34,8 @@ type Server struct {
 	dailyBars      func(context.Context, string, time.Time, int) ([]storage.MinuteBar, error)
 	dailyMu        sync.Mutex
 	dailyCache     map[string]dailyHistoryCache
+	panelDataMu    sync.Mutex
+	panelDataCache map[string]panelDataCacheEntry
 	now            func() time.Time
 	liveChart      bool
 	liveXtra       bool
@@ -84,7 +86,7 @@ type streamMessage struct {
 func New(cfg config.Config, store *tape.Store, source feed.Feed, liveChart ...bool) *Server {
 	server := &Server{
 		cfg: cfg, store: store, feed: source,
-		rvolCache: make(map[string]rvolHistoryCache), dailyCache: make(map[string]dailyHistoryCache), now: time.Now,
+		rvolCache: make(map[string]rvolHistoryCache), dailyCache: make(map[string]dailyHistoryCache), panelDataCache: make(map[string]panelDataCacheEntry), now: time.Now,
 		uiEventAt: make(map[string]time.Time), processStartUS: time.Now().UnixMicro(),
 		upgrader: websocket.Upgrader{
 			ReadBufferSize: 4096, WriteBufferSize: 64 * 1024,
@@ -133,6 +135,8 @@ func (s *Server) Serve(ctx context.Context) error {
 	mux.HandleFunc("/api/render", s.handleRender)
 	mux.HandleFunc("/api/rvol-history", s.handleRVOLHistory)
 	mux.HandleFunc("/api/daily-history", s.handleDailyHistory)
+	mux.HandleFunc("/api/panel-data/daily-bars", s.handlePanelDailyBars)
+	mux.HandleFunc("/api/panel-data/rth-context", s.handlePanelRTHContext)
 	mux.HandleFunc("/ws", s.handleWebSocket)
 
 	sub, err := fs.Sub(webFS, "web")

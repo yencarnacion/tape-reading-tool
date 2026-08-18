@@ -17,6 +17,7 @@ export class PanelHost {
     const id = this.validId(requestedId); const manifest = this.registry.get(id); const generation = ++this.generation;
     if (this.active) {
       try { this.active.controller.abort(); this.active.instance?.unmount?.(); } catch (error) { console.error('panel unmount failed', error); }
+      this.unmountCount = (this.unmountCount || 0) + 1;
     }
     this.active = null; this.root.className = 'analytics-panel-root panel-loading'; this.root.textContent = `LOADING ${manifest.name}`; this.picker.value = id;
     const controller = new AbortController();
@@ -35,7 +36,8 @@ export class PanelHost {
       this.settings.slots.primaryAnalytics.activePanelId = id;
       this.saveSettings();
     }
-    window.__tapePanelDebug = { activePanelId: id, generation, mountCount: (window.__tapePanelDebug?.mountCount || 0) + 1 };
+    this.mountCount = (this.mountCount || 0) + 1;
+    window.__tapePanelDebug = { activePanelId: id, generation, mountCount: this.mountCount, unmountCount: this.unmountCount || 0 };
   }
 
   event(event) {
@@ -59,4 +61,3 @@ export class PanelHost {
     this.root.append(title, reload, details);
   }
 }
-

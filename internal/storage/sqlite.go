@@ -210,6 +210,19 @@ type MinuteBar struct {
 	DollarVolume float64 `json:"dollar_volume"`
 }
 
+// SessionTradeStats aggregates only chart-eligible trades that were available
+// by an authoritative instant. MarketTimeUS determines RTH membership; the
+// receipt/event clock determines when a late report became knowable.
+type SessionTradeStats struct {
+	Open       float64
+	High       float64
+	Low        float64
+	LowTimeUS  int64
+	Last       float64
+	LastTimeUS int64
+	Count      int64
+}
+
 type Coverage struct {
 	Symbol      string `json:"symbol"`
 	Provider    string `json:"provider"`
@@ -956,6 +969,45 @@ func (d *Database) MinuteBars(ctx context.Context, symbol, source, provider stri
 		bars = append(bars, cached[minute])
 	}
 	return bars, nil
+}
+
+func (d *Database) EligibleSessionTradeStats(ctx context.Context, symbol, source, provider string, marketStartUS, marketEndUS, throughUS int64) (SessionTradeStats, error) {
+	filter, filterArgs, err := dataFilter(source, provider)
+	if err != nil {
+		return SessionTradeStats{}, err
+	}
+	query := `SELECT market_time_us,price,CASE WHEN source='live' AND received_us>0 THEN received_us ELSE event_us END AS available_us
+      FROM trades WHERE symbol=? AND ` + filter + ` AND market_time_us>=? AND market_time_us<=? AND chart_eligible=1
+      AND (CASE WHEN source='live' AND received_us>0 THEN received_us ELSE event_us END)<=?
+      ORDER BY available_us,sequence_id,id`
+	args := []any{strings.ToUpper(strings.TrimSpace(symbol))}
+	args = append(args, filterArgs...)
+	args = append(args, marketStartUS, marketEndUS, throughUS)
+	rows, err := d.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return SessionTradeStats{}, err
+	}
+	defer rows.Close()
+	var result SessionTradeStats
+	for rows.Next() {
+		var marketUS, availableUS int64
+		var price float64
+		if err := rows.Scan(&marketUS, &price, &availableUS); err != nil {
+			return SessionTradeStats{}, err
+		}
+		if result.Count == 0 {
+			result.Open, result.High, result.Low, result.LowTimeUS = price, price, price, marketUS
+		}
+		if price > result.High {
+			result.High = price
+		}
+		if price < result.Low {
+			result.Low, result.LowTimeUS = price, marketUS
+		}
+		result.Last, result.LastTimeUS = price, marketUS
+		result.Count++
+	}
+	return result, rows.Err()
 }
 
 func ScanEvent(rows *sql.Rows) (Event, error) {

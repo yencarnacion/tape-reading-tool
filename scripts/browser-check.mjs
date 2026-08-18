@@ -42,6 +42,70 @@ try {
   await command('Runtime.enable');
   await waitForApp();
 
+  const panelCheck = await command('Runtime.evaluate', {
+    expression: `(async () => {
+      const api = window.__tapeReadingPanels;
+      const picker = document.querySelector('#analyticsPanelPicker');
+      const slot = document.querySelector('#rollingPanel');
+      const beforeSocket = api.socket(); const beforeSymbol = api.symbol();
+      const beforeRect = slot.getBoundingClientRect().toJSON(); const beforeDebug = api.debug();
+      picker.value = 'adr-rth-extension'; picker.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const adr = {
+        active: api.active(), value: document.querySelector('.adr-value')?.textContent,
+        percent: document.querySelector('.adr-percent')?.textContent,
+        history: document.querySelector('.adr-history')?.textContent,
+        state: document.querySelector('.adr-state:not([hidden]) strong')?.textContent,
+        rect: slot.getBoundingClientRect().toJSON(), debug: api.debug()
+      };
+      picker.value = 'blank'; picker.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const blank = { active: api.active(), text: document.querySelector('#analyticsPanelRoot')?.textContent.trim(), debug: api.debug() };
+      picker.value = 'tape-pressure'; picker.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return {
+        options: [...picker.options].map((option) => option.value), beforeRect, beforeDebug, adr, blank,
+        restored: api.active(), rows: document.querySelectorAll('#rollingPanel .rolling-row').length,
+        sameSocket: beforeSocket === api.socket(), sameSymbol: beforeSymbol === api.symbol(), afterDebug: api.debug()
+      };
+    })()`, awaitPromise: true, returnByValue: true
+  }, 10000);
+  const panels = panelCheck.result.value;
+  if (JSON.stringify(panels.options) !== JSON.stringify(['tape-pressure', 'adr-rth-extension', 'blank']) ||
+      panels.adr.active !== 'adr-rth-extension' || !/^\d+\.\d{2} ADR$/.test(panels.adr.value || '') ||
+      panels.adr.history !== '20 / 20' || panels.blank.active !== 'blank' || !/NO ANALYTICS PANEL/.test(panels.blank.text || '') ||
+      panels.restored !== 'tape-pressure' || panels.rows !== 3 || !panels.sameSocket || !panels.sameSymbol ||
+      Math.abs(panels.beforeRect.x - panels.adr.rect.x) > .01 || Math.abs(panels.beforeRect.y - panels.adr.rect.y) > .01 ||
+      Math.abs(panels.beforeRect.width - panels.adr.rect.width) > .01 || Math.abs(panels.beforeRect.height - panels.adr.rect.height) > .01 ||
+      panels.afterDebug.unmountCount < panels.beforeDebug.unmountCount + 3) {
+    throw new Error(`analytics panel hot swap failed: ${JSON.stringify(panels)}`);
+  }
+  await command('Runtime.evaluate', { expression: `window.__tapeReadingPanels.swap('adr-rth-extension')` });
+  await sleep(150);
+  await command('Page.reload', { ignoreCache: true });
+  await waitForApp();
+  const persistedCheck = await command('Runtime.evaluate', {
+    expression: `(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const api = window.__tapeReadingPanels;
+      const persisted = { active: api.active(), value: document.querySelector('.adr-value')?.textContent };
+      api.injectError();
+      const errored = { active: api.active(), title: document.querySelector('.panel-error strong')?.textContent, socket: api.socket()?.readyState };
+      document.querySelector('.panel-error button')?.click();
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const recovered = { active: api.active(), value: document.querySelector('.adr-value')?.textContent };
+      api.swap('tape-pressure');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return { persisted, errored, recovered, restored: api.active() };
+    })()`, awaitPromise: true, returnByValue: true
+  }, 10000);
+  const persisted = persistedCheck.result.value;
+  if (persisted.persisted.active !== 'adr-rth-extension' || !/^\d+\.\d{2} ADR$/.test(persisted.persisted.value || '') ||
+      !/STOPPED$/.test(persisted.errored.title || '') || persisted.errored.socket !== WebSocket.OPEN ||
+      persisted.recovered.active !== 'adr-rth-extension' || !/^\d+\.\d{2} ADR$/.test(persisted.recovered.value || '') || persisted.restored !== 'tape-pressure') {
+    throw new Error(`panel persistence/error recovery failed: ${JSON.stringify(persisted)}`);
+  }
+
   const results = [];
   const replayToolbarCheck = await command('Runtime.evaluate', {
     expression: `(async () => {

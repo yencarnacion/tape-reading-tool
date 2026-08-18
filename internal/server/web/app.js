@@ -7,6 +7,7 @@ import { RewindBuffer, createRewindSource } from './tape-rewind.js';
 import { PanelHost } from './panel-host.js';
 import { tapePressureManifest, createTapePressureInstance } from './tape-pressure-panel.js';
 import { blankPanelManifest } from './blank-panel.js';
+import { adrRTHManifest } from './adr-rth-extension-panel.js';
 
 (() => {
   'use strict';
@@ -297,14 +298,38 @@ import { blankPanelManifest } from './blank-panel.js';
         applyLayout();
         panelHost = new PanelHost({
           root: elements.analyticsPanelRoot, picker: elements.analyticsPanelPicker,
-          registry: [tapePressureManifest, blankPanelManifest], settings: state.settings.panels, saveSettings,
+          registry: [tapePressureManifest, adrRTHManifest, blankPanelManifest], settings: state.settings.panels, saveSettings,
           capabilities: {
             streamSource: () => liveSource,
             formatters: () => ({ size: formatSize, signedPercent: formatSignedPercent, signed: formatSigned, rate: formatRate, tickChange: formatTickChange, relativePace: formatRelativePace, price: formatPrice }),
-            currentSnapshot: () => ({ symbol: state.symbol, mode: state.status?.mode || '', clockUS: serverNowUS(performance.now()), quote: { ...state.quote }, trades: state.trades.slice() })
+            currentSnapshot: () => ({ symbol: state.symbol, mode: state.status?.mode || '', status: { ...state.status }, clockUS: serverNowUS(performance.now()), quote: { ...state.quote }, trades: state.trades.slice() }),
+            getCompletedDailyBars: async ({ symbol, beforeSessionDateET, limit, signal }) => {
+              const query = new URLSearchParams({ symbol, before: beforeSessionDateET, limit: String(limit) });
+              const response = await fetch(`/api/panel-data/daily-bars?${query}`, { signal });
+              if (!response.ok) throw new Error((await response.text()).trim() || 'daily history unavailable');
+              return response.json();
+            },
+            getRTHSessionContext: async ({ symbol, sessionDateET, throughUS, signal }) => {
+              const query = new URLSearchParams({ symbol, session: sessionDateET, through_us: String(Math.round(throughUS)) });
+              const response = await fetch(`/api/panel-data/rth-context?${query}`, { signal });
+              if (!response.ok) throw new Error((await response.text()).trim() || 'RTH context unavailable');
+              return response.json();
+            },
+            savePanelSettings: (next) => {
+              state.settings.panels.settings['adr-rth-extension'] = { lookbackSessions: clampInt(next?.lookbackSessions, 5, 60, 20) };
+              saveSettings();
+            }
           }
         });
         panelHost.swap(state.settings.panels.slots.primaryAnalytics.activePanelId, false);
+        window.__tapeReadingPanels = {
+          active: () => panelHost?.active?.id || null,
+          socket: () => state.ws,
+          symbol: () => state.symbol,
+          debug: () => ({ ...(window.__tapePanelDebug || {}) }),
+          swap: (id) => panelHost?.swap(id),
+          injectError: () => panelHost?.active && panelHost.fail(panelHost.active.manifest, new Error('deliberate panel test error'), panelHost.active.generation)
+        };
       }
       const snapshot = message.snapshot;
       const nextSymbol = snapshot.symbol || message.symbol;
