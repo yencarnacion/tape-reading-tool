@@ -60,4 +60,3 @@ Live Rewind intentionally keeps an independent Tape Pressure panel in version 1.
 - Early-close sessions count only when provider/local coverage establishes completion.
 - Provider adjustment semantics are reported as provider-consistent; no cross-provider normalization is attempted.
 - Automatic time-of-day panel switching, premarket/open/VWAP extensions, signals, alerts, backtests, and order entry are outside scope.
-

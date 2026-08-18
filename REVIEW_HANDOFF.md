@@ -128,3 +128,13 @@ Browser checks ran on macOS with `CHROME=/Applications/Google Chrome.app/Content
 ## Suggested next review focus
 
 Nothing on this branch exercises a real historical replay: there is no recorded database in the working tree, and the browser check simulates replay by injecting panel events rather than by driving the server's replay lifecycle. Findings 1, 3, and 4 all live in that gap. A recorded session replayed end to end — start, pause, backward seek, forward seek, reload while paused — is the highest-value check still missing.
+
+---
+
+## Independent verification after pulling `cef6614`
+
+The branch was fast-forwarded from GitHub and independently reviewed and tested on 2026-08-18. The implementation fixes in `cef6614` are consistent with the panel contract and ADR specification. No additional runtime defect was found.
+
+The complete documented suite passed: build, vet, formatting, Go unit and race tests, ADR model, audio, rewind, and browser checks in both normal demo and demo-with-rewind modes at 384, 634, 902, and 1372 pixels. The mounted checks covered hot swapping, persistence after reload, panel-local error recovery, stable slot geometry, and independent Live Rewind behavior.
+
+One review-hygiene issue was corrected after testing: six feature files had an extra blank line at EOF, causing `git diff --check origin/main...HEAD` to fail. This cleanup makes that diff audit pass and does not change runtime behavior. The pre-existing local `go-render.sh` edit remains deliberately unstaged.

@@ -12,4 +12,3 @@ export function validatePanelManifest(manifest) {
   if (typeof manifest.factory !== 'function') throw new Error(`panel ${manifest.id} has no factory`);
   return Object.freeze({ ...manifest });
 }
-

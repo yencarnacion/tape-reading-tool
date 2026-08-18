@@ -10,4 +10,3 @@ export const blankPanelManifest = {
     return { render() {}, onEvent() {}, unmount() { root.classList.remove('blank-analytics-panel'); root.replaceChildren(); } };
   }
 };
-

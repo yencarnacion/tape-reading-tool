@@ -75,4 +75,3 @@ export const tapePressureManifest = {
   requestedCapabilities: ['stream', 'clock'], defaultSettings: {}, minimumWidth: 280,
   factory: ({ root, host }) => createTapePressureInstance(root, { source: host.streamSource(), format: host.formatters() })
 };
-

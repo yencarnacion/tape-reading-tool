@@ -45,4 +45,3 @@ assert.equal(displayNumber(null), '--'); assert.equal(displayNumber(Number.NaN),
 assert.equal(calculateADR(bars, 10, '2026-07-25').lookback, 10); assert.equal(calculateADR(bars, 10, '2026-07-25').bars.length, 10);
 
 console.log('ADR panel check: formula, completeness, RTH boundaries, no-look-ahead, and formatting passed');
-
