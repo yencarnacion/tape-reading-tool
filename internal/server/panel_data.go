@@ -19,7 +19,15 @@ const panelDataSchemaVersion = 1
 type panelDataCacheEntry struct {
 	value any
 	at    time.Time
+	ready bool
 }
+
+// A complete prior-session answer never changes, so it is cached for the
+// process lifetime under its as-of key. An unavailable or insufficient answer
+// is a statement about this moment: a provider outage, IBKR pacing, or history
+// that has not been downloaded yet. Retrying those forever would hammer the
+// provider, and caching them forever would strand the panel until a restart.
+const panelDataRetryAfter = 30 * time.Second
 
 type panelDailyBar struct {
 	SessionDateET string  `json:"sessionDateET"`
@@ -128,7 +136,7 @@ func (s *Server) handlePanelDailyBars(w http.ResponseWriter, r *http.Request) {
 	}
 	key := fmt.Sprintf("daily|%s|%s|%s|%s|%s|%d", symbol, mode, source, provider, before.Format("2006-01-02"), limit)
 	s.panelDataMu.Lock()
-	if cached, ok := s.panelDataCache[key]; ok {
+	if cached, ok := s.panelDataCache[key]; ok && (cached.ready || s.now().Sub(cached.at) < panelDataRetryAfter) {
 		s.panelDataMu.Unlock()
 		writeJSON(w, http.StatusOK, cached.value)
 		return
@@ -171,7 +179,7 @@ func (s *Server) handlePanelDailyBars(w http.ResponseWriter, r *http.Request) {
 	if response.CompleteSessions == limit {
 		response.Status = "ready"
 	}
-	s.panelDataCache[key] = panelDataCacheEntry{value: response, at: s.now()}
+	s.panelDataCache[key] = panelDataCacheEntry{value: response, at: s.now(), ready: response.Status == "ready"}
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -291,11 +299,18 @@ func (s *Server) handlePanelRTHContext(w http.ResponseWriter, r *http.Request) {
 	throughUS := clock.UnixMicro()
 	if raw := r.URL.Query().Get("through_us"); raw != "" {
 		parsed, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || parsed <= 0 || parsed > throughUS {
+		if err != nil || parsed <= 0 {
 			http.Error(w, "invalid through_us", http.StatusBadRequest)
 			return
 		}
-		throughUS = parsed
+		// The browser extrapolates its clock between deliveries, so a request can
+		// name an instant marginally beyond the authoritative one. In replay that
+		// gap is structural: the server position only advances when an event is
+		// emitted, and a backward seek leaves the browser clock far ahead until
+		// the first batch from the new position arrives. Clamp down to the
+		// authoritative instant instead of refusing the request. Clamping can only
+		// remove look-ahead, never grant it.
+		throughUS = min(parsed, throughUS)
 	}
 	start := time.Date(session.Year(), session.Month(), session.Day(), 9, 30, 0, 0, location)
 	closeTime := time.Date(session.Year(), session.Month(), session.Day(), 16, 0, 0, 0, location)

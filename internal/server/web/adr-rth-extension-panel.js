@@ -20,15 +20,24 @@ function timeET(timeUS) {
 
 function createADRPanel({ root, host, settings }) {
   let lookback = Math.max(5, Math.min(60, Math.round(Number(settings.lookbackSessions) || 20)));
-  let snapshot = host.currentSnapshot(); let adr = null; let context = null; let loadGeneration = 0; let mounted = true;
+  let snapshot = host.currentSnapshot(); let adr = null; let context = null; let loadGeneration = 0; let mounted = true; let loadedSessionDateET = '';
   let pendingTrades = []; let pendingOverflow = false; let requestController = null;
   root.innerHTML = markup(lookback); const $ = (selector) => root.querySelector(selector);
   const stateNode = $('.adr-state'), readyNode = $('.adr-ready'), input = $('.adr-lookback');
 
+  // A paused replay is stopped in time. Nothing delivered afterwards may advance
+  // the panel clock, or the display would drift past the instant being examined.
+  function frozen() { return snapshot.mode === 'replay' && snapshot.status?.state === 'paused'; }
   function showState(title, detail = '') { readyNode.hidden = true; stateNode.hidden = false; stateNode.querySelector('strong').textContent = title; stateNode.querySelector('small').textContent = detail; }
   function render() {
     if (!mounted) return;
     const phase = classifyRTH(snapshot.clockUS);
+    // The baseline excludes the current session and the seed is scoped to one
+    // session date, so crossing into another session invalidates both. Without
+    // this an application left running overnight, or a replay seek that lands
+    // on an earlier date, would keep presenting the previous session's frozen
+    // low and last as if they were current.
+    if (phase.sessionDateET && loadedSessionDateET && phase.sessionDateET !== loadedSessionDateET) { void load(); return; }
     if (phase.phase === 'before-open') { showState('WAITING FOR RTH OPEN', adr?.status === 'ready' ? `ADR${lookback} ${(adr.adr * 100).toFixed(2)}% · ${lookback} / ${lookback} SESSIONS` : ''); return; }
     if (adr?.status === 'insufficient') { showState('INSUFFICIENT ADR HISTORY', `${adr.completeSessions} / ${lookback} COMPLETED SESSIONS`); return; }
     if (adr?.status !== 'ready') { showState(adr?.status === 'unavailable' ? 'ADR HISTORY UNAVAILABLE' : 'LOADING ADR HISTORY'); return; }
@@ -49,6 +58,7 @@ function createADRPanel({ root, host, settings }) {
     requestController?.abort(); requestController = new AbortController();
     const requestSignal = AbortSignal.any([host.signal, requestController.signal]);
     const token = ++loadGeneration; const phase = classifyRTH(snapshot.clockUS); adr = null; context = null; pendingTrades = []; pendingOverflow = false; showState('LOADING ADR HISTORY');
+    loadedSessionDateET = phase.sessionDateET || '';
     if (!phase.sessionDateET || !snapshot.symbol) return;
     try {
       const [history, seed] = await Promise.all([
@@ -70,7 +80,8 @@ function createADRPanel({ root, host, settings }) {
     onEvent(event) {
       if (event.type === 'snapshot') { snapshot = { ...snapshot, ...event.snapshot }; void load(); }
       else if (event.type === 'tradeBatch' && event.symbol === snapshot.symbol) {
-        snapshot.clockUS = event.clockUS || snapshot.clockUS; const phase = marketParts(snapshot.clockUS);
+        if (!frozen()) snapshot.clockUS = event.clockUS || snapshot.clockUS;
+        const phase = marketParts(snapshot.clockUS);
         if (!context) {
           if (pendingTrades.length + event.trades.length <= 8192) pendingTrades.push(...event.trades); else pendingOverflow = true;
         } else context = applyEligibleTrades(context, event.trades, { symbol: snapshot.symbol, sessionDateET: phase?.sessionDateET });
@@ -78,7 +89,7 @@ function createADRPanel({ root, host, settings }) {
       }
       else if (event.type === 'modeChanged') { snapshot.mode = event.mode; snapshot.status = { ...(event.status || snapshot.status) }; snapshot.clockUS = event.clockUS || snapshot.clockUS; render(); }
     },
-    render(nowUS) { if (snapshot.mode !== 'replay' || snapshot.status?.state !== 'paused') snapshot.clockUS = nowUS || snapshot.clockUS; render(); },
+    render(nowUS) { if (!frozen()) snapshot.clockUS = nowUS || snapshot.clockUS; render(); },
     unmount() { mounted = false; loadGeneration++; requestController?.abort(); root.replaceChildren(); root.classList.remove('adr-closed'); }
   };
 }

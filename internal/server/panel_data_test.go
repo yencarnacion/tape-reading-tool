@@ -193,3 +193,87 @@ func TestPanelDailyCacheIsRaceSafeAndIsolatedByAsOfDate(t *testing.T) {
 }
 
 func formatInt64(value int64) string { return strconv.FormatInt(value, 10) }
+
+// The browser extrapolates its clock between deliveries and, after a backward
+// replay seek, keeps the pre-seek clock until the first batch from the new
+// position arrives. Refusing those requests left the panel stranded on
+// "ADR HISTORY UNAVAILABLE"; clamping answers for the authoritative instant.
+func TestPanelRTHContextClampsAheadOfAuthoritativeClock(t *testing.T) {
+	server := panelServer(t, "demo")
+	location, _ := time.LoadLocation("America/New_York")
+	server.now = func() time.Time { return time.Date(2026, time.July, 24, 10, 0, 0, 0, location) }
+	authoritative := time.Date(2026, time.July, 24, 10, 0, 0, 0, location).UnixMicro()
+	code, payload := decodeRTH(t, server, "symbol=AAPL&session=2026-07-24&through_us="+formatInt64(authoritative+90*int64(time.Second/time.Microsecond)))
+	if code != http.StatusOK || payload.ThroughUS != authoritative || payload.Status != "ready" {
+		t.Fatalf("code=%d payload=%+v", code, payload)
+	}
+	if code, _ := decodeRTH(t, server, "symbol=AAPL&session=2026-07-24&through_us=-1"); code != http.StatusBadRequest {
+		t.Fatal("a non-positive through_us must still be rejected")
+	}
+	if code, _ := decodeRTH(t, server, "symbol=AAPL&session=2026-07-24&through_us=nonsense"); code != http.StatusBadRequest {
+		t.Fatal("an unparseable through_us must still be rejected")
+	}
+}
+
+// A clamped request may never reach past the authoritative instant: the seed for
+// an earlier replay position must not see the later session low.
+func TestPanelRTHContextClampDoesNotGrantLookAhead(t *testing.T) {
+	server := panelServer(t, "massive")
+	database := openPanelDatabase(t)
+	server.AttachRecorder(database)
+	location, _ := time.LoadLocation("America/New_York")
+	start := time.Date(2026, time.July, 24, 9, 30, 0, 0, location).UnixMicro()
+	position := time.Date(2026, time.July, 24, 9, 40, 0, 0, location)
+	server.now = func() time.Time { return position }
+	records := []storage.TradeRecord{
+		{Symbol: "AAPL", EventUS: start + 1e6, MarketTimeUS: start + 1e6, SequenceID: 1, Price: 100, Size: 10, ChartEligible: true, Source: "live", Provider: "massive"},
+		{Symbol: "AAPL", EventUS: start + 1800e6, MarketTimeUS: start + 1800e6, SequenceID: 2, Price: 60, Size: 10, ChartEligible: true, Source: "live", Provider: "massive"},
+	}
+	if err := database.InsertTrades(context.Background(), records); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.MarkCoverage(context.Background(), storage.Coverage{Symbol: "AAPL", Provider: "massive", Kind: "trades", StartUS: start, EndUS: start + 3600e6}); err != nil {
+		t.Fatal(err)
+	}
+	_, payload := decodeRTH(t, server, "symbol=AAPL&session=2026-07-24&through_us="+formatInt64(start+3600e6))
+	if payload.Status != "ready" || payload.Low != 100 || payload.ThroughUS != position.UnixMicro() {
+		t.Fatalf("clamped request leaked a later low: %+v", payload)
+	}
+}
+
+// A provider outage must not be remembered for the life of the process. The
+// panel has to be able to recover once the provider or the local download does.
+func TestPanelDailyBarsRetriesAfterUnavailableResponse(t *testing.T) {
+	server := panelServer(t, "live")
+	location, _ := time.LoadLocation("America/New_York")
+	at := time.Date(2026, time.July, 24, 10, 0, 0, 0, location)
+	server.now = func() time.Time { return at }
+	calls := 0
+	server.dailyBars = func(context.Context, string, time.Time, int) ([]storage.MinuteBar, error) {
+		calls++
+		if calls == 1 {
+			return nil, errors.New("provider down")
+		}
+		bars := make([]storage.MinuteBar, 0, 2)
+		for index := 0; index < 2; index++ {
+			day := time.Date(2026, time.July, 22+index, 0, 0, 0, 0, time.UTC)
+			bars = append(bars, storage.MinuteBar{TimeUS: day.UnixMicro(), Open: 100, High: 106, Low: 100, Close: 104, Volume: 1000})
+		}
+		return bars, nil
+	}
+	query := "symbol=AAPL&before=2026-07-24&limit=2"
+	if _, payload, _ := decodeDaily(t, server, query); payload.Status != "unavailable" {
+		t.Fatalf("payload=%+v", payload)
+	}
+	if _, payload, _ := decodeDaily(t, server, query); payload.Status != "unavailable" || calls != 1 {
+		t.Fatalf("an unavailable answer must be held briefly: calls=%d payload=%+v", calls, payload)
+	}
+	server.now = func() time.Time { return at.Add(panelDataRetryAfter + time.Second) }
+	if _, payload, _ := decodeDaily(t, server, query); payload.Status != "ready" || calls != 2 {
+		t.Fatalf("calls=%d payload=%+v", calls, payload)
+	}
+	server.now = func() time.Time { return at.Add(24 * time.Hour) }
+	if _, payload, _ := decodeDaily(t, server, query); payload.Status != "ready" || calls != 2 {
+		t.Fatalf("a ready answer must stay cached: calls=%d payload=%+v", calls, payload)
+	}
+}

@@ -2,6 +2,61 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 
 const chrome = process.env.CHROME || 'google-chrome';
+
+// The demo prior sessions are synthetic and clock-independent: their mean
+// High / Low - 1 is always 4.90% over 20 completed sessions. The running low and
+// last, however, depend on when the check runs, so the extension is asserted
+// against the readings the panel itself displays rather than a fixed number.
+const DEMO_ADR_BASELINE = '4.90%';
+const DEMO_ADR = 0.049;
+const DOCUMENTED_ADR_STATES = [
+  'LOADING ADR HISTORY', 'WAITING FOR RTH OPEN', 'BUILDING RTH LOW',
+  'INSUFFICIENT ADR HISTORY', 'RTH LOW INCOMPLETE', 'ADR HISTORY UNAVAILABLE'
+];
+
+// Before 09:30 ET there is no RTH low yet and a number would be a lie, so the
+// panel must show the documented waiting state with the loaded baseline. At any
+// other hour it must show the documented formula applied to its own readings.
+function assertDemoADR(label, reading) {
+  const fail = (why) => { throw new Error(`${label}: ${why}: ${JSON.stringify(reading)}`); };
+  if (!DOCUMENTED_ADR_STATES.includes(reading.state || '') && reading.state) fail('undocumented panel state');
+  if (reading.state === 'WAITING FOR RTH OPEN') {
+    if (!String(reading.detail || '').includes(`ADR20 ${DEMO_ADR_BASELINE}`)) fail('waiting state lost the loaded baseline');
+    return;
+  }
+  if (reading.state) fail('demo mode must reach a ready ADR reading');
+  if (reading.baseline !== DEMO_ADR_BASELINE || reading.history !== '20 / 20') fail('demo baseline is not the documented 20-session mean');
+  const low = Number(String(reading.low).replace('$', ''));
+  const last = Number(String(reading.last).replace('$', ''));
+  const extension = Number(String(reading.value).replace(' ADR', ''));
+  const percent = Number(String(reading.percent).replace('% FROM RTH LOW', ''));
+  if (!(low > 0) || !(last > 0) || !Number.isFinite(extension) || !Number.isFinite(percent)) fail('unreadable ADR readings');
+  if (Math.abs(percent - (last / low - 1) * 100) > 0.02) fail('raw move does not match the displayed low and last');
+  if (Math.abs(extension - (last / low - 1) / DEMO_ADR) > 0.02) fail('extension is not the raw move divided by the baseline');
+}
+
+// Demo history is local, so the panel settles quickly; wait for it rather than
+// for a fixed delay, or a slow load reads as a wrong state before the open.
+const ADR_SETTLE_EXPRESSION = `await (async () => {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    if (document.querySelector('.adr-ready:not([hidden]) .adr-value')?.textContent) return;
+    if (document.querySelector('.adr-state:not([hidden]) small')?.textContent) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+})();`;
+
+// Reads whichever of the two exclusive ADR faces is currently shown.
+const ADR_READING_EXPRESSION = `({
+  state: document.querySelector('.adr-state:not([hidden]) strong')?.textContent || '',
+  detail: document.querySelector('.adr-state:not([hidden]) small')?.textContent || '',
+  value: document.querySelector('.adr-ready:not([hidden]) .adr-value')?.textContent || '',
+  percent: document.querySelector('.adr-ready:not([hidden]) .adr-percent')?.textContent || '',
+  low: document.querySelector('.adr-ready:not([hidden]) .adr-low')?.textContent || '',
+  last: document.querySelector('.adr-ready:not([hidden]) .adr-last')?.textContent || '',
+  baseline: document.querySelector('.adr-ready:not([hidden]) .adr-baseline')?.textContent || '',
+  history: document.querySelector('.adr-ready:not([hidden]) .adr-history')?.textContent || ''
+})`;
 const target = process.argv[2] || 'http://127.0.0.1:8097';
 const port = 9337;
 const profile = `/tmp/tape-reading-tool-chrome-${process.pid}`;
@@ -51,11 +106,9 @@ try {
       const beforeRect = slot.getBoundingClientRect().toJSON(); const beforeDebug = api.debug();
       picker.value = 'adr-rth-extension'; picker.dispatchEvent(new Event('change', { bubbles: true }));
       await new Promise((resolve) => setTimeout(resolve, 500));
+      ${ADR_SETTLE_EXPRESSION}
       const adr = {
-        active: api.active(), value: document.querySelector('.adr-value')?.textContent,
-        percent: document.querySelector('.adr-percent')?.textContent,
-        history: document.querySelector('.adr-history')?.textContent,
-        state: document.querySelector('.adr-state:not([hidden]) strong')?.textContent,
+        active: api.active(), reading: ${ADR_READING_EXPRESSION},
         rect: slot.getBoundingClientRect().toJSON(), debug: api.debug()
       };
       picker.value = 'blank'; picker.dispatchEvent(new Event('change', { bubbles: true }));
@@ -71,9 +124,10 @@ try {
     })()`, awaitPromise: true, returnByValue: true
   }, 10000);
   const panels = panelCheck.result.value;
+  assertDemoADR('ADR hot swap', panels.adr.reading);
   if (JSON.stringify(panels.options) !== JSON.stringify(['tape-pressure', 'adr-rth-extension', 'blank']) ||
-      panels.adr.active !== 'adr-rth-extension' || !/^\d+\.\d{2} ADR$/.test(panels.adr.value || '') ||
-      panels.adr.history !== '20 / 20' || panels.blank.active !== 'blank' || !/NO ANALYTICS PANEL/.test(panels.blank.text || '') ||
+      panels.adr.active !== 'adr-rth-extension' ||
+      panels.blank.active !== 'blank' || !/NO ANALYTICS PANEL/.test(panels.blank.text || '') ||
       panels.restored !== 'tape-pressure' || panels.rows !== 3 || !panels.sameSocket || !panels.sameSymbol ||
       Math.abs(panels.beforeRect.x - panels.adr.rect.x) > .01 || Math.abs(panels.beforeRect.y - panels.adr.rect.y) > .01 ||
       Math.abs(panels.beforeRect.width - panels.adr.rect.width) > .01 || Math.abs(panels.beforeRect.height - panels.adr.rect.height) > .01 ||
@@ -88,21 +142,25 @@ try {
     expression: `(async () => {
       await new Promise((resolve) => setTimeout(resolve, 400));
       const api = window.__tapeReadingPanels;
-      const persisted = { active: api.active(), value: document.querySelector('.adr-value')?.textContent };
+      ${ADR_SETTLE_EXPRESSION}
+      const persisted = { active: api.active(), reading: ${ADR_READING_EXPRESSION} };
       api.injectError();
       const errored = { active: api.active(), title: document.querySelector('.panel-error strong')?.textContent, socket: api.socket()?.readyState };
       document.querySelector('.panel-error button')?.click();
       await new Promise((resolve) => setTimeout(resolve, 400));
-      const recovered = { active: api.active(), value: document.querySelector('.adr-value')?.textContent };
+      ${ADR_SETTLE_EXPRESSION}
+      const recovered = { active: api.active(), reading: ${ADR_READING_EXPRESSION} };
       api.swap('tape-pressure');
       await new Promise((resolve) => setTimeout(resolve, 100));
       return { persisted, errored, recovered, restored: api.active() };
     })()`, awaitPromise: true, returnByValue: true
   }, 10000);
   const persisted = persistedCheck.result.value;
-  if (persisted.persisted.active !== 'adr-rth-extension' || !/^\d+\.\d{2} ADR$/.test(persisted.persisted.value || '') ||
+  assertDemoADR('ADR after reload', persisted.persisted.reading);
+  assertDemoADR('ADR after error recovery', persisted.recovered.reading);
+  if (persisted.persisted.active !== 'adr-rth-extension' ||
       !/STOPPED$/.test(persisted.errored.title || '') || persisted.errored.socket !== WebSocket.OPEN ||
-      persisted.recovered.active !== 'adr-rth-extension' || !/^\d+\.\d{2} ADR$/.test(persisted.recovered.value || '') || persisted.restored !== 'tape-pressure') {
+      persisted.recovered.active !== 'adr-rth-extension' || persisted.restored !== 'tape-pressure') {
     throw new Error(`panel persistence/error recovery failed: ${JSON.stringify(persisted)}`);
   }
   await command('Runtime.evaluate', {

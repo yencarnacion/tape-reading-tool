@@ -23,6 +23,15 @@
   --rvol-normal: #9582bd;
   --rvol-elevated: #b98be6;
   --rvol-surge: #df9cff;
+  /* Neutral, non-directional readout reserved for ADR extension magnitude. Every
+     saturated hue in this application already carries a meaning a trader reads
+     instantly: green/red delta, cyan/amber price direction, blue/orange tape
+     sides, the violet --rvol ramp, and amber Live Rewind chrome. Extension is
+     neither a side nor an alarm, so it stays achromatic and lets the numeric
+     readout, the labels, and the meter position carry the magnitude. */
+  --adr-ink: #e8ecf1;
+  --adr-meter: #9aa4b1;
+  --adr-meter-track: #2b323b;
   --focus: #f0a83b;
   /* Reserved for Live Rewind chrome and used for nothing else. The amber band is
      already occupied by --seller, --price-down, and --focus, so hue alone cannot
@@ -310,17 +319,17 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .adr-state small { color: #78818c; font-size: 10px; }
 .adr-ready { display: grid; grid-template-columns: minmax(130px, 1.2fr) minmax(180px, 1fr); grid-template-rows: 1fr 20px 15px 18px; gap: 0 12px; padding: 8px 8px 3px; min-height: 0; }
 .adr-primary { display: grid; align-content: center; grid-row: 1; }
-.adr-value { color: #d8b4ff; font-size: clamp(25px, 4vw, 42px); font-weight: 950; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.adr-value { color: var(--adr-ink); font-size: clamp(25px, 4vw, 42px); font-weight: 950; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .adr-percent { color: #b6c0cb; font-size: clamp(10px, 1.4vw, 14px); font-weight: 800; white-space: nowrap; }
 .adr-ready dl { display: grid; align-content: center; gap: 2px; margin: 0; font-size: 10px; }
 .adr-ready dl div { display: flex; justify-content: space-between; gap: 10px; }
 .adr-ready dt { color: #78818c; } .adr-ready dd { margin: 0; color: #d8dde2; font-weight: 800; font-variant-numeric: tabular-nums; }
-.adr-meter { position: relative; grid-column: 1 / -1; height: 5px; align-self: end; background: #2b323b; }
-.adr-meter i { position: absolute; inset: 0 auto 0 0; width: var(--adr-width, 0%); background: #b784e8; }
+.adr-meter { position: relative; grid-column: 1 / -1; height: 5px; align-self: end; background: var(--adr-meter-track); }
+.adr-meter i { position: absolute; inset: 0 auto 0 0; width: var(--adr-width, 0%); background: var(--adr-meter); }
 .adr-meter b { position: absolute; left: 80%; top: -3px; width: 1px; height: 11px; background: #d8dde2; }
 .adr-scale { grid-column: 1 / -1; display: flex; justify-content: space-between; color: #78818c; font-size: 8px; }
 .adr-reference { grid-column: 1 / -1; text-align: center; color: #78818c; font-size: 8px; letter-spacing: .04em; }
-.adr-closed .adr-value { color: #b9a5ce; }
+.adr-closed .adr-value { color: #a6aeb9; }
 .rolling-header, .rolling-row {
   display: grid;
   grid-template-columns: minmax(47px, .7fr) minmax(78px, 1.25fr) minmax(50px, .8fr) minmax(58px, .95fr) minmax(52px, .85fr) minmax(50px, .72fr) minmax(60px, .85fr);

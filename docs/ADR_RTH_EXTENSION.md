@@ -38,6 +38,10 @@ For live IBKR, the existing connection supplies bounded historical bars; no seco
 
 Replay and deterministic render take their session date and position from the server-owned replay clock, never `Date.now()`. Storage filters current-session trades both by RTH market time and by whether their receipt/event time was at or before the target. Seeking or changing symbols produces a new panel generation, clears prior visible values, reloads the frozen prior-session baseline, and reconstructs context through the new target. Late results from older generations are ignored.
 
+The browser names the instant it wants, but the server decides the instant it answers for. A requested `through_us` beyond the authoritative clock is clamped down to it rather than refused: the browser extrapolates between deliveries, the replay position only advances when an event is emitted, and a backward seek leaves the browser clock ahead until the first batch from the new position arrives. Clamping can only remove look-ahead, never grant it, so an early replay instant can never be answered with a later session low.
+
+A paused replay is stopped in time. Neither the animation frame nor a delivered batch advances the panel clock while it is paused. Crossing into a different session date — overnight in live mode, or a seek that lands on an earlier date — invalidates both the baseline and the seed and reloads them; the previous session's low and last are never presented as current.
+
 Completed prior sessions come either from provider-completed RTH daily candles or local minute/trade data whose coverage metadata proves the full nominal RTH request completed. Quiet minutes need not contain trades. The service does not mix providers merely to reach the lookback.
 
 History responses report source/provider and an adjustment convention. Version 1 preserves one provider-consistent series and does not invent split corrections. High/low ratios are ordinarily invariant to overnight split adjustment, but corrupt or intraday-action bars remain invalid inputs.
@@ -45,6 +49,8 @@ History responses report source/provider and an adjustment convention. Version 1
 ## Presentation
 
 The main value is shown in ADR units with the raw percent from the running RTH low. Supporting fields show low, low time, last, ADR period/value, and history count. The neutral magnitude scale marks 0.00 through 1.25+; its fill may cap while the numeric value continues above 1.25. It issues no alerts and carries no buy, sell, safe, winner, or reversal label.
+
+The readout is achromatic on purpose. Every saturated hue in the application already carries an instant meaning — green/red delta, cyan/amber price direction, blue/orange tape sides, the violet RVOL magnitude ramp, amber Live Rewind chrome — so extension, which is neither a side nor an alarm, is carried by the number, the labels, and the meter position instead of by a colour that would read as one of those.
 
 Live Rewind intentionally keeps an independent Tape Pressure panel in version 1. Selecting ADR affects only the live analytics slot; rewind does not pause or remount it.
 

@@ -442,6 +442,8 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
     }
     if (message.type === 'status') {
       if (message.status) {
+        const previousMode = state.status?.mode;
+        const previousState = state.status?.state;
         const pausing = message.status.mode === 'replay' && message.status.state === 'paused';
         if (pausing && state.status?.state !== 'paused') {
           state.serverClockUS = serverNowUS(performance.now());
@@ -460,7 +462,13 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
         }
         setConnection(message.status);
         ensureRVOLWarmup();
-        panelHost?.event({ type: 'modeChanged', mode: message.status.mode, status: { ...message.status }, clockUS: serverNowUS(performance.now()) });
+        // Status heartbeats repeat an unchanged mode several times a minute.
+        // The panel lifecycle already receives the authoritative clock through
+        // the animation frame, which knows to freeze a paused replay, so a
+        // heartbeat must not be reported to panels as a mode change.
+        if (message.status.mode !== previousMode || message.status.state !== previousState) {
+          panelHost?.event({ type: 'modeChanged', mode: message.status.mode, status: { ...message.status }, clockUS: serverNowUS(performance.now()) });
+        }
       }
       if (message.history) {
         state.history = message.history;

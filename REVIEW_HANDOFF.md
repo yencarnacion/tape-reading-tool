@@ -59,3 +59,72 @@ Please rerun the repository's documented checks in the review environment, espec
 ## Working-tree note
 
 The local `go-render.sh` symbol/date/time edit predates this handoff and is intentionally excluded from the branch commits.
+
+---
+
+# Review pass: findings and fixes (branch `codex/plugin-panels`)
+
+The documented checks were rerun against `plugin.md`, this handoff, `docs/PANEL_API_V1.md`, and `docs/ADR_RTH_EXTENSION.md`. Everything passed as handed over. Five defects were found by reading the code against the specification rather than by a failing check, and all five are fixed on this branch.
+
+## 1. A browser clock ahead of the authoritative clock made the panel unusable in replay
+
+`GET /api/panel-data/rth-context` rejected any `through_us` beyond the server clock with `400`, and the ADR panel turns a failed request into `ADR HISTORY UNAVAILABLE`.
+
+The browser clock is `last server-stamped receipt + wall time since delivery`. In live mode that stays behind the server. In replay it cannot: `Replay.Status().PositionUS` only advances when an event is emitted, so the extrapolating browser clock overtakes it between events, and a backward seek publishes an empty same-symbol snapshot without resetting `state.serverClockUS` — the panel then asks for the pre-seek instant, which is far ahead of the new position. The panel reported unavailable and had no retry until the next snapshot.
+
+`through_us` is now clamped down to the authoritative instant. Non-positive and unparseable values are still rejected. Clamping can only remove look-ahead, never grant it, which `TestPanelRTHContextClampDoesNotGrantLookAhead` asserts directly: a request naming a later instant is answered with the earlier position's low, not the later one.
+
+## 2. A failed or insufficient history answer was cached for the life of the process
+
+`panelDataCacheEntry.at` was written and never read, so every answer was cached forever. An IBKR pacing error, a provider outage, or history that had not been downloaded yet was pinned to its `(symbol, mode, source, provider, as-of, limit)` key until restart. Switching panels, changing symbol and back, or reloading the page could not recover.
+
+Complete answers still cache for the process lifetime — a past session's completed bars never change. Non-ready answers are now held for `panelDataRetryAfter` (30s), which keeps a browser tab from re-requesting per mount without making an outage permanent. `TestPanelDailyBarsRetriesAfterUnavailableResponse` covers hold, retry, and the ready answer staying cached.
+
+## 3. The ADR panel never noticed a session-date change
+
+`load()` ran only on snapshot, mode change, and lookback change. The baseline is keyed to `beforeSessionDateET` and the seed to one `sessionDateET`, and `applyEligibleTrades` silently ignores trades from a different session date. An application left running overnight therefore kept the previous session's frozen low and last, and presented them as the current reading once the next 09:30 passed. A replay seek onto an earlier date had the same effect.
+
+`render()` now reloads the baseline and the seed when the authoritative session date leaves the one currently loaded.
+
+## 4. A paused replay clock could be advanced by a delivered batch
+
+`render(nowUS)` froze the panel clock while replay was paused, but the `tradeBatch` handler adopted `event.clockUS` unconditionally. The two rules are now the same rule (`frozen()`), so nothing delivered advances a clock that is deliberately stopped.
+
+Related: `app.js` emitted `modeChanged` on every status heartbeat rather than on an actual mode or replay-state transition. Panels were being told the mode changed several times a minute, each one forcing a full ADR re-render. It now fires on a real transition; the authoritative clock still reaches panels every animation frame.
+
+## 5. The ADR readout used the palette reserved for RVOL magnitude
+
+`plugin.md` forbids reusing a colour that conflicts with RVOL magnitude, and `styles.css` reserves `--rvol-quiet` … `--rvol-surge` (a violet ramp) for exactly that. The ADR value was `#d8b4ff` and its meter `#b784e8`, both inside that ramp — two different magnitude readouts in one viewport wearing the same colour.
+
+ADR now has its own named, achromatic tokens (`--adr-ink`, `--adr-meter`, `--adr-meter-track`) with the reservation documented alongside the existing ones. Text and meter position carry the magnitude, which is what the specification asks for.
+
+## Test-suite defect fixed at the same time
+
+`scripts/browser-check.mjs` asserted `/^\d+\.\d{2} ADR$/` against the ADR value. Before 09:30 ET the correct panel state is `WAITING FOR RTH OPEN` and no number exists, so the documented verification command failed for any run in that window. The check now asserts what is actually invariant: the demo baseline is always `ADR20 4.90%` over `20 / 20` completed synthetic sessions, and in the ready state the displayed extension and raw percent must equal the documented formula applied to the panel's own displayed low and last. It also asserts the mounted state is one of the documented states, and waits for the panel to settle instead of a fixed delay. The assertion was mutation-tested: perturbing the expected baseline fails the check.
+
+## Verification rerun after the fixes
+
+| Command | Result |
+| --- | --- |
+| `go build -buildvcs=false ./cmd/tape-reading-tool` | pass |
+| `go vet ./...` | pass |
+| `gofmt -l .` | clean |
+| `go test ./...` | pass |
+| `go test -race ./...` | pass |
+| `node scripts/adr-panel-check.mjs` | pass |
+| `node scripts/audio-worklet-check.mjs` | pass |
+| `node scripts/rewind-check.mjs` | pass |
+| `node scripts/browser-check.mjs` against `./go.sh demo -rewind` | pass |
+| `node scripts/browser-check.mjs` against `./go.sh demo` | pass |
+
+Browser checks ran on macOS with `CHROME=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`. Note that the web assets are compiled into the binary through `//go:embed web/*`: restart the demo server after any change under `internal/server/web/` or the check will exercise the previous build.
+
+## Not changed, and why
+
+- **Live Rewind still mounts only Tape Pressure.** `plugin.md` permits this and both the handoff and `docs/ADR_RTH_EXTENSION.md` state it as a deliberate version-1 boundary.
+- **`handlePanelDailyBars` holds its mutex across the provider request.** This matches the existing `handleRVOLHistory` and `handleDailyHistory` handlers, whose comment explains the intent: several tabs opening at the bell produce one provider request. Changing it here alone would make the panel path inconsistent with the rest of the server.
+- **`aggregateRTHBars` seeds its accumulator from `bars[0]` without validating it first.** A session whose first minute bar is invalid is dropped rather than mis-aggregated, so the failure mode is a truthful missing session, not a wrong number. Worth tidying, not worth a behaviour change in a review pass.
+
+## Suggested next review focus
+
+Nothing on this branch exercises a real historical replay: there is no recorded database in the working tree, and the browser check simulates replay by injecting panel events rather than by driving the server's replay lifecycle. Findings 1, 3, and 4 all live in that gap. A recorded session replayed end to end — start, pause, backward seek, forward seek, reload while paused — is the highest-value check still missing.
