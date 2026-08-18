@@ -138,8 +138,11 @@ func (s *Server) handlePanelDailyBars(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	if mode == "demo" {
+		response.Adjustment = "synthetic-unadjusted"
 		response.Bars = demoDailyBars(before, limit, location)
 	} else if mode == "live" && s.dailyBars != nil {
+		response.Adjustment = "ibkr-provider"
+		response.Message = "IBKR adjustment semantics are provider-defined; no cross-provider normalization is applied"
 		bars, requestErr := s.dailyBars(ctx, symbol, before, limit)
 		if requestErr != nil {
 			response.Status, response.Message = "unavailable", requestErr.Error()
@@ -147,7 +150,11 @@ func (s *Server) handlePanelDailyBars(w http.ResponseWriter, r *http.Request) {
 			response.Bars = convertDailyBars(bars, before, location)
 		}
 	} else if s.recorder != nil && provider != "all" {
-		response.Bars, err = s.localCompletedDailyBars(ctx, symbol, source, provider, before, limit, location)
+		historySource := source
+		if mode == "massive" { historySource = "historical" }
+		response.Source = historySource
+		if provider == "massive" { response.Adjustment = "unadjusted" } else { response.Adjustment = "raw-recorded" }
+		response.Bars, err = s.localCompletedDailyBars(ctx, symbol, historySource, provider, before, limit, location)
 		if err != nil {
 			response.Status, response.Message = "unavailable", err.Error()
 		}

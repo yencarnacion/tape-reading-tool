@@ -105,6 +105,13 @@ try {
       persisted.recovered.active !== 'adr-rth-extension' || !/^\d+\.\d{2} ADR$/.test(persisted.recovered.value || '') || persisted.restored !== 'tape-pressure') {
     throw new Error(`panel persistence/error recovery failed: ${JSON.stringify(persisted)}`);
   }
+  await command('Runtime.evaluate', {
+    expression: `(() => { const key = 'tape-reading-tool.settings.v1'; const saved = JSON.parse(localStorage.getItem(key)); saved.panels.slots.primaryAnalytics.activePanelId = 'unknown-panel'; localStorage.setItem(key, JSON.stringify(saved)); })()`
+  });
+  await command('Page.reload', { ignoreCache: true }); await waitForApp();
+  const fallback = (await command('Runtime.evaluate', { expression: `window.__tapeReadingPanels.active()`, returnByValue: true })).result.value;
+  if (fallback !== 'tape-pressure') throw new Error(`unknown panel did not fall back to Tape Pressure: ${fallback}`);
+  await command('Runtime.evaluate', { expression: `window.__tapeReadingPanels.swap('tape-pressure')` });
 
   const results = [];
   const replayToolbarCheck = await command('Runtime.evaluate', {
@@ -599,6 +606,26 @@ try {
     if (toolbarLayout.scrollWidth > toolbarLayout.clientWidth || !toolbarLayout.oneRow) {
       throw new Error(`replay toolbar reflowed at ${width}px: ${JSON.stringify(toolbarLayout)}`);
     }
+    const adrLayoutCheck = await command('Runtime.evaluate', {
+      expression: `(async () => {
+        const api = window.__tapeReadingPanels; api.swap('adr-rth-extension');
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        const root = document.querySelector('#analyticsPanelRoot');
+        const ready = document.querySelector('.adr-ready'); const primary = document.querySelector('.adr-primary');
+        const rootRect = root.getBoundingClientRect(); const primaryRect = primary?.getBoundingClientRect();
+        const result = {
+          value: document.querySelector('.adr-value')?.textContent,
+          rootOverflow: root.scrollWidth - root.clientWidth,
+          primaryOverflow: primaryRect ? Math.max(0, rootRect.left - primaryRect.left, primaryRect.right - rootRect.right) : 999,
+          pickerVisible: getComputedStyle(document.querySelector('#analyticsPanelPicker')).display !== 'none'
+        };
+        api.swap('tape-pressure'); await new Promise((resolve) => setTimeout(resolve, 80)); return result;
+      })()`, awaitPromise: true, returnByValue: true
+    });
+    const adrLayout = adrLayoutCheck.result.value;
+    if (!/^\d+\.\d{2} ADR$/.test(adrLayout.value || '') || adrLayout.rootOverflow > 0 || adrLayout.primaryOverflow > .5 || !adrLayout.pickerVisible) {
+      throw new Error(`ADR panel does not fit at ${width}px: ${JSON.stringify(adrLayout)}`);
+    }
     if (width === 384) {
       const button = await command('Runtime.evaluate', {
         expression: `(() => { const r = document.querySelector('#soundButton').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
@@ -687,7 +714,7 @@ try {
           rewindReadoutFit: (() => {
             const panel = document.querySelector('#rewindPanel');
             const readout = document.querySelector('.rewind-readout');
-            if (!panel || !readout) return null;
+            if (!panel || !readout || !window.__tapeReadingRewind.state().available) return null;
             const wasHidden = panel.hidden;
             const ids = ['rewindMaxDelta', 'rewindMinDelta', 'rewindMaxDeltaDollars', 'rewindMinDeltaDollars'];
             const prior = ids.map((id) => [document.getElementById(id), document.getElementById(id).textContent]);
