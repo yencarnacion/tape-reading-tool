@@ -151,9 +151,15 @@ func (s *Server) handlePanelDailyBars(w http.ResponseWriter, r *http.Request) {
 		}
 	} else if s.recorder != nil && provider != "all" {
 		historySource := source
-		if mode == "massive" { historySource = "historical" }
+		if mode == "massive" {
+			historySource = "historical"
+		}
 		response.Source = historySource
-		if provider == "massive" { response.Adjustment = "unadjusted" } else { response.Adjustment = "raw-recorded" }
+		if provider == "massive" {
+			response.Adjustment = "unadjusted"
+		} else {
+			response.Adjustment = "raw-recorded"
+		}
 		response.Bars, err = s.localCompletedDailyBars(ctx, symbol, historySource, provider, before, limit, location)
 		if err != nil {
 			response.Status, response.Message = "unavailable", err.Error()
@@ -329,6 +335,9 @@ func (s *Server) handlePanelRTHContext(w http.ResponseWriter, r *http.Request) {
 			if err == nil && !complete {
 				complete, err = s.recorder.HasCoverage(ctx, symbol, provider, "minute_bars", start.UnixMicro(), endUS)
 			}
+			if err == nil && !complete && mode == "massive" && source == "live" {
+				complete = s.symbolActiveAt(symbol) > 0 && s.symbolActiveAt(symbol) <= start.UnixMicro()
+			}
 		}
 		if err == nil && complete && stats.Count > 0 {
 			response.CompleteFromRTHOpen = true
@@ -384,4 +393,17 @@ func barsInside(bars []storage.MinuteBar, startUS, endUS int64) []storage.Minute
 		}
 	}
 	return result
+}
+
+func (s *Server) noteSymbolActive(symbol string, atUS int64) {
+	s.symbolActiveMu.Lock()
+	s.symbolActiveUS[symbol] = atUS
+	s.symbolActiveMu.Unlock()
+}
+
+func (s *Server) symbolActiveAt(symbol string) int64 {
+	s.symbolActiveMu.RLock()
+	atUS := s.symbolActiveUS[symbol]
+	s.symbolActiveMu.RUnlock()
+	return atUS
 }

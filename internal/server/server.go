@@ -43,6 +43,8 @@ type Server struct {
 	recorder       *storage.Database
 	rewindPane     bool
 	processStartUS int64
+	symbolActiveMu sync.RWMutex
+	symbolActiveUS map[string]int64
 	uiEventMu      sync.Mutex
 	uiEventAt      map[string]time.Time
 	mode           string
@@ -84,10 +86,12 @@ type streamMessage struct {
 }
 
 func New(cfg config.Config, store *tape.Store, source feed.Feed, liveChart ...bool) *Server {
+	started := time.Now()
 	server := &Server{
 		cfg: cfg, store: store, feed: source,
 		rvolCache: make(map[string]rvolHistoryCache), dailyCache: make(map[string]dailyHistoryCache), panelDataCache: make(map[string]panelDataCacheEntry), now: time.Now,
-		uiEventAt: make(map[string]time.Time), processStartUS: time.Now().UnixMicro(),
+		uiEventAt: make(map[string]time.Time), processStartUS: started.UnixMicro(),
+		symbolActiveUS: map[string]int64{store.Active(): started.UnixMicro()},
 		upgrader: websocket.Upgrader{
 			ReadBufferSize: 4096, WriteBufferSize: 64 * 1024,
 			CheckOrigin: sameOrigin,
@@ -390,6 +394,7 @@ func (s *Server) handleTicker(w http.ResponseWriter, r *http.Request) {
 	defer s.externalControlMu.Unlock()
 	s.detachExternalForManualAction()
 	s.store.Activate(symbol)
+	s.noteSymbolActive(symbol, s.now().UnixMicro())
 	s.feed.SetSymbol(symbol)
 	s.recordUIEvent(storage.UIEventRecord{Symbol: symbol, Kind: storage.UIEventSymbol, ValueText: symbol})
 	writeJSON(w, http.StatusOK, map[string]any{"symbol": symbol, "history": s.store.Symbols()})

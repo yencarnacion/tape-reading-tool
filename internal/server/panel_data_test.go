@@ -151,6 +151,26 @@ func TestPanelRTHContextDeclaresIncompleteCoverage(t *testing.T) {
 	}
 }
 
+func TestMassiveSessionStartedBeforeOpenEstablishesCompleteness(t *testing.T) {
+	server := panelServer(t, "massive")
+	database := openPanelDatabase(t)
+	server.AttachRecorder(database)
+	location, _ := time.LoadLocation("America/New_York")
+	start := time.Date(2026, time.July, 24, 9, 30, 0, 0, location).UnixMicro()
+	through := time.Date(2026, time.July, 24, 10, 0, 0, 0, location).UnixMicro()
+	server.noteSymbolActive("AAPL", start-1)
+	if err := database.InsertTrades(context.Background(), []storage.TradeRecord{{
+		Symbol: "AAPL", EventUS: start + 1e6, ReceivedUS: start + 1e6, MarketTimeUS: start + 1e6,
+		SequenceID: 1, Price: 100, Size: 10, ChartEligible: true, Source: "live", Provider: "massive",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	_, payload := decodeRTH(t, server, "symbol=AAPL&session=2026-07-24&through_us="+formatInt64(through))
+	if payload.Status != "ready" || !payload.CompleteFromRTHOpen || payload.Last != 100 {
+		t.Fatalf("payload=%+v", payload)
+	}
+}
+
 func TestPanelDailyCacheIsRaceSafeAndIsolatedByAsOfDate(t *testing.T) {
 	server := panelServer(t, "demo")
 	var wait sync.WaitGroup
