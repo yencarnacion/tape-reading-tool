@@ -22,5 +22,15 @@ export function validatePanelManifest(manifest) {
     throw new Error(`panel ${manifest.id} has invalid default settings`);
   }
   if (typeof manifest.factory !== 'function') throw new Error(`panel ${manifest.id} has no factory`);
-  return Object.freeze({ ...manifest });
+  // The panel itself receives this manifest at mount, and the host reads the
+  // declared grants again on every mount. A shallow freeze leaves the arrays and
+  // the default settings writable through that reference, so a panel could add a
+  // capability it never declared and collect it the next time the slot mounts it.
+  // Copy before freezing so the registry module's own object is left alone.
+  return Object.freeze({
+    ...manifest,
+    requestedCapabilities: Object.freeze([...manifest.requestedCapabilities]),
+    supportedModes: Object.freeze([...(manifest.supportedModes || [])]),
+    defaultSettings: Object.freeze({ ...manifest.defaultSettings })
+  });
 }

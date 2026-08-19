@@ -209,3 +209,58 @@ The host now builds a frozen grant from the manifest's requested capability voca
 The first mounted run usefully failed because ADR used the shared price formatter without declaring it. Formatting is now an explicit capability in the ADR manifest; both mounted browser modes then passed. The complete suite also passed: uncached Go tests, race tests, vet, build, formatting, ADR model, panel host, audio, rewind, normal demo browser, demo-with-rewind browser, and the feature diff whitespace audit.
 
 The pre-existing local `go-render.sh` edit remains deliberately unstaged. The real recorded-replay lifecycle remains the highest-value untested gap.
+
+---
+
+# Third review pass after `682b908`
+
+`682b908` turns `requestedCapabilities` into a real grant: the vocabulary is validated at registration, each entry maps to a small set of methods, and everything else — including application capabilities a panel never asked for — is omitted from the frozen host object. `scripts/panel-host-check.mjs` is a good addition; it runs the host headless and asserts the isolation directly. The full suite passes and `git diff --check origin/main...HEAD` is clean.
+
+One defect in the new mechanism.
+
+## 8. A panel could grant itself a capability it never declared
+
+`validatePanelManifest` returned `Object.freeze({ ...manifest })`, and `Object.freeze` is shallow. `requestedCapabilities`, `supportedModes`, and `defaultSettings` stayed writable through the object the host hands to the factory:
+
+```js
+manifest.factory({ root: this.root, host, manifest, settings });
+```
+
+The host rereads those declarations on every mount, so a panel could do this at mount:
+
+```js
+manifest.requestedCapabilities.push('rth-session-context');
+```
+
+Grants are computed before the factory runs, so nothing changes for the current mount — but the next one collects the capability. Swapping away and back is enough, and because the selection persists, so is a reload. The same reference also reaches the settings path: widening `defaultSettings` widens the field set the application will persist for that panel, since the merge is bounded by the manifest's declared keys.
+
+Confirmed by probe before the fix: pushing onto `requestedCapabilities` succeeded, `defaultSettings.smuggled = true` stuck, and the registry module's own exported object was mutated too, while only the top-level `id` was actually protected.
+
+The three declarations are now copied and frozen at registration. Copying rather than freezing in place leaves each panel module's own exported object alone. `scripts/panel-host-check.mjs` asserts all three reject mutation and keep their declared values.
+
+This does not make version 1 a hostile-code boundary and is not claimed to — a trusted module can still block the main thread, as `docs/PANEL_API_V1.md` already states. It closes the gap between what the capability mechanism claims to enforce and what it actually enforced.
+
+## Considered and deliberately not changed
+
+A manifest may request a capability the application has not wired; `grantedCapabilities` omits it silently and the panel fails with a `TypeError` at mount. Validating that at registration was tempting, but registration failures throw out of the `PanelHost` constructor and would take down application startup, whereas the current behaviour contains the failure to one panel's error card. Turning a contained, visible failure into a whole-application one is the wrong trade for a class of error that can only be a wiring mistake, and `scripts/panel-host-check.mjs` already constructs the host with the real capability names.
+
+## Verification rerun
+
+| Command | Result |
+| --- | --- |
+| `git diff --check origin/main...HEAD` | clean |
+| `go build -buildvcs=false ./cmd/tape-reading-tool` | pass |
+| `go vet ./...` | pass |
+| `gofmt -l .` | clean |
+| `go test -count=1 ./...` | pass |
+| `go test -count=1 -race ./...` | pass |
+| `node scripts/panel-host-check.mjs` | pass |
+| `node scripts/adr-panel-check.mjs` | pass |
+| `node scripts/audio-worklet-check.mjs` | pass |
+| `node scripts/rewind-check.mjs` | pass |
+| `node scripts/browser-check.mjs` against `./go.sh demo -rewind` | pass |
+| `node scripts/browser-check.mjs` against `./go.sh demo` | pass |
+
+## Still the highest-value gap
+
+Unchanged through three passes: no check drives a real historical replay. There is no recorded database in the working tree, and the browser check simulates replay by injecting panel events rather than by driving the server's replay lifecycle. Findings 1, 3, and 4 from the first pass all lived in that gap, which is a reasonable argument for closing it before adding more surface.

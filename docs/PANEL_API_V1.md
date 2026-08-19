@@ -23,6 +23,8 @@ An incompatible definition is rejected before mounting. Built-in IDs are `tape-p
 
 `requestedCapabilities` is enforced by the host, not merely descriptive metadata. Unknown vocabulary entries are rejected at registration. Each accepted entry maps to a small set of callable methods; unrequested methods and unknown application capabilities are omitted from the frozen host object. Shared formatters are an explicit capability. Settings persistence is granted only when `settings` is requested.
 
+Because a panel receives its own manifest at mount and the host rereads the declarations on every mount, `requestedCapabilities`, `supportedModes`, and `defaultSettings` are copied and frozen at registration. A shallow freeze would leave them writable through the reference the panel already holds, letting a panel add a capability it never declared and collect it the next time the slot mounts it.
+
 ## Lifecycle and ordering
 
 The host owns one generation at a time. A swap increments the generation, stops delivery, aborts host-managed work, calls `unmount`, removes panel-local DOM, shows a loading state, creates the next panel, sends its current snapshot, and persists the stable ID. Inactive panels are destroyed rather than hidden.

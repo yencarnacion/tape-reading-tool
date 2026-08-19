@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { PanelHost } from '../internal/server/web/panel-host.js';
+import { validatePanelManifest } from '../internal/server/web/panel-api.js';
 
 globalThis.window = {};
 globalThis.document = { createElement: () => ({ value: '', textContent: '' }) };
@@ -52,6 +53,15 @@ const registry = [
   })
 ];
 
+// A panel is handed its own manifest and the host rereads the declared grants on
+// every mount, so those declarations must be immutable through that reference.
+const declared = validatePanelManifest(manifest('immutable', ['clock'], { count: 1 }, () => {}));
+assert.throws(() => declared.requestedCapabilities.push('rth-session-context'), TypeError);
+assert.throws(() => declared.supportedModes.push('live'), TypeError);
+assert.throws(() => { declared.defaultSettings.smuggled = true; }, TypeError);
+assert.deepEqual(declared.requestedCapabilities, ['clock']);
+assert.deepEqual(declared.defaultSettings, { count: 1 });
+
 assert.throws(() => new PanelHost({
   root, picker,
   registry: [manifest('unknown-capability', ['arbitrary-network'], {}, () => {})],
@@ -64,4 +74,4 @@ panelHost.swap('streaming', false);
 panelHost.swap('configured', false);
 
 assert.deepEqual(saves, [['configured', { count: 9, undeclared: true }, { count: 5, addedLater: true }]]);
-console.log('panel host check: capability isolation, lifecycle guards, settings ownership, and default merging passed');
+console.log('panel host check: capability isolation, immutable grants, lifecycle guards, settings ownership, and default merging passed');
