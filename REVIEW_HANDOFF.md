@@ -264,3 +264,17 @@ A manifest may request a capability the application has not wired; `grantedCapab
 ## Still the highest-value gap
 
 Unchanged through three passes: no check drives a real historical replay. There is no recorded database in the working tree, and the browser check simulates replay by injecting panel events rather than by driving the server's replay lifecycle. Findings 1, 3, and 4 from the first pass all lived in that gap, which is a reasonable argument for closing it before adding more surface.
+
+---
+
+# Fourth review pass after `9ddfaa9`
+
+The declaration-freezing change in `9ddfaa9` was pulled and reviewed. Copying the manifest arrays and defaults before freezing correctly prevents a panel from changing its grant on a later mount without mutating the module's exported manifest.
+
+One deeper form of the same defect remained. `defaultSettings` was copied and frozen only at its top level, and the settings object passed to a panel was also shallow-frozen. A future panel using nested settings could still mutate a nested default, mutate a nested value sourced from persisted application settings, or retain shared nested references despite the API's immutable-data guarantee.
+
+Panel settings now pass through one recursive copy-and-freeze helper at registration and again after defaults and stored settings are merged for mount. The focused host check covers nested objects and arrays, verifies detachment from the source defaults, and verifies that nested mounted settings reject writes. This is deliberately scoped to JSON-like panel configuration; it does not claim to sandbox panel execution.
+
+The complete documented suite passed after the fix: uncached Go tests, race tests, vet, build, formatting, panel-host and ADR checks, audio, rewind, normal demo browser, demo-with-rewind browser, and the feature diff whitespace audit. The pre-existing local `go-render.sh` edit remains deliberately unstaged.
+
+The highest-value remaining test gap is unchanged: a real recorded replay driven end to end through start, pause, backward seek, forward seek, and reload while paused.

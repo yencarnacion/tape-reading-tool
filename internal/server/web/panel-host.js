@@ -1,4 +1,4 @@
-import { PANEL_API_VERSION, PANEL_DATA_SCHEMA_VERSION, validatePanelManifest } from './panel-api.js';
+import { PANEL_API_VERSION, PANEL_DATA_SCHEMA_VERSION, immutablePanelData, validatePanelManifest } from './panel-api.js';
 
 const CAPABILITY_METHODS = Object.freeze({
   stream: ['streamSource'],
@@ -54,7 +54,7 @@ export class PanelHost {
     });
     try {
       this.root.className = 'analytics-panel-root'; this.root.replaceChildren();
-      const settings = Object.freeze({ ...manifest.defaultSettings, ...(this.settings.settings?.[id] || {}) });
+      const settings = immutablePanelData({ ...manifest.defaultSettings, ...(this.settings.settings?.[id] || {}) });
       const instance = manifest.factory({ root: this.root, host, manifest, settings });
       this.active = { id, manifest, instance: instance || {}, controller, generation };
       instance?.onEvent?.({ type: 'snapshot', snapshot: this.capabilities.currentSnapshot() });

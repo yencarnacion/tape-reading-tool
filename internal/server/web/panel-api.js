@@ -5,6 +5,14 @@ export const PANEL_CAPABILITIES = Object.freeze([
   'stream', 'formatters', 'clock', 'trades', 'completed-daily-rth-bars', 'rth-session-context', 'settings'
 ]);
 
+export function immutablePanelData(value) {
+  if (Array.isArray(value)) return Object.freeze(value.map(immutablePanelData));
+  if (value && typeof value === 'object') {
+    return Object.freeze(Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, immutablePanelData(entry)])));
+  }
+  return value;
+}
+
 export function validatePanelManifest(manifest) {
   if (!manifest || typeof manifest.id !== 'string' || !/^[a-z0-9-]+$/.test(manifest.id)) {
     throw new Error('panel manifest has an invalid id');
@@ -31,6 +39,6 @@ export function validatePanelManifest(manifest) {
     ...manifest,
     requestedCapabilities: Object.freeze([...manifest.requestedCapabilities]),
     supportedModes: Object.freeze([...(manifest.supportedModes || [])]),
-    defaultSettings: Object.freeze({ ...manifest.defaultSettings })
+    defaultSettings: immutablePanelData(manifest.defaultSettings)
   });
 }

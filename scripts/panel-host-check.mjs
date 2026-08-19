@@ -7,7 +7,7 @@ globalThis.document = { createElement: () => ({ value: '', textContent: '' }) };
 
 const root = { className: '', textContent: '', replaceChildren() {} };
 const picker = { value: '', replaceChildren() {}, addEventListener() {} };
-const settings = { slots: { primaryAnalytics: { activePanelId: 'blank' } }, settings: { configured: { count: 7 } } };
+const settings = { slots: { primaryAnalytics: { activePanelId: 'blank' } }, settings: { configured: { count: 7, display: { precision: 3 } } } };
 const saves = [];
 const capabilities = {
   currentSnapshot: () => ({ symbol: 'AAPL' }),
@@ -42,8 +42,9 @@ const registry = [
     assert.equal(host.currentSnapshot, undefined);
     assert.equal(host.getRTHSessionContext, undefined);
   }),
-  manifest('configured', ['clock', 'formatters', 'completed-daily-rth-bars', 'settings'], { count: 5, addedLater: true }, (host, mountedSettings) => {
-    assert.deepEqual(mountedSettings, { count: 7, addedLater: true });
+  manifest('configured', ['clock', 'formatters', 'completed-daily-rth-bars', 'settings'], { count: 5, addedLater: true, display: { precision: 2 } }, (host, mountedSettings) => {
+    assert.deepEqual(mountedSettings, { count: 7, addedLater: true, display: { precision: 3 } });
+    assert.throws(() => { mountedSettings.display.precision = 8; }, TypeError);
     assert.deepEqual(host.currentSnapshot(), { symbol: 'AAPL' });
     assert.equal(host.formatters(), 'formatters');
     assert.equal(host.getCompletedDailyBars(), 'bars');
@@ -55,12 +56,17 @@ const registry = [
 
 // A panel is handed its own manifest and the host rereads the declared grants on
 // every mount, so those declarations must be immutable through that reference.
-const declared = validatePanelManifest(manifest('immutable', ['clock'], { count: 1 }, () => {}));
+const sourceDefaults = { count: 1, display: { precision: 2 }, bands: [1, 2] };
+const declared = validatePanelManifest(manifest('immutable', ['clock'], sourceDefaults, () => {}));
 assert.throws(() => declared.requestedCapabilities.push('rth-session-context'), TypeError);
 assert.throws(() => declared.supportedModes.push('live'), TypeError);
 assert.throws(() => { declared.defaultSettings.smuggled = true; }, TypeError);
+assert.throws(() => { declared.defaultSettings.display.precision = 8; }, TypeError);
+assert.throws(() => { declared.defaultSettings.bands.push(3); }, TypeError);
 assert.deepEqual(declared.requestedCapabilities, ['clock']);
-assert.deepEqual(declared.defaultSettings, { count: 1 });
+assert.deepEqual(declared.defaultSettings, { count: 1, display: { precision: 2 }, bands: [1, 2] });
+sourceDefaults.display.precision = 9;
+assert.equal(declared.defaultSettings.display.precision, 2);
 
 assert.throws(() => new PanelHost({
   root, picker,
@@ -73,5 +79,5 @@ panelHost.swap('blank', false);
 panelHost.swap('streaming', false);
 panelHost.swap('configured', false);
 
-assert.deepEqual(saves, [['configured', { count: 9, undeclared: true }, { count: 5, addedLater: true }]]);
+assert.deepEqual(saves, [['configured', { count: 9, undeclared: true }, { count: 5, addedLater: true, display: { precision: 2 } }]]);
 console.log('panel host check: capability isolation, immutable grants, lifecycle guards, settings ownership, and default merging passed');

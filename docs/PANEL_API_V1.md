@@ -23,7 +23,7 @@ An incompatible definition is rejected before mounting. Built-in IDs are `tape-p
 
 `requestedCapabilities` is enforced by the host, not merely descriptive metadata. Unknown vocabulary entries are rejected at registration. Each accepted entry maps to a small set of callable methods; unrequested methods and unknown application capabilities are omitted from the frozen host object. Shared formatters are an explicit capability. Settings persistence is granted only when `settings` is requested.
 
-Because a panel receives its own manifest at mount and the host rereads the declarations on every mount, `requestedCapabilities`, `supportedModes`, and `defaultSettings` are copied and frozen at registration. A shallow freeze would leave them writable through the reference the panel already holds, letting a panel add a capability it never declared and collect it the next time the slot mounts it.
+Because a panel receives its own manifest at mount and the host rereads the declarations on every mount, `requestedCapabilities`, `supportedModes`, and `defaultSettings` are copied and frozen at registration. Default settings and the merged settings passed at mount are copied and frozen recursively so nested JSON-like settings are immutable too. A shallow freeze would leave declarations writable through references the panel already holds, letting it change a later grant or mutate persisted configuration.
 
 ## Lifecycle and ordering
 
