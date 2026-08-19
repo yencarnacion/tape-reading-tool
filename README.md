@@ -42,6 +42,7 @@ The version-1 panel architecture and ADR data rules are documented in [Panel API
 ```bash
 node scripts/adr-panel-check.mjs
 node scripts/panel-host-check.mjs
+node scripts/replay-panel-check.mjs
 go test ./...
 go test -race ./...
 node scripts/browser-check.mjs
@@ -334,6 +335,12 @@ With demo mode running, the dependency-free browser check drives local Chrome at
 
 ```bash
 node scripts/browser-check.mjs
+```
+
+The replay panel check needs no running server and no recorded data of its own. It generates a deterministic recording, starts the application in replay mode against it, and drives the real replay lifecycle in Chrome: a paused mid-session position, a backward seek across the running regular-session low, a forward seek, a reload while paused, and advancing past a later low that must not be visible before the replay reaches it.
+
+```bash
+node scripts/replay-panel-check.mjs
 ```
 
 Started as `./go.sh demo -rewind`, the same check also drives Live Rewind: it compares the live panes' rectangles before, during, and after a rewind, counts live canvas paints in both states, and exercises automatic 0.25× playback, the manual-pause latch, additional held replays, independent granularity, print stepping, and both automatic and LIVE-button returns.

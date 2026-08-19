@@ -507,3 +507,65 @@ No code issue was found. The only change in this pass is this reviewer handoff. 
 | `node scripts/rewind-check.mjs` | pass |
 | `node scripts/browser-check.mjs` against `./go.sh demo -rewind` | pass |
 | `node scripts/browser-check.mjs` against `./go.sh demo` | pass |
+
+---
+
+# Eighth review pass after `c01045b`
+
+`c01045b` contains no code. It records a manual validation against a local SMCI recording. That recording is not in the repository — correctly, it is market data — so nothing in it could be reproduced here, and its result is not restated below as verified. One detail in it is slightly off: snapshots are stamped from `replay.Status().PositionUS` in `streamTimeMS`, not from `feed.Replay.Position()`, which is a different method. Its conclusion is sound: an SMCI recording with no daily bars and prints starting at 09:31 must produce `INSUFFICIENT ADR HISTORY` and incomplete open coverage, and getting that instead of a number is the panel working.
+
+## Correction: finding 11 was a misdiagnosis
+
+Last pass I reported that the browser threw away the authoritative clock the server stamps on every snapshot, and added a `syncServerClock` call late in the snapshot handler to fix it. That was wrong. `handleMessage` already calls `syncServerClock(message.server_time_ms)` as the first statement inside the snapshot branch, unconditionally, before anything else in the message is applied. I read it as sitting inside the first-snapshot initialisation block; it is not.
+
+So the scenario I described — a backward seek leaving the browser asking the core for the instant it had just left — does not happen. The line I added was redundant, and its comment asserted a bug that does not exist, which is worse than no comment. It has been reverted.
+
+This also softens part of finding 1. The clamp is still right and still necessary: between snapshots the browser clock advances at wall-clock rate while the replay position advances only when an event is emitted, so a request can name an instant marginally past the position and would previously have been refused with a `400` that the panel renders as `ADR HISTORY UNAVAILABLE`. That is a real intermittent failure. But my account of it as *guaranteed* after every backward seek, and persisting until the next snapshot, overstated it. The drift is milliseconds, not minutes.
+
+`TestReplaySnapshotCarriesTheAuthoritativePosition` stays. It pins the contract the existing sync depends on, and mutation testing shows it fails if `streamTimeMS` returns the wall clock.
+
+## The browser half of the replay path now has a check
+
+Named as the outstanding gap in every pass since the first. The obstacle was always that it needs a recording, and market data cannot be committed. It can be generated instead.
+
+`scripts/replay-fixture` writes a deterministic recording: twenty completed prior sessions each spanning exactly 5% high to low, so `ADR20` is 5.00%; a replay session whose filler prints hold the last price at 102.90 so the reading is identical at every position between the running low and the later one; a running regular-session low of 98.00 at 09:32; and a lower low of 95.00 at 09:45. The steady reading is therefore `1.00 ADR` at `+5.00%`, and it is the same at any position in a thirteen-minute window, so the check never has to land the replay on an exact instant.
+
+`scripts/replay-panel-check.mjs` builds that recording, starts the application in replay mode against it, and drives the real replay lifecycle in Chrome. It needs no running server and no data of its own:
+
+- **The running low comes from the core, not the browser tape.** The seek restarts the browser tape at 09:38, so it holds nothing at or below 98.00 and usually nothing at all, because the pause lands before prints flow. The panel reports `RTH LOW $98.00` regardless. This is the requirement that motivated the whole session-context capability, and it was previously unobservable in any check.
+- **A pause freezes the reading.** Held and re-read.
+- **A backward seek across the low reconstructs correctly.** The low disappears, the reading becomes `0.00 ADR`, and the 95.00 low sitting in the recording at 09:45 does not appear in its place.
+- **A seek does not remount the panel.** Mount counts are compared across seeks.
+- **A reload while paused restores the position**, `09:38`, not the wall clock, and the same reading with it.
+- **The later low appears only once the position passes it.**
+
+Mutation tested. Making the session context read the whole session instead of stopping at the as-of instant fails the check immediately, with the leaked low visible in the message: `1.66 ADR`, `$95.00`.
+
+It also, honestly, does **not** catch reverting the finding-11 line — which is how the misdiagnosis above was found. Writing the check was what disproved the finding.
+
+## Verification rerun
+
+| Command | Result |
+| --- | --- |
+| `git diff --check origin/main...HEAD` | clean |
+| `go build -buildvcs=false ./cmd/tape-reading-tool` | pass |
+| `go vet ./...` | pass |
+| `gofmt -l .` | clean |
+| `go test -count=1 ./...` | pass |
+| `go test -count=1 -race ./...` | pass |
+| `node scripts/panel-host-check.mjs` | pass |
+| `node scripts/adr-panel-check.mjs` | pass |
+| `node scripts/audio-worklet-check.mjs` | pass |
+| `node scripts/rewind-check.mjs` | pass |
+| `node scripts/replay-panel-check.mjs` | pass |
+| `node scripts/browser-check.mjs` against `./go.sh demo -rewind` | pass |
+| `node scripts/browser-check.mjs` against `./go.sh demo` | pass |
+
+Browser checks ran on macOS with `CHROME=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`. The replay check builds the server binary rather than using `go run`, because `go run` does not forward a kill to the binary it spawns and the port would stay held.
+
+## What is left
+
+The replay gap that motivated eight passes is closed on both sides. What remains is narrower and worth naming precisely rather than repeating a slogan:
+
+- The generated recording has one symbol and one session, so a **cross-session** backward seek and a **symbol change mid-replay** are still unexercised. Both are generation boundaries where the panel and the core have to agree on a date, and `66453c4` was written for exactly that case.
+- No check covers **IBKR or Massive live** mode. That is inherent — they need a broker connection — but it means the live-mode branches of `panel_data.go` are read, not run.
