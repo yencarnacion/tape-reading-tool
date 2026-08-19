@@ -174,6 +174,18 @@ func TestReplaySessionContextNeverLeaksALaterLow(t *testing.T) {
 		t.Fatalf("a request beyond the replay position must clamp, not reveal the 09:45 low: %+v", ahead)
 	}
 
+	// A cross-session backward seek can leave both the browser's date and clock
+	// ahead until the new generation snapshot is applied. The endpoint must use
+	// the replay position's session rather than answering for that stale date.
+	for _, mode := range []string{"replay", "render"} {
+		fixture.server.SetMode(mode)
+		stale := fixture.rth(t, "symbol=AAPL&session=2026-07-23&through_us="+formatInt64(fixture.at(fixture.later, 15, 59)))
+		if stale.SessionDateET != "2026-07-22" || stale.ThroughUS != fixture.at(fixture.session, 9, 36) || stale.Status != "ready" || stale.Low != 99 {
+			t.Fatalf("stale browser session and clock must clamp in %s mode to the authoritative replay session: %+v", mode, stale)
+		}
+	}
+	fixture.server.SetMode("replay")
+
 	if _, err := fixture.replay.StepRender(fixture.at(fixture.session, 9, 46)); err != nil {
 		t.Fatal(err)
 	}

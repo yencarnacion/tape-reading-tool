@@ -412,3 +412,19 @@ This closes the server half. The browser half — that the ADR panel recovers co
 | `node scripts/rewind-check.mjs` | pass |
 | `node scripts/browser-check.mjs` against `./go.sh demo -rewind` | pass |
 | `node scripts/browser-check.mjs` against `./go.sh demo` | pass |
+
+---
+
+# Sixth review pass after `c6e2148`
+
+The real replay endpoint tests in `c6e2148` were pulled and reviewed. They genuinely cross temporary SQLite storage, `feed.Replay` render stepping, the server's authoritative replay clock, and the panel HTTP handlers. The seeded future session and later intraday low make the no-look-ahead assertions meaningful, and the focused tests pass before and after the change below.
+
+One adjacent cross-session defect remained in the RTH-context handler. Daily history already clamps a stale browser date to the replay session, but RTH context accepted its `session` query verbatim. After a cross-day backward seek, the browser can briefly carry both a later session date and later clock; the endpoint would then answer `BEFORE OPEN` or return mismatched-session context instead of data for the authoritative replay position.
+
+In real replay and deterministic render modes, RTH context now always uses the New York session derived from the server-owned replay clock while still validating the query format. The replay fixture adds a request carrying a stale next-day session and time at the July 22 09:36 position and asserts in both modes that the response is July 22, clamped to 09:36, ready, and contains only the low known by then.
+
+The first broad implementation clamped every mode and correctly failed the mounted browser suite: demo intentionally accepts an injected historical session so it can simulate replay presentation without a recorded database. The fix was narrowed to real server replay mode. Both normal and rewind demo browser suites then passed, while the real replay regression continued to pass. This distinction is documented in `docs/ADR_RTH_EXTENSION.md`.
+
+The complete suite passed on the final code: uncached Go tests, race tests, vet, build, formatting, panel-host and ADR checks, audio, rewind, both browser modes, and the feature diff audit. The unrelated local `go-render.sh` edit remains deliberately unstaged.
+
+The remaining replay gap is now specifically browser-to-real-replay lifecycle coverage, not the server data boundary.

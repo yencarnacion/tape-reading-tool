@@ -294,7 +294,15 @@ func (s *Server) handlePanelRTHContext(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "session must be YYYY-MM-DD", http.StatusBadRequest)
 			return
 		}
-		session = parsed
+		if mode != "replay" && mode != "render" {
+			session = parsed
+		}
+		// In real replay and deterministic render modes, session context is for the authoritative
+		// replay clock's active RTH session. The browser supplies a date so responses
+		// can be checked against generation boundaries, but its extrapolated clock
+		// can retain a later date briefly after a cross-session backward seek.
+		// Demo deliberately accepts a requested historical session so browser tests
+		// can exercise replay presentation without a recorded database.
 	}
 	throughUS := clock.UnixMicro()
 	if raw := r.URL.Query().Get("through_us"); raw != "" {
