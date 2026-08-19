@@ -658,3 +658,38 @@ The same is true of the `through_us` clamp from finding 1 in this scenario. What
 ## What is left
 
 Only what cannot be reached without a broker: the IBKR and Massive live branches of `panel_data.go` are read, not run. Everything else on this branch — the panel contract, the ADR arithmetic, the session and symbol generation boundaries, and the no-look-ahead guarantees in replay and deterministic render — now has a check that has been shown to fail when the behaviour it describes is broken.
+
+---
+
+# Eleventh review pass after `257188c`
+
+`257188c` was pulled and its two-symbol, two-session replay expansion was reviewed. The new behavioral coverage is sound, but the check itself remained intermittent. This pass reproduced two failures before fixing them: an unchecked `GET /api/replay` error body was parsed as JSON (`Unexpected token 'd', "database i"...`), and another run exhausted pause retries with `replay is not running`.
+
+The cause was in the check's positioning helper. `GET /api/replay` is not a lightweight status endpoint; it computes the recording range and chart bars, so using it inside a transport retry added database work and allowed a non-JSON error response to obscure the actual replay state. The first positioning also started one play generation and immediately launched a seek generation, leaving two recording cursors briefly overlapping.
+
+The helper now pauses the initial generation before seeking, retries the pause action itself, and consults `/api/external-replay/status` only after a transport rejection. That endpoint reads `Replay.Status` without querying the recording, so a genuine `complete` or `error` state is reported instead of hidden behind a generic retry failure. Three consecutive full generated-replay runs passed after the final change.
+
+The fixture's statement that the earlier replay session becomes a completed prior for the later ADR baseline was previously true but only indirectly checked: the same round percentage could also be produced by the twenty older seed sessions. The browser check now reads the daily-history capability and asserts that the earlier session date is actually present among the later session's 20 bars.
+
+The separate August 18 SMCI IBKR/live replay also passed around 09:33. A paused position near 09:33:31 was sought backward to 09:33:01, the panel stayed in its truthful `INSUFFICIENT ADR HISTORY` state, a paused reload restored the replay clock, and the browser logged no errors. The one-second display difference reflects the exact paused position (`09:33:01.235682`), not clock drift.
+
+The unrelated local `go-render.sh` edit remains deliberately unstaged.
+
+## Verification rerun
+
+| Command or scenario | Result |
+| --- | --- |
+| `git diff --check origin/main...HEAD` | clean |
+| `go build -buildvcs=false ./cmd/tape-reading-tool` | pass |
+| `go vet ./...` | pass |
+| `gofmt -l .` | clean |
+| `go test -count=1 ./...` | pass |
+| `go test -count=1 -race ./...` | pass |
+| `node scripts/panel-host-check.mjs` | pass |
+| `node scripts/adr-panel-check.mjs` | pass |
+| `node scripts/audio-worklet-check.mjs` | pass |
+| `node scripts/rewind-check.mjs` | pass |
+| `node scripts/replay-panel-check.mjs` | pass, three consecutive runs after the final fix |
+| Real SMCI IBKR/live replay, backward seek and paused reload around 09:33 | pass; expected insufficient-history state, no browser errors |
+| `node scripts/browser-check.mjs` against `./go.sh demo -rewind` | pass |
+| `node scripts/browser-check.mjs` against `./go.sh demo` | pass |

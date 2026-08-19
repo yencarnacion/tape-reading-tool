@@ -89,6 +89,7 @@ try {
   // data, it does not replace the panel.
   const steady = await selectADR();
   expect('paused mid-session', steady, aapl, aapl.late);
+  await expectPreviousSessionInBaseline(fixture, 'AAPL');
   // The seek restarted the browser tape at 09:38, so it holds nothing at or below
   // the 09:32 low - often nothing at all, since a pause lands before prints flow.
   // The panel reports that low anyway, which it can only have got from the core.
@@ -194,22 +195,61 @@ function position(fixture, targetUS) {
       if (!response.ok) throw new Error(body.action + ' failed: ' + (await response.text()).trim());
       return response.json();
     };
+    const pause = async (atUS) => {
+      let lastError;
+      for (let attempt = 0; attempt <= 20; attempt++) {
+        try {
+          const status = await post({ action: 'pause' });
+          if (status.state === 'paused') return;
+          lastError = new Error('pause returned ' + JSON.stringify(status));
+        } catch (error) {
+          lastError = error;
+          // This endpoint reads Replay.Status directly and does not touch the
+          // recording. It distinguishes a transport race from a replay that
+          // genuinely completed or failed before it could be paused.
+          const response = await fetch('/api/external-replay/status', { cache: 'no-store' });
+          if (response.ok) {
+            const status = (await response.json()).replay;
+            if (status?.state === 'paused') return;
+            if (status?.state && status.state !== 'replaying') {
+              throw new Error('replay reached ' + status.state + ' while pausing at ' + atUS + ': ' + (status.message || lastError));
+            }
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      throw new Error('replay never paused at ' + atUS + ': ' + String(lastError));
+    };
     if (!window.__tapeReadingReplayStarted) {
       await post({ action: 'start', symbol: window.__tapeReadingPanels.symbol(), source: ${JSON.stringify(fixture.source)},
         provider: ${JSON.stringify(fixture.provider)}, start_us: ${fixture.startUS}, end_us: ${fixture.endUS}, speed: 0.25 });
+      // Stop the initial play loop before launching the seek generation. This
+      // avoids overlapping two recording cursors during the first positioning.
+      await pause(${targetUS});
       window.__tapeReadingReplayStarted = true;
     }
     await post({ action: 'seek', target_us: ${targetUS} });
-    // The replay resumes playing from a seek, so the pause races the play loop:
-    // it can finish first when the target leaves no events before the range end.
-    // Retry briefly and report the state rather than the bare rejection.
-    for (let attempt = 0; ; attempt++) {
-      const status = await (await fetch('/api/replay')).json();
-      if (status.replay?.state === 'paused') return;
-      if (attempt >= 20) throw new Error('replay never paused at ${targetUS}: ' + JSON.stringify(status.replay));
-      try { await post({ action: 'pause' }); } catch (error) { await new Promise((resolve) => setTimeout(resolve, 50)); }
-    }
+    // The replay resumes playing from a seek, so the pause races the play loop.
+    // Retry the transport action itself. GET /api/replay is a range-and-chart
+    // request, not a lightweight status endpoint; polling it here made transient
+    // database errors get parsed as JSON and hid the actual pause result.
+    await pause(${targetUS});
   })()`, true);
+}
+
+// The fixture promises that the earlier replay session becomes one of the
+// later session's completed ADR inputs. Assert the actual API membership rather
+// than accepting the same round baseline from the twenty older seed sessions.
+async function expectPreviousSessionInBaseline(fixture, symbol) {
+  const history = await evaluate(`fetch('/api/panel-data/daily-bars?' + new URLSearchParams({
+    symbol: ${JSON.stringify(symbol)}, before: ${JSON.stringify(fixture.lateSessionDateET)}, limit: '20'
+  })).then(async (response) => {
+    if (!response.ok) throw new Error((await response.text()).trim() || 'daily history request failed');
+    return response.json();
+  })`, true);
+  if (!history.bars?.some((bar) => bar.sessionDateET === fixture.earlySessionDateET)) {
+    throw new Error(`the earlier replay session is missing from the later ADR baseline: ${JSON.stringify(history)}`);
+  }
 }
 
 // A seek leaves the previous reading on screen while the panel reloads, so the
