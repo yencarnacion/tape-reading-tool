@@ -317,6 +317,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .adr-lookback, .adr-mode { height: 18px; padding: 0 2px; background: #11161c; color: #d8dde2; border: 1px solid #38414b; font: 800 10px inherit; }
 .adr-lookback { width: 42px; } .adr-mode { width: 82px; }
 .adr-state { place-self: center; display: grid; gap: 8px; text-align: center; color: #aeb7c2; }
+.adr-state[hidden], .adr-ready[hidden] { display: none; }
 .adr-state strong { font-size: clamp(14px, 2.2vw, 23px); }
 .adr-state small { color: #78818c; font-size: 10px; }
 .adr-ready { display: grid; grid-template-columns: minmax(130px, 1.2fr) minmax(180px, 1fr); grid-template-rows: 1fr 20px 15px 18px; gap: 0 12px; padding: 8px 8px 3px; min-height: 0; }

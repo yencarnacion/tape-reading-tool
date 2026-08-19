@@ -150,6 +150,14 @@ func (f *IBKR) failBarRequest(reqID int64, err error) bool {
 }
 
 func ibkrBarTimeUS(value string) (int64, error) {
+	// Daily bars use an all-digit YYYYMMDD value. Parse that fixed-width form
+	// before epoch seconds, otherwise dates such as 20260818 become an instant
+	// in August 1970 and silently poison the ADR session labels.
+	if len(value) == 8 {
+		if day, dateErr := time.Parse("20060102", value); dateErr == nil {
+			return day.UnixMicro(), nil
+		}
+	}
 	seconds, err := strconv.ParseInt(value, 10, 64)
 	if err == nil {
 		return seconds * int64(time.Second/time.Microsecond), nil

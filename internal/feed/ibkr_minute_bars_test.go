@@ -22,11 +22,23 @@ func TestLatestCompletedBarsExcludesFormingMinute(t *testing.T) {
 }
 
 func TestIBKRBarTimeUS(t *testing.T) {
-	got, err := ibkrBarTimeUS("1784295000")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != 1_784_295_000_000_000 {
-		t.Fatalf("time = %d", got)
-	}
+	t.Run("epoch seconds", func(t *testing.T) {
+		got, err := ibkrBarTimeUS("1784295000")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != 1_784_295_000_000_000 {
+			t.Fatalf("time = %d", got)
+		}
+	})
+	t.Run("daily calendar date", func(t *testing.T) {
+		got, err := ibkrBarTimeUS("20260818")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := time.Date(2026, time.August, 18, 0, 0, 0, 0, time.UTC).UnixMicro()
+		if got != want {
+			t.Fatalf("time = %s, want %s", time.UnixMicro(got), time.UnixMicro(want))
+		}
+	})
 }

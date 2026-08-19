@@ -26,6 +26,7 @@ function assertDemoADR(label, reading) {
     return;
   }
   if (reading.state) fail('demo mode must reach a ready ADR reading');
+  if (reading.stateDisplayed || !reading.readyDisplayed) fail('loading and ready faces must be visually exclusive');
   if (reading.baseline !== DEMO_ADR_BASELINE || reading.history !== '20 / 20') fail('demo baseline is not the documented 20-session mean');
   if (reading.mode !== 'auto' || !reading.fromLow.includes('ADR') || !reading.fromHigh.includes('ADR')) fail('AUTO mode must keep both directional readings visible');
   const low = Number.parseFloat(String(reading.low).replace('$', ''));
@@ -51,6 +52,8 @@ const ADR_SETTLE_EXPRESSION = `await (async () => {
 // Reads whichever of the two exclusive ADR faces is currently shown.
 const ADR_READING_EXPRESSION = `({
   state: document.querySelector('.adr-state:not([hidden]) strong')?.textContent || '',
+  stateDisplayed: getComputedStyle(document.querySelector('.adr-state')).display !== 'none',
+  readyDisplayed: getComputedStyle(document.querySelector('.adr-ready')).display !== 'none',
   detail: document.querySelector('.adr-state:not([hidden]) small')?.textContent || '',
   value: document.querySelector('.adr-ready:not([hidden]) .adr-value')?.textContent || '',
   percent: document.querySelector('.adr-ready:not([hidden]) .adr-percent')?.textContent || '',
