@@ -345,3 +345,17 @@ Findings 6 through 10 are all in panel settings and capability plumbing: a contr
 Meanwhile the gap named at the end of every previous pass has not moved: no check drives a real historical replay. There is no recorded database in the working tree, and `scripts/browser-check.mjs` simulates replay by injecting panel events rather than by driving the server's replay lifecycle. Findings 1, 3, and 4 — the ones that made the ADR panel unusable after a backward seek, showed a stale session overnight, and let a paused clock advance — all lived in that gap, and were found by reading rather than by any check. Finding 10 says something similar about trusting a check that has never been shown to fail.
 
 Recording a short session and replaying it end to end — start, pause, backward seek, forward seek, reload while paused — would exercise more of this branch's actual risk than further hardening of the settings path.
+
+---
+
+# Fifth review pass after `8a8a1de`
+
+The deep settings merge and repaired host test harness in `8a8a1de` were pulled and reviewed. Using manifest defaults as the schema in both mount and save directions is the right design, and moving assertions outside the host's error boundary makes `scripts/panel-host-check.mjs` a meaningful test rather than one that can report success after a contained factory failure.
+
+One contract mismatch remained. The merge documented that an override of the wrong shape falls back to its declared default, but this was enforced only for nested objects. An array default still accepted a string or object, and scalar defaults accepted objects or different primitive types. A future plugin could therefore persist structurally corrupt settings even though undeclared keys were filtered correctly.
+
+`mergePanelSettings` now enforces the manifest shape throughout: nested objects recurse, arrays accept only arrays and replace wholesale, scalar overrides must keep the declared primitive type, and null accepts only null. Focused regressions cover wrong-shaped objects and arrays plus number, boolean, string, and null defaults. ADR's application-owned 5–60 bound remains a separate semantic constraint after structural shaping.
+
+The full suite passed after the fix: uncached Go tests, race tests, vet, build, formatting, panel-host and ADR checks, audio, rewind, normal demo browser, demo-with-rewind browser, and the feature diff whitespace audit. The pre-existing local `go-render.sh` edit remains deliberately unstaged.
+
+The recommended next investment remains an end-to-end recorded replay test rather than another expansion of generic settings infrastructure.

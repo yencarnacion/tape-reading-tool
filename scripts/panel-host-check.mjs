@@ -62,6 +62,9 @@ assert.deepEqual(
 );
 assert.deepEqual(mergePanelSettings({ count: 5 }, undefined), { count: 5 });
 assert.deepEqual(mergePanelSettings({ display: { precision: 2 } }, { display: 'corrupt' }), { display: { precision: 2 } });
+assert.deepEqual(mergePanelSettings({ bands: [1, 2] }, { bands: 'corrupt' }), { bands: [1, 2] });
+assert.deepEqual(mergePanelSettings({ count: 5, enabled: true, label: 'ADR' }, { count: {}, enabled: 1, label: false }), { count: 5, enabled: true, label: 'ADR' });
+assert.deepEqual(mergePanelSettings({ optional: null }, { optional: {} }), { optional: null });
 assert.deepEqual(mergePanelSettings({}, { anything: true }), {});
 
 assert.throws(() => new PanelHost({

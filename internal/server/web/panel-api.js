@@ -25,8 +25,10 @@ export function mergePanelSettings(defaults, overrides) {
   for (const [key, fallback] of Object.entries(defaults)) {
     const override = overrides?.[key];
     if (override === undefined) merged[key] = fallback;
-    else if (fallback && typeof fallback === 'object' && !Array.isArray(fallback)) merged[key] = mergePanelSettings(fallback, override);
-    else merged[key] = override;
+    else if (Array.isArray(fallback)) merged[key] = Array.isArray(override) ? override : fallback;
+    else if (fallback && typeof fallback === 'object') merged[key] = mergePanelSettings(fallback, override);
+    else if (fallback === null) merged[key] = override === null ? override : fallback;
+    else merged[key] = typeof override === typeof fallback ? override : fallback;
   }
   return merged;
 }
