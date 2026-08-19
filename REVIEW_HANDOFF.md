@@ -359,3 +359,56 @@ One contract mismatch remained. The merge documented that an override of the wro
 The full suite passed after the fix: uncached Go tests, race tests, vet, build, formatting, panel-host and ADR checks, audio, rewind, normal demo browser, demo-with-rewind browser, and the feature diff whitespace audit. The pre-existing local `go-render.sh` edit remains deliberately unstaged.
 
 The recommended next investment remains an end-to-end recorded replay test rather than another expansion of generic settings infrastructure.
+
+---
+
+# Fifth review pass after `712caa2`
+
+`712caa2` tightens `mergePanelSettings` with type and shape preservation: an array default only accepts an array, a scalar override must keep the declared primitive type, and a `null` default stays null. I reviewed the branch ordering — `typeof null === 'object'`, but `fallback &&` is falsy for null so the null case correctly falls through to its own branch — and the recursion on a scalar override, where indexing a string or number yields `undefined` and the whole declared object is returned. It is correct, and the fixtures cover it. No defect found in this commit.
+
+The suite passed on the pulled state before any change below.
+
+## No sixth settings finding
+
+Findings 6 through 10 were all in the settings and capability path. A contract with one flat integer setting on one panel does not need a sixth pass, and looking for one would have produced a nit rather than a risk. The effort went to the gap named at the end of every previous handoff instead.
+
+## The replay gap is now closed on the server side
+
+Every no-look-ahead guarantee on this branch had been verified by reading the code, or by a browser check that simulates replay by injecting panel events. Nothing drove a real `*feed.Replay`. That is precisely where findings 1, 3, and 4 lived, and all three were found by reading rather than by a check.
+
+`internal/server/panel_replay_test.go` now drives the real feed. It seeds a temporary database with two completed prior sessions, the replay session, and — importantly — a completed, fully downloaded session that falls *after* the replay session but before any plausible wall clock. It then uses `PrepareRender` and `StepRender` to place the replay position at exact instants, which removes wall-clock pacing from the assertions, and calls the panel data handlers at those positions.
+
+Three properties, each previously unverified end to end:
+
+- **A later low stays invisible.** The session low forms at 09:45. At position 09:36 the context reports the 09:35 low, reports the position as its as-of instant, and a request naming 15:59 — the shape a browser produces when its clock outruns the position, or when a backward seek leaves it stale — clamps instead of revealing the low. Stepping to 09:46 then reveals it.
+- **History follows the replay date, not the machine's.** Asking with the replay session date returns the two prior sessions with their aggregated ranges. Asking with a wall-clock date clamps the as-of session, and the seeded later session never enters the baseline.
+- **The same position answers the same way twice.** Deterministic render depends on it.
+
+Verified by mutation — each of these fails the new tests:
+
+| Mutation | Detected by |
+| --- | --- |
+| `through_us` clamp removed | later low leaks at 09:36 |
+| daily as-of taken from `s.now()` instead of the replay position | seeded later session enters the baseline |
+| session stats read the whole session instead of through the position | later low leaks at 09:36 |
+
+## What is still not covered
+
+This closes the server half. The browser half — that the ADR panel recovers correctly across a real pause, backward seek, forward seek, and a reload while paused — still has no check, because that needs a recorded database and a browser driven against it. It is a smaller gap than before: the guarantees the panel depends on are now enforced and tested at the boundary it reads from, so a browser-side failure would be a panel bug rather than a silent wrong number. Recording a short demo session to SQLite and replaying it under `scripts/browser-check.mjs` is the natural next step.
+
+## Verification rerun
+
+| Command | Result |
+| --- | --- |
+| `git diff --check origin/main...HEAD` | clean |
+| `go build -buildvcs=false ./cmd/tape-reading-tool` | pass |
+| `go vet ./...` | pass |
+| `gofmt -l .` | clean |
+| `go test -count=1 ./...` | pass |
+| `go test -count=1 -race ./...` | pass |
+| `node scripts/panel-host-check.mjs` | pass |
+| `node scripts/adr-panel-check.mjs` | pass |
+| `node scripts/audio-worklet-check.mjs` | pass |
+| `node scripts/rewind-check.mjs` | pass |
+| `node scripts/browser-check.mjs` against `./go.sh demo -rewind` | pass |
+| `node scripts/browser-check.mjs` against `./go.sh demo` | pass |
