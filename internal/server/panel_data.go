@@ -65,6 +65,7 @@ type panelRTHResponse struct {
 	ThroughUS           int64   `json:"throughUS"`
 	Open                float64 `json:"open,omitempty"`
 	High                float64 `json:"high,omitempty"`
+	HighTimeUS          int64   `json:"highTimeUS,omitempty"`
 	Low                 float64 `json:"low,omitempty"`
 	LowTimeUS           int64   `json:"lowTimeUS,omitempty"`
 	Last                float64 `json:"last,omitempty"`
@@ -337,7 +338,7 @@ func (s *Server) handlePanelRTHContext(w http.ResponseWriter, r *http.Request) {
 	if mode == "demo" {
 		low := 45.0
 		last := 47.25
-		response.Open, response.High, response.Low, response.LowTimeUS, response.Last, response.LastTimeUS, response.EligibleTradeCount, response.CompleteFromRTHOpen = 46, 48, low, start.Add(2*time.Minute).UnixMicro(), last, endUS, 1000, true
+		response.Open, response.High, response.HighTimeUS, response.Low, response.LowTimeUS, response.Last, response.LastTimeUS, response.EligibleTradeCount, response.CompleteFromRTHOpen = 46, 48, start.Add(time.Minute).UnixMicro(), low, start.Add(2*time.Minute).UnixMicro(), last, endUS, 1000, true
 		if throughUS >= closeTime.UnixMicro() {
 			response.Status = "closed"
 		} else {
@@ -364,7 +365,7 @@ func (s *Server) handlePanelRTHContext(w http.ResponseWriter, r *http.Request) {
 		}
 		if err == nil && complete && stats.Count > 0 {
 			response.CompleteFromRTHOpen = true
-			response.Open, response.High, response.Low, response.LowTimeUS = stats.Open, stats.High, stats.Low, stats.LowTimeUS
+			response.Open, response.High, response.HighTimeUS, response.Low, response.LowTimeUS = stats.Open, stats.High, stats.HighTimeUS, stats.Low, stats.LowTimeUS
 			response.Last, response.LastTimeUS, response.EligibleTradeCount = stats.Last, stats.LastTimeUS, stats.Count
 			response.Status = "ready"
 			if throughUS >= closeTime.UnixMicro() {
@@ -390,7 +391,7 @@ func (s *Server) handlePanelRTHContext(w http.ResponseWriter, r *http.Request) {
 	}
 	if daily, ok := aggregateRTHBars(bars); ok {
 		response.Open, response.High, response.Low, response.Last = daily.Open, daily.High, daily.Low, daily.Close
-		response.LowTimeUS, response.LastTimeUS, response.EligibleTradeCount = findTimes(bars, daily.Low), bars[len(bars)-1].TimeUS, int64(len(bars))
+		response.HighTimeUS, response.LowTimeUS, response.LastTimeUS, response.EligibleTradeCount = findTimes(bars, daily.High, true), findTimes(bars, daily.Low, false), bars[len(bars)-1].TimeUS, int64(len(bars))
 		response.Status = "ready"
 		if throughUS >= closeTime.UnixMicro() {
 			response.Status = "closed"
@@ -399,9 +400,9 @@ func (s *Server) handlePanelRTHContext(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-func findTimes(bars []storage.MinuteBar, low float64) int64 {
+func findTimes(bars []storage.MinuteBar, price float64, high bool) int64 {
 	for _, bar := range bars {
-		if bar.Low == low {
+		if (!high && bar.Low == price) || (high && bar.High == price) {
 			return bar.TimeUS
 		}
 	}

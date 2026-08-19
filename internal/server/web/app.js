@@ -207,7 +207,7 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
         largeBoost: Number(audioConfig.large_boost) || 1.8,
         maxVoices: Number(audioConfig.max_voices) || 192
       },
-      panels: { slots: { primaryAnalytics: { activePanelId: 'tape-pressure' } }, settings: { 'adr-rth-extension': { lookbackSessions: 20 } } }
+      panels: { slots: { primaryAnalytics: { activePanelId: 'adr-rth-extension' } }, settings: { 'adr-rth-extension': { lookbackSessions: 20, directionMode: 'auto' } } }
     };
   }
 
@@ -240,8 +240,9 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
     result.audio.largeSize = clampNumber(result.audio.largeSize, 1, 100000, defaults.audio.largeSize);
     result.audio.largeBoost = clampNumber(result.audio.largeBoost, 1, 4, defaults.audio.largeBoost);
     result.audio.maxVoices = clampInt(result.audio.maxVoices, 8, 512, defaults.audio.maxVoices);
-    if (!['tape-pressure', 'adr-rth-extension', 'blank'].includes(result.panels.slots.primaryAnalytics.activePanelId)) result.panels.slots.primaryAnalytics.activePanelId = 'tape-pressure';
-    result.panels.settings['adr-rth-extension'] = { lookbackSessions: clampInt(result.panels.settings['adr-rth-extension']?.lookbackSessions, 5, 60, 20) };
+    if (!['tape-pressure', 'adr-rth-extension', 'blank'].includes(result.panels.slots.primaryAnalytics.activePanelId)) result.panels.slots.primaryAnalytics.activePanelId = 'adr-rth-extension';
+    const adrMode = String(result.panels.settings['adr-rth-extension']?.directionMode || 'auto').toLowerCase();
+    result.panels.settings['adr-rth-extension'] = { lookbackSessions: clampInt(result.panels.settings['adr-rth-extension']?.lookbackSessions, 5, 60, 20), directionMode: ['auto', 'low', 'high'].includes(adrMode) ? adrMode : 'auto' };
     return result;
   }
 
@@ -322,7 +323,10 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
             // widen its own limits or write another panel's settings.
             savePanelSettings: (panelId, next, defaults) => {
               const merged = mergePanelSettings(defaults, next);
-              if (panelId === 'adr-rth-extension') merged.lookbackSessions = clampInt(merged.lookbackSessions, 5, 60, 20);
+              if (panelId === 'adr-rth-extension') {
+                merged.lookbackSessions = clampInt(merged.lookbackSessions, 5, 60, 20);
+                merged.directionMode = ['auto', 'low', 'high'].includes(String(merged.directionMode || '').toLowerCase()) ? String(merged.directionMode).toLowerCase() : 'auto';
+              }
               state.settings.panels.settings[panelId] = merged;
               saveSettings();
             }

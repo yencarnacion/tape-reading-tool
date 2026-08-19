@@ -177,8 +177,8 @@ try {
 function expect(label, reading, instrument, want) {
   const failure = (why) => { throw new Error(`${label}: ${why}: ${JSON.stringify(reading)}`); };
   if (reading.state) failure(`panel is not showing a reading (${reading.state} ${reading.detail})`);
-  if (reading.value !== want.value || reading.percent !== want.percent) failure('wrong extension');
-  if (reading.low !== `$${want.low}` || reading.last !== `$${want.last}`) failure('wrong low or last');
+  if (reading.value !== want.value || !reading.percent.startsWith(want.percent)) failure('wrong extension');
+  if (!reading.low.startsWith(`$${want.low}`) || reading.last !== `$${want.last}`) failure('wrong low or last');
   if (reading.baseline !== instrument.baseline || reading.history !== instrument.history) failure('wrong baseline');
 }
 

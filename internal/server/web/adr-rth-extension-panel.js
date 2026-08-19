@@ -1,13 +1,13 @@
 import { PANEL_API_VERSION, PANEL_DATA_SCHEMA_VERSION } from './panel-api.js';
 import { applyEligibleTrades, calculateADR, calculateExtension, classifyRTH, displayNumber, marketParts, seedRTHContext } from './adr-rth-extension-model.js';
 
-function markup(lookback) {
+function markup(lookback, directionMode) {
   return `<div class="adr-panel" aria-live="polite">
-    <div class="adr-heading"><strong>ADR FROM RTH LOW</strong><label>LOOKBACK <input class="adr-lookback" type="number" min="5" max="60" value="${lookback}" aria-label="ADR lookback sessions"></label></div>
+    <div class="adr-heading"><strong>ADR RTH EXTENSION</strong><div class="adr-controls"><label>MODE <select class="adr-mode" aria-label="ADR direction mode"><option value="auto">AUTO</option><option value="low">FROM LOW</option><option value="high">FROM HIGH</option></select></label><label>LOOKBACK <input class="adr-lookback" type="number" min="5" max="60" value="${lookback}" aria-label="ADR lookback sessions"></label></div></div>
     <div class="adr-state"><strong>LOADING ADR HISTORY</strong><small></small></div>
     <div class="adr-ready" hidden>
-      <div class="adr-primary"><strong class="adr-value">--</strong><span class="adr-percent">-- FROM RTH LOW</span></div>
-      <dl><div><dt>RTH LOW</dt><dd class="adr-low">--</dd></div><div><dt>LOW TIME</dt><dd class="adr-low-time">--</dd></div><div><dt>LAST</dt><dd class="adr-last">--</dd></div><div><dt class="adr-label">ADR${lookback}</dt><dd class="adr-baseline">--</dd></div><div><dt>HISTORY</dt><dd class="adr-history">--</dd></div></dl>
+      <div class="adr-primary"><strong class="adr-value">--</strong><span class="adr-percent">--</span></div>
+      <dl><div><dt>FROM LOW</dt><dd class="adr-from-low">--</dd></div><div><dt>FROM HIGH</dt><dd class="adr-from-high">--</dd></div><div><dt>RTH LOW</dt><dd class="adr-low">--</dd></div><div><dt>RTH HIGH</dt><dd class="adr-high">--</dd></div><div><dt>LAST</dt><dd class="adr-last">--</dd></div><div><dt class="adr-label">ADR${lookback}</dt><dd class="adr-baseline">--</dd></div><div><dt>HISTORY</dt><dd class="adr-history">--</dd></div></dl>
       <div class="adr-meter" aria-label="ADR extension reference scale"><i></i><b></b></div>
       <div class="adr-scale"><span>0.00</span><span>0.25</span><span>0.50</span><span>0.75</span><span>1.00</span><span>1.25+</span></div><small class="adr-reference">REFERENCE ONLY · 1.00 ADR IS NOT A REVERSAL SIGNAL</small>
     </div></div>`;
@@ -20,10 +20,12 @@ function timeET(timeUS) {
 
 function createADRPanel({ root, host, settings }) {
   let lookback = Math.max(5, Math.min(60, Math.round(Number(settings.lookbackSessions) || 20)));
+  let directionMode = ['low', 'high'].includes(String(settings.directionMode || '').toLowerCase()) ? String(settings.directionMode).toLowerCase() : 'auto';
   let snapshot = host.currentSnapshot(); let adr = null; let context = null; let loadGeneration = 0; let mounted = true; let loadedSessionDateET = '';
   let pendingTrades = []; let pendingOverflow = false; let requestController = null;
-  root.innerHTML = markup(lookback); const $ = (selector) => root.querySelector(selector);
-  const stateNode = $('.adr-state'), readyNode = $('.adr-ready'), input = $('.adr-lookback');
+  root.innerHTML = markup(lookback, directionMode); const $ = (selector) => root.querySelector(selector);
+  const stateNode = $('.adr-state'), readyNode = $('.adr-ready'), input = $('.adr-lookback'), modeInput = $('.adr-mode');
+  modeInput.value = directionMode;
 
   // A paused replay is stopped in time. Nothing delivered afterwards may advance
   // the panel clock, or the display would drift past the instant being examined.
@@ -41,14 +43,18 @@ function createADRPanel({ root, host, settings }) {
     if (phase.phase === 'before-open') { showState('WAITING FOR RTH OPEN', adr?.status === 'ready' ? `ADR${lookback} ${(adr.adr * 100).toFixed(2)}% · ${lookback} / ${lookback} SESSIONS` : ''); return; }
     if (adr?.status === 'insufficient') { showState('INSUFFICIENT ADR HISTORY', `${adr.completeSessions} / ${lookback} COMPLETED SESSIONS`); return; }
     if (adr?.status !== 'ready') { showState(adr?.status === 'unavailable' ? 'ADR HISTORY UNAVAILABLE' : 'LOADING ADR HISTORY'); return; }
-    if (!context || context.status === 'building') { showState('BUILDING RTH LOW'); return; }
-    if (context.status === 'incomplete') { showState('RTH LOW INCOMPLETE', 'SESSION DATA DOES NOT REACH 09:30 ET'); return; }
+    if (!context || context.status === 'building') { showState('BUILDING RTH RANGE'); return; }
+    if (context.status === 'incomplete') { showState('RTH RANGE INCOMPLETE', 'SESSION DATA DOES NOT REACH 09:30 ET'); return; }
     if (context.status === 'unavailable' || context.status === 'stale') { showState('ADR HISTORY UNAVAILABLE'); return; }
-    const value = calculateExtension(adr, context);
-    if (!['ready', 'closed'].includes(value.status)) { showState('BUILDING RTH LOW'); return; }
+    const value = calculateExtension(adr, context, directionMode);
+    if (!['ready', 'closed'].includes(value.status)) { showState('BUILDING RTH RANGE'); return; }
     stateNode.hidden = true; readyNode.hidden = false;
-    $('.adr-value').textContent = `${displayNumber(value.extension)} ADR`; $('.adr-percent').textContent = `${value.percent >= 0 ? '+' : ''}${displayNumber(value.percent * 100)}% FROM RTH LOW`;
-    $('.adr-low').textContent = `$${host.formatters().price(context.low)}`; $('.adr-low-time').textContent = timeET(context.lowTimeUS); $('.adr-last').textContent = `$${host.formatters().price(context.last)}`;
+    const selectedLabel = value.mode === 'high' ? 'FROM RTH HIGH' : 'FROM RTH LOW';
+    $('.adr-value').textContent = `${displayNumber(value.extension)} ADR`; $('.adr-percent').textContent = `${value.percent >= 0 ? '+' : ''}${displayNumber(value.percent * 100)}% ${selectedLabel}${directionMode === 'auto' ? ' · AUTO' : ''}`;
+    $('.adr-from-low').textContent = `${displayNumber(value.lowExtension)} ADR · +${displayNumber(value.lowPercent * 100)}%`;
+    $('.adr-from-high').textContent = `${displayNumber(value.highExtension)} ADR · +${displayNumber(value.highPercent * 100)}%`;
+    $('.adr-low').textContent = `$${host.formatters().price(context.low)} · ${timeET(context.lowTimeUS)}`;
+    $('.adr-high').textContent = `$${host.formatters().price(context.high)} · ${timeET(context.highTimeUS)}`; $('.adr-last').textContent = `$${host.formatters().price(context.last)}`;
     $('.adr-label').textContent = `ADR${lookback}`; $('.adr-baseline').textContent = `${displayNumber(adr.adr * 100)}%`; $('.adr-history').textContent = `${adr.completeSessions} / ${lookback}`;
     root.style.setProperty('--adr-width', `${Math.max(0, Math.min(100, value.extension / 1.25 * 100))}%`);
     root.classList.toggle('adr-closed', value.status === 'closed'); $('.adr-reference').textContent = `${value.status === 'closed' ? 'RTH CLOSED · ' : ''}REFERENCE ONLY · 1.00 ADR IS NOT A REVERSAL SIGNAL`;
@@ -75,7 +81,8 @@ function createADRPanel({ root, host, settings }) {
     } catch (error) { if (mounted && token === loadGeneration && host.isCurrent()) { console.error('ADR panel data load failed', error); adr = { status: 'unavailable' }; context = { status: 'unavailable' }; render(); } }
   }
 
-  input.addEventListener('change', () => { lookback = Math.max(5, Math.min(60, Math.round(Number(input.value) || 20))); input.value = String(lookback); host.savePanelSettings({ lookbackSessions: lookback }); void load(); });
+  input.addEventListener('change', () => { lookback = Math.max(5, Math.min(60, Math.round(Number(input.value) || 20))); input.value = String(lookback); host.savePanelSettings({ lookbackSessions: lookback, directionMode }); void load(); });
+  modeInput.addEventListener('change', () => { directionMode = ['low', 'high'].includes(modeInput.value) ? modeInput.value : 'auto'; modeInput.value = directionMode; host.savePanelSettings({ lookbackSessions: lookback, directionMode }); render(); });
   return {
     onEvent(event) {
       if (event.type === 'snapshot') { snapshot = { ...snapshot, ...event.snapshot }; void load(); }
@@ -95,8 +102,8 @@ function createADRPanel({ root, host, settings }) {
 }
 
 export const adrRTHManifest = {
-  id: 'adr-rth-extension', name: 'ADR FROM RTH LOW', version: '1.0.0', panelApiVersion: PANEL_API_VERSION, dataSchemaVersion: PANEL_DATA_SCHEMA_VERSION,
-  description: 'Current chart-eligible price extension from the running regular-session low, normalized by completed-session ADR.',
+  id: 'adr-rth-extension', name: 'ADR RTH EXTENSION', version: '1.1.0', panelApiVersion: PANEL_API_VERSION, dataSchemaVersion: PANEL_DATA_SCHEMA_VERSION,
+  description: 'Current chart-eligible extension from the running regular-session low or high, normalized by completed-session ADR.',
   supportedModes: ['live', 'massive', 'demo', 'replay', 'render'], requestedCapabilities: ['clock', 'trades', 'formatters', 'completed-daily-rth-bars', 'rth-session-context', 'settings'],
-  defaultSettings: { lookbackSessions: 20 }, minimumWidth: 280, factory: createADRPanel
+  defaultSettings: { lookbackSessions: 20, directionMode: 'auto' }, minimumWidth: 280, factory: createADRPanel
 };

@@ -30,7 +30,7 @@ export class PanelHost {
     picker.addEventListener('change', () => this.swap(picker.value));
   }
 
-  validId(id) { return this.registry.has(id) ? id : 'tape-pressure'; }
+  validId(id) { return this.registry.has(id) ? id : 'adr-rth-extension'; }
 
   swap(requestedId, persist = true) {
     const id = this.validId(requestedId); const manifest = this.registry.get(id); const generation = ++this.generation;

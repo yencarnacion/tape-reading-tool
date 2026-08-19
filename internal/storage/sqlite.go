@@ -216,6 +216,7 @@ type MinuteBar struct {
 type SessionTradeStats struct {
 	Open       float64
 	High       float64
+	HighTimeUS int64
 	Low        float64
 	LowTimeUS  int64
 	Last       float64
@@ -996,10 +997,10 @@ func (d *Database) EligibleSessionTradeStats(ctx context.Context, symbol, source
 			return SessionTradeStats{}, err
 		}
 		if result.Count == 0 {
-			result.Open, result.High, result.Low, result.LowTimeUS = price, price, price, marketUS
+			result.Open, result.High, result.HighTimeUS, result.Low, result.LowTimeUS = price, price, marketUS, price, marketUS
 		}
 		if price > result.High {
-			result.High = price
+			result.High, result.HighTimeUS = price, marketUS
 		}
 		if price < result.Low {
 			result.Low, result.LowTimeUS = price, marketUS

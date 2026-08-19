@@ -97,7 +97,7 @@ func TestPanelRTHContextDemoStatesAndDST(t *testing.T) {
 	}
 	server.now = func() time.Time { return time.Date(2026, time.November, 2, 9, 30, 0, 0, location) }
 	_, open := decodeRTH(t, server, "symbol=AAPL&session=2026-11-02")
-	if open.Status != "ready" || !open.CompleteFromRTHOpen || open.Low != 45 {
+	if open.Status != "ready" || !open.CompleteFromRTHOpen || open.Low != 45 || open.High != 48 || open.HighTimeUS == 0 {
 		t.Fatalf("open=%+v", open)
 	}
 }
@@ -135,7 +135,7 @@ func TestPanelRTHContextUsesExactEligibleTradesThroughTimestamp(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, payload := decodeRTH(t, server, "symbol=AAPL&session=2026-07-24&through_us="+formatInt64(through))
-	if code != http.StatusOK || payload.Status != "ready" || !payload.CompleteFromRTHOpen || payload.Low != 99 || payload.Last != 99 {
+	if code != http.StatusOK || payload.Status != "ready" || !payload.CompleteFromRTHOpen || payload.High != 100 || payload.HighTimeUS != start+1e6 || payload.Low != 99 || payload.Last != 99 {
 		t.Fatalf("payload=%+v", payload)
 	}
 }

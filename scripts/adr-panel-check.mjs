@@ -23,11 +23,16 @@ assert.equal(calculateADR(bars.slice(0, 17), 20, '2026-08-01').status, 'insuffic
 const flat = Array.from({ length: 20 }, (_, i) => ({ ...bars[0], sessionDateET: date(i), high: 100 }));
 assert.equal(calculateADR(flat, 20, '2026-08-01').status, 'unavailable', 'zero ADR must not divide');
 
-const context = { status: 'ready', symbol: 'AAPL', sessionDateET: '2026-07-24', low: 100, lowTimeUS: 1, last: 100, lastTimeUS: 2, eligibleTradeCount: 2, completeFromRTHOpen: true };
-assert.equal(calculateExtension({ status: 'ready', adr: .08 }, context).extension, 0);
+const context = { status: 'ready', symbol: 'AAPL', sessionDateET: '2026-07-24', open: 102, high: 108, highTimeUS: 1, low: 100, lowTimeUS: 1, last: 100, lastTimeUS: 2, eligibleTradeCount: 2, completeFromRTHOpen: true };
+assert.equal(calculateExtension({ status: 'ready', adr: .08 }, context, 'low').extension, 0);
 assert.ok(Math.abs(calculateExtension({ status: 'ready', adr: .08 }, { ...context, last: 104 }).extension - .5) < 1e-12);
+assert.equal(calculateExtension({ status: 'ready', adr: .08 }, context).mode, 'high', 'AUTO must use the high below the RTH open');
+assert.ok(Math.abs(calculateExtension({ status: 'ready', adr: .08 }, context, 'high').extension - 1) < 1e-12);
+assert.equal(calculateExtension({ status: 'ready', adr: .08 }, { ...context, last: 104 }).mode, 'low', 'AUTO must use the low at or above the RTH open');
 const lower = applyEligibleTrades({ ...context, last: 104 }, [{ p: 98, t: Date.parse('2026-07-24T13:35:00Z') }], { symbol: 'AAPL', sessionDateET: '2026-07-24' });
-assert.equal(lower.low, 98); assert.equal(lower.last, 98); assert.equal(calculateExtension({ status: 'ready', adr: .08 }, lower).extension, 0);
+assert.equal(lower.low, 98); assert.equal(lower.last, 98); assert.equal(calculateExtension({ status: 'ready', adr: .08 }, lower, 'low').extension, 0);
+const higher = applyEligibleTrades(context, [{ p: 110, t: Date.parse('2026-07-24T13:35:00Z') }], { symbol: 'AAPL', sessionDateET: '2026-07-24' });
+assert.equal(higher.high, 110); assert.equal(higher.last, 110); assert.equal(higher.highTimeUS, Date.parse('2026-07-24T13:35:00Z') * 1000);
 const excludedByTime = applyEligibleTrades(context, [{ p: 50, t: Date.parse('2026-07-24T12:00:00Z') }], { symbol: 'AAPL', sessionDateET: '2026-07-24' });
 assert.equal(excludedByTime.low, 100, 'premarket lower trade must not alter RTH low');
 const early = applyEligibleTrades(context, [{ p: 99, t: Date.parse('2026-07-24T13:36:00Z') }], { symbol: 'AAPL', sessionDateET: '2026-07-24' });

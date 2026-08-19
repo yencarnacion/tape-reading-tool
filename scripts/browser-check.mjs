@@ -11,8 +11,8 @@ const chrome = process.env.CHROME || 'google-chrome';
 const DEMO_ADR_BASELINE = '4.90%';
 const DEMO_ADR = 0.049;
 const DOCUMENTED_ADR_STATES = [
-  'LOADING ADR HISTORY', 'WAITING FOR RTH OPEN', 'BUILDING RTH LOW',
-  'INSUFFICIENT ADR HISTORY', 'RTH LOW INCOMPLETE', 'ADR HISTORY UNAVAILABLE'
+  'LOADING ADR HISTORY', 'WAITING FOR RTH OPEN', 'BUILDING RTH RANGE',
+  'INSUFFICIENT ADR HISTORY', 'RTH RANGE INCOMPLETE', 'ADR HISTORY UNAVAILABLE'
 ];
 
 // Before 09:30 ET there is no RTH low yet and a number would be a lie, so the
@@ -27,10 +27,11 @@ function assertDemoADR(label, reading) {
   }
   if (reading.state) fail('demo mode must reach a ready ADR reading');
   if (reading.baseline !== DEMO_ADR_BASELINE || reading.history !== '20 / 20') fail('demo baseline is not the documented 20-session mean');
-  const low = Number(String(reading.low).replace('$', ''));
+  if (reading.mode !== 'auto' || !reading.fromLow.includes('ADR') || !reading.fromHigh.includes('ADR')) fail('AUTO mode must keep both directional readings visible');
+  const low = Number.parseFloat(String(reading.low).replace('$', ''));
   const last = Number(String(reading.last).replace('$', ''));
   const extension = Number(String(reading.value).replace(' ADR', ''));
-  const percent = Number(String(reading.percent).replace('% FROM RTH LOW', ''));
+  const percent = Number.parseFloat(String(reading.percent));
   if (!(low > 0) || !(last > 0) || !Number.isFinite(extension) || !Number.isFinite(percent)) fail('unreadable ADR readings');
   if (Math.abs(percent - (last / low - 1) * 100) > 0.02) fail('raw move does not match the displayed low and last');
   if (Math.abs(extension - (last / low - 1) / DEMO_ADR) > 0.02) fail('extension is not the raw move divided by the baseline');
@@ -54,6 +55,10 @@ const ADR_READING_EXPRESSION = `({
   value: document.querySelector('.adr-ready:not([hidden]) .adr-value')?.textContent || '',
   percent: document.querySelector('.adr-ready:not([hidden]) .adr-percent')?.textContent || '',
   low: document.querySelector('.adr-ready:not([hidden]) .adr-low')?.textContent || '',
+  high: document.querySelector('.adr-ready:not([hidden]) .adr-high')?.textContent || '',
+  fromLow: document.querySelector('.adr-ready:not([hidden]) .adr-from-low')?.textContent || '',
+  fromHigh: document.querySelector('.adr-ready:not([hidden]) .adr-from-high')?.textContent || '',
+  mode: document.querySelector('.adr-mode')?.value || '',
   last: document.querySelector('.adr-ready:not([hidden]) .adr-last')?.textContent || '',
   baseline: document.querySelector('.adr-ready:not([hidden]) .adr-baseline')?.textContent || '',
   history: document.querySelector('.adr-ready:not([hidden]) .adr-history')?.textContent || ''
@@ -127,6 +132,7 @@ try {
   const panels = panelCheck.result.value;
   assertDemoADR('ADR hot swap', panels.adr.reading);
   if (JSON.stringify(panels.options) !== JSON.stringify(['tape-pressure', 'adr-rth-extension', 'blank']) ||
+      panels.beforeDebug.activePanelId !== 'adr-rth-extension' ||
       panels.adr.active !== 'adr-rth-extension' ||
       panels.blank.active !== 'blank' || !/NO ANALYTICS PANEL/.test(panels.blank.text || '') ||
       panels.restored !== 'tape-pressure' || panels.rows !== 3 || !panels.sameSocket || !panels.sameSymbol ||
@@ -156,6 +162,15 @@ try {
         keys: Object.keys(stored), stored: stored['adr-rth-extension'],
         sameSocket: socketBefore === api.socket()
       };
+      const mode = document.querySelector('.adr-mode');
+      mode.value = 'high'; mode.dispatchEvent(new Event('change', { bubbles: true }));
+      const highMode = {
+        mode: mode.value,
+        percent: document.querySelector('.adr-percent')?.textContent,
+        value: document.querySelector('.adr-value')?.textContent,
+        stored: JSON.parse(localStorage.getItem('tape-reading-tool.settings.v1')).panels.settings['adr-rth-extension']
+      };
+      mode.value = 'auto'; mode.dispatchEvent(new Event('change', { bubbles: true }));
       input.value = '999'; input.dispatchEvent(new Event('change', { bubbles: true }));
       await new Promise((resolve) => setTimeout(resolve, 600));
       const clamped = { value: input.value, label: document.querySelector('.adr-label')?.textContent };
@@ -166,19 +181,20 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 600));
       const restored = JSON.parse(localStorage.getItem('tape-reading-tool.settings.v1')).panels.settings['adr-rth-extension'];
       api.swap('tape-pressure');
-      return { changed, clamped, restored };
+      return { changed, highMode, clamped, restored };
     })()`, awaitPromise: true, returnByValue: true
   }, 10000);
   const lookback = lookbackCheck.result.value;
   if (lookback.changed.state !== '' && lookback.changed.state !== 'WAITING FOR RTH OPEN') {
     throw new Error(`ADR lookback change left the panel unusable: ${JSON.stringify(lookback)}`);
   }
-  if (lookback.changed.stored?.lookbackSessions !== 10 || lookback.changed.keys.join() !== 'adr-rth-extension' ||
+  if (lookback.changed.stored?.lookbackSessions !== 10 || lookback.changed.stored?.directionMode !== 'auto' || lookback.changed.keys.join() !== 'adr-rth-extension' ||
       !lookback.changed.sameSocket || lookback.clamped.value !== '60' ||
+      lookback.highMode.mode !== 'high' || !lookback.highMode.percent.includes('FROM RTH HIGH') || lookback.highMode.stored?.directionMode !== 'high' ||
       (lookback.changed.state === '' && (lookback.changed.label !== 'ADR10' || lookback.changed.history !== '10 / 10' ||
         lookback.changed.baseline !== DEMO_ADR_BASELINE)) ||
       (lookback.clamped.label && lookback.clamped.label !== 'ADR60') ||
-      lookback.restored?.lookbackSessions !== 20) {
+      lookback.restored?.lookbackSessions !== 20 || lookback.restored?.directionMode !== 'auto') {
     throw new Error(`ADR lookback setting did not apply, bound, or persist: ${JSON.stringify(lookback)}`);
   }
 
@@ -216,7 +232,7 @@ try {
   });
   await command('Page.reload', { ignoreCache: true }); await waitForApp();
   const fallback = (await command('Runtime.evaluate', { expression: `window.__tapeReadingPanels.active()`, returnByValue: true })).result.value;
-  if (fallback !== 'tape-pressure') throw new Error(`unknown panel did not fall back to Tape Pressure: ${fallback}`);
+  if (fallback !== 'adr-rth-extension') throw new Error(`unknown panel did not fall back to ADR RTH Extension: ${fallback}`);
   await command('Runtime.evaluate', { expression: `window.__tapeReadingPanels.swap('tape-pressure')` });
 
   const replayPanelCheck = await command('Runtime.evaluate', {
@@ -227,7 +243,9 @@ try {
         symbol: api.symbol(), mode: 'replay', status: { mode: 'replay', state: 'paused' },
         clockUS: at(iso), quote: {}, trades: []
       }});
-      api.swap('adr-rth-extension'); snapshot('2026-07-24T13:36:00Z');
+      api.swap('adr-rth-extension');
+      document.querySelector('.adr-mode').value = 'low'; document.querySelector('.adr-mode').dispatchEvent(new Event('change', { bubbles: true }));
+      snapshot('2026-07-24T13:36:00Z');
       await new Promise((resolve) => setTimeout(resolve, 400));
       api.event({ type: 'tradeBatch', symbol: api.symbol(), clockUS: at('2026-07-24T13:36:00Z'), trades: [{ p: 46, t: Date.parse('2026-07-24T13:36:00Z') }] });
       const early = document.querySelector('.adr-value')?.textContent;
@@ -240,6 +258,7 @@ try {
       api.event({ type: 'modeChanged', mode: 'replay', status: { mode: 'replay', state: 'replaying' }, clockUS: at('2026-07-24T13:36:00Z') });
       api.event({ type: 'tradeBatch', symbol: api.symbol(), clockUS: at('2026-07-24T13:38:00Z'), trades: [{ p: 46.5, t: Date.parse('2026-07-24T13:38:00Z') }] });
       const resumed = document.querySelector('.adr-value')?.textContent;
+      document.querySelector('.adr-mode').value = 'auto'; document.querySelector('.adr-mode').dispatchEvent(new Event('change', { bubbles: true }));
       api.swap('tape-pressure'); return { early, paused, future, backward, resumed };
     })()`, awaitPromise: true, returnByValue: true
   }, 10000);
