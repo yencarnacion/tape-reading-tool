@@ -21,6 +21,8 @@ Every registry entry declares:
 
 An incompatible definition is rejected before mounting. Built-in IDs are `tape-pressure`, `adr-rth-extension`, and `blank`.
 
+`requestedCapabilities` is enforced by the host, not merely descriptive metadata. Unknown vocabulary entries are rejected at registration. Each accepted entry maps to a small set of callable methods; unrequested methods and unknown application capabilities are omitted from the frozen host object. Shared formatters are an explicit capability. Settings persistence is granted only when `settings` is requested.
+
 ## Lifecycle and ordering
 
 The host owns one generation at a time. A swap increments the generation, stops delivery, aborts host-managed work, calls `unmount`, removes panel-local DOM, shows a loading state, creates the next panel, sends its current snapshot, and persists the stable ID. Inactive panels are destroyed rather than hidden.

@@ -1,5 +1,24 @@
 import { PANEL_API_VERSION, PANEL_DATA_SCHEMA_VERSION, validatePanelManifest } from './panel-api.js';
 
+const CAPABILITY_METHODS = Object.freeze({
+  stream: ['streamSource'],
+  formatters: ['formatters'],
+  clock: ['currentSnapshot'],
+  trades: ['currentSnapshot'],
+  'completed-daily-rth-bars': ['getCompletedDailyBars'],
+  'rth-session-context': ['getRTHSessionContext']
+});
+
+function grantedCapabilities(requested, available) {
+  const granted = {};
+  for (const capability of requested) {
+    for (const method of CAPABILITY_METHODS[capability] || []) {
+      if (typeof available[method] === 'function') granted[method] = available[method];
+    }
+  }
+  return granted;
+}
+
 export class PanelHost {
   constructor({ root, picker, registry, capabilities, settings, saveSettings }) {
     this.root = root; this.picker = picker; this.capabilities = capabilities;
@@ -26,10 +45,12 @@ export class PanelHost {
     // may write only its own settings, so the host binds the mounted id and the
     // manifest's declared fields rather than trusting the caller to name them.
     const host = Object.freeze({
-      ...this.capabilities,
+      ...grantedCapabilities(manifest.requestedCapabilities, this.capabilities),
       apiVersion: PANEL_API_VERSION, dataSchemaVersion: PANEL_DATA_SCHEMA_VERSION,
       signal: controller.signal, generation, isCurrent: () => this.generation === generation && !controller.signal.aborted,
-      savePanelSettings: (next) => this.capabilities.savePanelSettings(id, next, manifest.defaultSettings)
+      ...(manifest.requestedCapabilities.includes('settings') ? {
+        savePanelSettings: (next) => this.capabilities.savePanelSettings(id, next, manifest.defaultSettings)
+      } : {})
     });
     try {
       this.root.className = 'analytics-panel-root'; this.root.replaceChildren();

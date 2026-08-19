@@ -195,3 +195,17 @@ Also corrected in the checks: the demo synthetic daily range cycles with period 
 ## Still the highest-value gap
 
 Unchanged from the first pass: no check drives a real historical replay. There is no recorded database in the working tree, and the browser check simulates replay by injecting panel events rather than by driving the server's replay lifecycle. A recorded session replayed end to end — start, pause, backward seek, forward seek, reload while paused — remains the most useful check nobody has written.
+
+---
+
+# Third review pass after `82ed183`
+
+The settings-ownership changes in `82ed183` were pulled and reviewed. Default merging, panel-id binding, field filtering, application-owned bounds, and lifecycle-field precedence are correct, and their new mounted lookback coverage passes.
+
+One related contract and security defect remained: `requestedCapabilities` was descriptive only. The host spread every application capability into every panel, so even Blank received the stream, snapshot, history, RTH-context, and settings functions. That contradicted the documented narrow capability model and would have made future plugin permissions misleading.
+
+The host now builds a frozen grant from the manifest's requested capability vocabulary. Blank receives no application methods; Tape Pressure receives its stream and shared formatters; ADR receives clock/snapshot, formatter, bounded completed-history, RTH-context, and panel-owned settings methods. Unknown capability names are rejected during manifest validation, unrequested application methods are omitted, and core lifecycle fields remain unshadowable. `scripts/panel-host-check.mjs` deterministically covers capability isolation, unknown-capability rejection, generation-field precedence, settings ownership, and default merging.
+
+The first mounted run usefully failed because ADR used the shared price formatter without declaring it. Formatting is now an explicit capability in the ADR manifest; both mounted browser modes then passed. The complete suite also passed: uncached Go tests, race tests, vet, build, formatting, ADR model, panel host, audio, rewind, normal demo browser, demo-with-rewind browser, and the feature diff whitespace audit.
+
+The pre-existing local `go-render.sh` edit remains deliberately unstaged. The real recorded-replay lifecycle remains the highest-value untested gap.

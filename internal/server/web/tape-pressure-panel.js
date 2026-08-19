@@ -72,6 +72,6 @@ export const tapePressureManifest = {
   id: 'tape-pressure', name: 'TAPE PRESSURE', version: '1.0.0',
   panelApiVersion: PANEL_API_VERSION, dataSchemaVersion: PANEL_DATA_SCHEMA_VERSION,
   description: 'Rolling 5, 15, and 60 second tape pressure.', supportedModes: ['live', 'massive', 'demo', 'replay', 'render'],
-  requestedCapabilities: ['stream', 'clock'], defaultSettings: {}, minimumWidth: 280,
+  requestedCapabilities: ['stream', 'formatters', 'clock'], defaultSettings: {}, minimumWidth: 280,
   factory: ({ root, host }) => createTapePressureInstance(root, { source: host.streamSource(), format: host.formatters() })
 };

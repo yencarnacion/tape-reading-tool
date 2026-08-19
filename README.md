@@ -41,6 +41,7 @@ The version-1 panel architecture and ADR data rules are documented in [Panel API
 
 ```bash
 node scripts/adr-panel-check.mjs
+node scripts/panel-host-check.mjs
 go test ./...
 go test -race ./...
 node scripts/browser-check.mjs

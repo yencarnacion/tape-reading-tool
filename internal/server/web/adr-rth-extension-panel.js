@@ -97,6 +97,6 @@ function createADRPanel({ root, host, settings }) {
 export const adrRTHManifest = {
   id: 'adr-rth-extension', name: 'ADR FROM RTH LOW', version: '1.0.0', panelApiVersion: PANEL_API_VERSION, dataSchemaVersion: PANEL_DATA_SCHEMA_VERSION,
   description: 'Current chart-eligible price extension from the running regular-session low, normalized by completed-session ADR.',
-  supportedModes: ['live', 'massive', 'demo', 'replay', 'render'], requestedCapabilities: ['clock', 'trades', 'completed-daily-rth-bars', 'rth-session-context', 'settings'],
+  supportedModes: ['live', 'massive', 'demo', 'replay', 'render'], requestedCapabilities: ['clock', 'trades', 'formatters', 'completed-daily-rth-bars', 'rth-session-context', 'settings'],
   defaultSettings: { lookbackSessions: 20 }, minimumWidth: 280, factory: createADRPanel
 };
