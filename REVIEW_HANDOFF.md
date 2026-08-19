@@ -476,3 +476,34 @@ Recording a short demo session to SQLite and replaying it under `scripts/browser
 | `node scripts/rewind-check.mjs` | pass |
 | `node scripts/browser-check.mjs` against `./go.sh demo -rewind` | pass |
 | `node scripts/browser-check.mjs` against `./go.sh demo` | pass |
+
+---
+
+# Seventh review pass after `77015d8`
+
+`77015d8` was pulled and reviewed. Adopting `server_time_ms` on every snapshot is the correct generation-boundary fix: the server stamps replay snapshots from `feed.Replay.Position()`, and `syncServerClock` already rejects invalid values. The existing replay wire test and ADR stale-session check cover the two sides of that contract.
+
+This pass also exercised the previously untested browser-to-real-replay path with the local August 18 SMCI recording. The database contains 11,639 chart-eligible IBKR/live prints from 09:31 through 09:40 ET, including dense data around 09:33. A replay was paused near 09:33:31, the Analytics slot was changed to `ADR FROM RTH LOW`, and the replay was sought backward to 09:33:00. The visible clock moved backward immediately, the ADR panel remained mounted, no browser errors were logged, and a reload while paused restored `REPLAY TIME 09:33:00 ET` rather than extrapolating from the abandoned position.
+
+The ADR value itself could not be numerically validated from this recording. The database has no SMCI daily bars and its live trades start at 09:31 rather than the 09:30 RTH open. The truthful result at 09:33 is therefore `INSUFFICIENT ADR HISTORY` (`0 / 20 COMPLETED SESSIONS`) with incomplete RTH-open coverage, not a fabricated extension value. This is a data-coverage limitation, not a panel failure.
+
+No code issue was found. The only change in this pass is this reviewer handoff. The unrelated local `go-render.sh` edit remains deliberately unstaged.
+
+## Verification rerun
+
+| Command or scenario | Result |
+| --- | --- |
+| Real SMCI IBKR/live replay, backward seek 09:33:31 → 09:33:00, paused reload | pass; clock restored to 09:33:00, panel retained, no browser errors |
+| SMCI ADR data-integrity state | expected insufficient history: 0/20 daily sessions and incomplete 09:30 coverage |
+| `git diff --check origin/main...HEAD` | clean |
+| `go build -buildvcs=false ./cmd/tape-reading-tool` | pass |
+| `go vet ./...` | pass |
+| `gofmt -l .` | clean |
+| `go test -count=1 ./...` | pass |
+| `go test -count=1 -race ./...` | pass |
+| `node scripts/panel-host-check.mjs` | pass |
+| `node scripts/adr-panel-check.mjs` | pass |
+| `node scripts/audio-worklet-check.mjs` | pass |
+| `node scripts/rewind-check.mjs` | pass |
+| `node scripts/browser-check.mjs` against `./go.sh demo -rewind` | pass |
+| `node scripts/browser-check.mjs` against `./go.sh demo` | pass |
