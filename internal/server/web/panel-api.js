@@ -13,6 +13,24 @@ export function immutablePanelData(value) {
   return value;
 }
 
+// The manifest's defaults are the schema for a panel's settings in both
+// directions. An override reaches a panel only where the manifest declares the
+// field, and nested objects merge rather than replace so a field added in a later
+// panel version still arrives for someone who saved settings before it existed.
+// Arrays and scalars replace wholesale: a stored list is a value, not a base to
+// extend. A corrupt override of the wrong shape falls back to the declared value.
+export function mergePanelSettings(defaults, overrides) {
+  if (!defaults || typeof defaults !== 'object' || Array.isArray(defaults)) return defaults;
+  const merged = {};
+  for (const [key, fallback] of Object.entries(defaults)) {
+    const override = overrides?.[key];
+    if (override === undefined) merged[key] = fallback;
+    else if (fallback && typeof fallback === 'object' && !Array.isArray(fallback)) merged[key] = mergePanelSettings(fallback, override);
+    else merged[key] = override;
+  }
+  return merged;
+}
+
 export function validatePanelManifest(manifest) {
   if (!manifest || typeof manifest.id !== 'string' || !/^[a-z0-9-]+$/.test(manifest.id)) {
     throw new Error('panel manifest has an invalid id');

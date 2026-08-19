@@ -278,3 +278,70 @@ Panel settings now pass through one recursive copy-and-freeze helper at registra
 The complete documented suite passed after the fix: uncached Go tests, race tests, vet, build, formatting, panel-host and ADR checks, audio, rewind, normal demo browser, demo-with-rewind browser, and the feature diff whitespace audit. The pre-existing local `go-render.sh` edit remains deliberately unstaged.
 
 The highest-value remaining test gap is unchanged: a real recorded replay driven end to end through start, pause, backward seek, forward seek, and reload while paused.
+
+---
+
+# Fourth review pass after `a345d86`
+
+`a345d86` extends the registration freeze recursively through `defaultSettings` and the merged settings handed to a panel, and adds nested fixtures to `scripts/panel-host-check.mjs`. The recursion is the right call — a one-level freeze protected the container and left its contents writable. The full suite passes on the pulled state and `git diff --check origin/main...HEAD` is clean.
+
+Two findings, both created by the same thing this commit did well: it made nested settings a supported shape without the rest of the settings path following it down.
+
+## 9. A nested field added in a later panel version never reached the panel
+
+Finding 7 fixed this at the top level. The merge underneath is still one level deep:
+
+```js
+{ ...manifest.defaultSettings, ...(this.settings.settings?.[id] || {}) }
+```
+
+With defaults `{ display: { precision: 2, scale: 'linear' } }` and stored `{ display: { precision: 3 } }`, the whole `display` object is replaced and `scale` arrives `undefined` for every user who had already saved. `plugin.md` requires new fields to merge with defaults, and the commit's own fixtures could not catch it because the nested default had only one key.
+
+The same gap ran the other way on save. The bound added in finding 6 iterated `Object.keys(defaults)` at the top level only, so a nested key the manifest never declared was persisted verbatim — and then merged straight back into the panel at the next mount.
+
+Both directions now use one operation, `mergePanelSettings(defaults, overrides)` in `panel-api.js`: the manifest's defaults are the schema, nested objects merge at every depth, arrays and scalars replace wholesale because a stored list is a value rather than a base to extend, and an override of the wrong shape falls back to the declared value instead of corrupting the panel. The host uses it at mount and the application uses it on save, so the two directions cannot drift apart again.
+
+## 10. The panel host check could not fail
+
+This one matters more than the merge, because it is what let the merge through.
+
+Every strong assertion in `scripts/panel-host-check.mjs` lived inside a panel factory, and the host wraps every lifecycle callback in its error boundary by design. An assertion thrown there was caught, logged as `panel <id> stopped`, and the script carried on to print its success line and exit 0.
+
+The check appeared to work only because the DOM stubs were too thin for the error path itself to complete: `fail()` calls `document.createElement('details').append(...)`, the stub had no `append`, and the resulting `TypeError` crashed the process. The check was being saved by an incidental crash in the error handler. Reproduced in isolation — a factory asserting `1 === 2` against complete stubs exits 0 with the slot quietly in `panel-error`.
+
+The factories now record the host and settings they were handed, and every assertion runs from the script body after the swaps. Each swap additionally asserts the panel actually mounted and the slot is not in an error state, so a swallowed exception fails the check rather than hiding in it.
+
+Verified by mutation, all three now exit non-zero by design rather than by accident:
+
+| Mutation | Detected |
+| --- | --- |
+| shallow settings merge restored | yes |
+| all application capabilities spread into the host | yes |
+| one panel throws during mount | yes |
+
+Before the restructure, only the first was caught, and only because of the stub crash.
+
+## Verification rerun
+
+| Command | Result |
+| --- | --- |
+| `git diff --check origin/main...HEAD` | clean |
+| `go build -buildvcs=false ./cmd/tape-reading-tool` | pass |
+| `go vet ./...` | pass |
+| `gofmt -l .` | clean |
+| `go test -count=1 ./...` | pass |
+| `go test -count=1 -race ./...` | pass |
+| `node scripts/panel-host-check.mjs` | pass |
+| `node scripts/adr-panel-check.mjs` | pass |
+| `node scripts/audio-worklet-check.mjs` | pass |
+| `node scripts/rewind-check.mjs` | pass |
+| `node scripts/browser-check.mjs` against `./go.sh demo -rewind` | pass |
+| `node scripts/browser-check.mjs` against `./go.sh demo` | pass |
+
+## A note on where the last four passes have gone
+
+Findings 6 through 10 are all in panel settings and capability plumbing: a contract with one flat integer setting on one panel has now been reviewed four times. The generalisations are sound, but nothing above changes what a trader sees, and each round has added surface that the next round then had to audit.
+
+Meanwhile the gap named at the end of every previous pass has not moved: no check drives a real historical replay. There is no recorded database in the working tree, and `scripts/browser-check.mjs` simulates replay by injecting panel events rather than by driving the server's replay lifecycle. Findings 1, 3, and 4 — the ones that made the ADR panel unusable after a backward seek, showed a stale session overnight, and let a paused clock advance — all lived in that gap, and were found by reading rather than by any check. Finding 10 says something similar about trusting a check that has never been shown to fail.
+
+Recording a short session and replaying it end to end — start, pause, backward seek, forward seek, reload while paused — would exercise more of this branch's actual risk than further hardening of the settings path.

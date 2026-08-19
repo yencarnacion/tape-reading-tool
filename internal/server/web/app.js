@@ -5,6 +5,7 @@ import {
 import { createStreamSource, prefixFromTrade } from './tape-source.js';
 import { RewindBuffer, createRewindSource } from './tape-rewind.js';
 import { PanelHost } from './panel-host.js';
+import { mergePanelSettings } from './panel-api.js';
 import { tapePressureManifest, createTapePressureInstance } from './tape-pressure-panel.js';
 import { blankPanelManifest } from './blank-panel.js';
 import { adrRTHManifest } from './adr-rth-extension-panel.js';
@@ -315,12 +316,12 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
               if (!response.ok) throw new Error((await response.text()).trim() || 'RTH context unavailable');
               return response.json();
             },
-            // The host supplies the mounted panel's id and its declared fields.
-            // Unknown fields are dropped and each panel's bounds are applied here,
-            // so a panel cannot widen its own limits or write another's settings.
+            // The host supplies the mounted panel's id and its declared defaults,
+            // which shape what is written at every depth. Undeclared fields are
+            // dropped and each panel's bounds are applied here, so a panel cannot
+            // widen its own limits or write another panel's settings.
             savePanelSettings: (panelId, next, defaults) => {
-              const merged = { ...defaults };
-              for (const key of Object.keys(merged)) if (next?.[key] !== undefined) merged[key] = next[key];
+              const merged = mergePanelSettings(defaults, next);
               if (panelId === 'adr-rth-extension') merged.lookbackSessions = clampInt(merged.lookbackSessions, 5, 60, 20);
               state.settings.panels.settings[panelId] = merged;
               saveSettings();
