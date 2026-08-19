@@ -693,3 +693,56 @@ The unrelated local `go-render.sh` edit remains deliberately unstaged.
 | Real SMCI IBKR/live replay, backward seek and paused reload around 09:33 | pass; expected insufficient-history state, no browser errors |
 | `node scripts/browser-check.mjs` against `./go.sh demo -rewind` | pass |
 | `node scripts/browser-check.mjs` against `./go.sh demo` | pass |
+
+---
+
+# Eleventh review pass after `1c979d7`
+
+`1c979d7` improves the replay panel check in three ways, all correct. Retrying the pause action itself instead of polling `GET /api/replay` is the right call: that endpoint is a range-and-chart request, and my version parsed its body as JSON without checking `response.ok`, so a transient error would have been reported as a nonsense status. Pausing the initial play loop before the first seek removes an overlapping cursor. And `expectPreviousSessionInBaseline` closes a hole I left: the fixture claims the earlier replay session becomes one of the later session's ADR inputs, and nothing asserted that membership — the same round baseline would have come from the twenty older seed sessions alone.
+
+The `/api/external-replay/status` fallback it uses is live rather than dead code: external replay is enabled by default, the endpoint is loopback-only and the check runs from `127.0.0.1`, and its payload carries `replay` whenever the feed is a replay.
+
+## The check was still flaky, and finding out why took a detour worth recording
+
+Running it repeatedly, roughly one run in three failed, in two different ways.
+
+**The tape assertion was wrong for a two-session recording.** It asserted the lowest price in the browser tape was above the reported running low. That held when the recording was one session, but the tape can legitimately hold prints from an earlier position — including the earlier session, whose prices sit below the later session's low. The intent was always "the panel did not get this low from the tape", so it now asserts the reported low is not among the prices the tape holds. That is the precise question, and it is what the fixture makes checkable.
+
+**The other failure looked like a product bug and was not.** The panel settled on `INSUFFICIENT ADR HISTORY 0 / 20` with a correct `09:38:00` clock. Zero sessions, not nineteen, which points at the core answering for a state where it has no provider to look up coverage under — the state the replay is in before it has been started.
+
+The obvious suspicion was that a panel mounted before a replay is positioned never recovers, which is not a hypothetical ordering: opening replay mode, choosing the panel, then starting the replay from the toolbar is what a trader does. So it was tested directly, and it is not a bug. Before any replay the panel truthfully reads `RTH LOW INCOMPLETE`; within a second of the replay being started and positioned it reads `0.50 ADR` at `$98.00` and `09:38:00`, and it stays there. The snapshot the start publishes reloads it.
+
+The actual cause is a race inside the check. A panel mounted between a seek and the arrival of that seek's snapshot takes the clock the application still holds, and because no further snapshot follows, nothing triggers another load. The check now waits for the application's market clock to reach the seek position before selecting or reading anything, so it measures the panel rather than that window. Five consecutive clean runs, and the mutations still fail it:
+
+| Mutation | Detected |
+| --- | --- |
+| session context reads the whole session instead of stopping at the as-of instant | yes, `1.15 ADR` at `$95.00` |
+| panels never told about a snapshot | yes, the pre-seek reading stays on screen |
+
+This is worth stating plainly rather than burying: the window is real but it is milliseconds wide, it needs a panel mount to land inside it, and the panel host's contract already says a panel receives the application's current snapshot at mount. It is not a defect to fix, and the check should not have been depending on losing that race.
+
+## A failure now explains itself
+
+Two runs were spent learning that `INSUFFICIENT ADR HISTORY` had said `0 / 20` all along and the check was not capturing the detail line. It captures it now, and on any failure it queries the core's own `daily-bars` and `rth-context` answers over the still-open DevTools session and appends them to the error. A wrong reading is almost always the core answering something different from what the panel was asked to show, and guessing which of the two is wrong costs a whole run.
+
+## Verification rerun
+
+| Command | Result |
+| --- | --- |
+| `git diff --check origin/main...HEAD` | clean |
+| `go build -buildvcs=false ./cmd/tape-reading-tool` | pass |
+| `go vet ./...` | pass |
+| `gofmt -l .` | clean |
+| `go test -count=1 ./...` | pass |
+| `go test -count=1 -race ./...` | pass |
+| `node scripts/panel-host-check.mjs` | pass |
+| `node scripts/adr-panel-check.mjs` | pass |
+| `node scripts/audio-worklet-check.mjs` | pass |
+| `node scripts/rewind-check.mjs` | pass |
+| `node scripts/replay-panel-check.mjs` | pass, five consecutive runs |
+| `node scripts/browser-check.mjs` against `./go.sh demo -rewind` | pass |
+| `node scripts/browser-check.mjs` against `./go.sh demo` | pass |
+
+## What is left
+
+Unchanged: only the IBKR and Massive live branches of `panel_data.go`, which need a broker. Worth noting for whoever picks this up — the last three passes have found no product defect. The findings have been in the checks: a check that could not fail, a check that asserted the wrong invariant, and a check that raced. That is a reasonable place for a branch to end up, but it also means further review passes are likely to keep finding test problems rather than product ones.

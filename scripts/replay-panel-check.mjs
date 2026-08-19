@@ -26,6 +26,7 @@ const profile = join(workspace, 'chrome');
 // the seek point.
 const READING = `({
   state: document.querySelector('.adr-state:not([hidden]) strong')?.textContent || '',
+  detail: document.querySelector('.adr-state:not([hidden]) small')?.textContent || '',
   value: document.querySelector('.adr-ready:not([hidden]) .adr-value')?.textContent || '',
   percent: document.querySelector('.adr-ready:not([hidden]) .adr-percent')?.textContent || '',
   low: document.querySelector('.adr-ready:not([hidden]) .adr-low')?.textContent || '',
@@ -33,13 +34,14 @@ const READING = `({
   baseline: document.querySelector('.adr-ready:not([hidden]) .adr-baseline')?.textContent || '',
   history: document.querySelector('.adr-ready:not([hidden]) .adr-history')?.textContent || '',
   clock: document.querySelector('#marketClockTime')?.textContent || '',
-  tapeLow: window.__tapeReadingReplayProbe?.tapeLow() ?? null,
+  tapePrices: window.__tapeReadingReplayProbe?.prices() ?? [],
   mounts: window.__tapeReadingPanels?.debug()?.mountCount ?? null
 })`;
 
 
 const step = (message) => process.stderr.write(`  replay panel check: ${message}\n`);
 
+let failureContext;
 let browser;
 let server;
 let socket;
@@ -81,6 +83,7 @@ try {
 
   const aapl = fixture.readings.AAPL;
   const nvda = fixture.readings.NVDA;
+  failureContext = { fixture, symbol: 'AAPL' };
 
   step('seeking to a paused mid-session position');
   await position(fixture, fixture.lateSteadyUS);
@@ -90,10 +93,11 @@ try {
   const steady = await selectADR();
   expect('paused mid-session', steady, aapl, aapl.late);
   await expectPreviousSessionInBaseline(fixture, 'AAPL');
-  // The seek restarted the browser tape at 09:38, so it holds nothing at or below
-  // the 09:32 low - often nothing at all, since a pause lands before prints flow.
-  // The panel reports that low anyway, which it can only have got from the core.
-  if (steady.tapeLow !== null && steady.tapeLow <= Number(aapl.late.low)) {
+  // The seek restarted the browser tape at 09:38, so the 09:32 low is not in it -
+  // often nothing is, since a pause lands before prints flow, and after an
+  // earlier position it holds that position's prints instead. The panel reports
+  // the low anyway, which it can only have got from the core.
+  if (steady.tapePrices.includes(Number(aapl.late.low))) {
     throw new Error(`the running low must come from the core, not the browser tape: ${JSON.stringify(steady)}`);
   }
 
@@ -127,8 +131,10 @@ try {
   // A ticker change mid-replay is a generation boundary too. The other symbol's
   // baseline and reading are entirely different, so a stale answer is visible.
   step('changing symbol mid-replay');
+  failureContext.symbol = 'NVDA';
   const switched = await changeSymbol('NVDA');
   expect('after changing symbol mid-replay', switched, nvda, nvda.late);
+  failureContext.symbol = 'AAPL';
   const restored = await changeSymbol('AAPL');
   expect('after changing back', restored, aapl, aapl.late);
 
@@ -151,6 +157,13 @@ try {
   expect('after advancing past the later low', afterLow, aapl, aapl.after);
 
   console.log('replay panel check: real replay seek, pause, reload, and no-look-ahead passed');
+} catch (error) {
+  // The DevTools session is still open here, so the core's own answers can be
+  // captured while the failure is live rather than reconstructed afterwards.
+  if (socket && failureContext) {
+    try { error.message += `\n  core said: ${JSON.stringify(await diagnose(failureContext.fixture, failureContext.symbol))}`; } catch (_) {}
+  }
+  throw error;
 } finally {
   socket?.close();
   browser?.kill();
@@ -163,7 +176,7 @@ try {
 
 function expect(label, reading, instrument, want) {
   const failure = (why) => { throw new Error(`${label}: ${why}: ${JSON.stringify(reading)}`); };
-  if (reading.state) failure(`panel is not showing a reading (${reading.state})`);
+  if (reading.state) failure(`panel is not showing a reading (${reading.state} ${reading.detail})`);
   if (reading.value !== want.value || reading.percent !== want.percent) failure('wrong extension');
   if (reading.low !== `$${want.low}` || reading.last !== `$${want.last}`) failure('wrong low or last');
   if (reading.baseline !== instrument.baseline || reading.history !== instrument.history) failure('wrong baseline');
@@ -186,8 +199,8 @@ async function drive(fixture, targetUS) {
 
 // Starts the replay once, then seeks and pauses. Every response is checked: a
 // rejected seek would otherwise look like a panel that simply never updated.
-function position(fixture, targetUS) {
-  return evaluate(`(async () => {
+async function position(fixture, targetUS) {
+  await evaluate(`(async () => {
     const post = async (body) => {
       const response = await fetch('/api/replay', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
@@ -235,6 +248,28 @@ function position(fixture, targetUS) {
     // database errors get parsed as JSON and hid the actual pause result.
     await pause(${targetUS});
   })()`, true);
+  // A panel mounted between the seek and the arrival of its snapshot takes the
+  // clock the application still holds, and nothing after that triggers another
+  // load. Wait for the application to be at the position before reading or
+  // selecting anything, so the check measures the panel and not that race.
+  await waitForClock(targetUS);
+}
+
+// The replay position in New York market time, which is what the clock shows.
+function marketMinute(targetUS) {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false
+  }).format(new Date(targetUS / 1000));
+}
+
+async function waitForClock(targetUS) {
+  const expected = marketMinute(targetUS);
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const clock = await evaluate(`document.querySelector('#marketClockTime')?.textContent || ''`);
+    if (clock.startsWith(expected)) return;
+    await sleep(100);
+  }
+  throw new Error(`the application never reached ${expected} after seeking`);
 }
 
 // The fixture promises that the earlier replay session becomes one of the
@@ -261,6 +296,7 @@ async function readStable() {
   for (let attempt = 0; attempt < 30; attempt++) {
     const reading = await read();
     if (previous && reading.value && sameReading(previous, reading)) return reading;
+    if (previous && reading.state && sameReading(previous, reading)) return reading;
     previous = reading;
     await sleep(250);
   }
@@ -268,7 +304,7 @@ async function readStable() {
 }
 
 function sameReading(left, right) {
-  return ['state', 'value', 'percent', 'low', 'last', 'baseline', 'history']
+  return ['state', 'detail', 'value', 'percent', 'low', 'last', 'baseline', 'history']
     .every((field) => left[field] === right[field]);
 }
 
@@ -284,11 +320,30 @@ async function read() {
 
 // The browser's own retained tape, which a seek restarts at the seek point.
 function installProbe() {
-  return evaluate(`window.__tapeReadingReplayProbe = { tapeLow: () => {
-    const prices = [...document.querySelectorAll('#tapeRows .tape-row:not([hidden]) span:first-child')]
-      .map((cell) => Number(cell.textContent)).filter((price) => price > 0);
-    return prices.length ? Math.min(...prices) : null;
-  } }`);
+  return evaluate(`window.__tapeReadingReplayProbe = { prices: () => [...new Set(
+    [...document.querySelectorAll('#tapeRows .tape-row:not([hidden]) span:first-child')]
+      .map((cell) => Number(cell.textContent)).filter((price) => price > 0)
+  )] }`);
+}
+
+// Only on failure. A wrong reading is almost always the core answering something
+// different from what the panel was asked to show, and guessing which costs a
+// whole run.
+async function diagnose(fixture, symbol) {
+  return evaluate(`(async () => {
+    const get = async (path, query) => {
+      const response = await fetch(path + '?' + new URLSearchParams(query));
+      return response.ok ? response.json() : { error: (await response.text()).trim() };
+    };
+    const status = await get('/api/external-replay/status', {});
+    const session = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' })
+      .format(new Date((status.replay?.position_us ?? 0) / 1000));
+    return {
+      replay: status.replay,
+      daily: await get('/api/panel-data/daily-bars', { symbol: ${JSON.stringify(symbol)}, before: session, limit: '20' }),
+      context: await get('/api/panel-data/rth-context', { symbol: ${JSON.stringify(symbol)}, session })
+    };
+  })()`, true);
 }
 
 async function evaluate(expression, awaitPromise = false) {
