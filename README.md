@@ -337,7 +337,7 @@ With demo mode running, the dependency-free browser check drives local Chrome at
 node scripts/browser-check.mjs
 ```
 
-The replay panel check needs no running server and no recorded data of its own. It generates a deterministic recording, starts the application in replay mode against it, and drives the real replay lifecycle in Chrome: a paused mid-session position, a backward seek across the running regular-session low, a forward seek, a reload while paused, and advancing past a later low that must not be visible before the replay reaches it.
+The replay panel check needs no running server and no recorded data of its own. It generates a deterministic recording of two symbols over two consecutive sessions, starts the application in replay mode against it, and drives the real replay lifecycle in Chrome: a paused mid-session position, a backward seek across the running regular-session low, a backward seek into the previous session, a ticker change mid-replay, a reload while paused, and advancing past a later low that must not be visible before the replay reaches it.
 
 ```bash
 node scripts/replay-panel-check.mjs

@@ -598,3 +598,63 @@ No product or test issue was found. The only change in this pass is this handoff
 | Real SMCI IBKR/live replay, backward seek and paused reload around 09:33 | pass; expected insufficient-history state, no browser errors |
 | `node scripts/browser-check.mjs` against `./go.sh demo -rewind` | pass |
 | `node scripts/browser-check.mjs` against `./go.sh demo` | pass |
+
+---
+
+# Tenth review pass after `865f854`
+
+`865f854` contains no code. It confirms the pass-eight correction and records another SMCI run. That recording is not in the repository, so as before its result is noted rather than reproduced. The pulled state passed every documented check.
+
+Rather than look for an eleventh finding in code that has now been read ten times, this pass closed the two gaps named at the end of the last one.
+
+## Both remaining replay gaps are now exercised
+
+The generated recording covers two symbols over two consecutive sessions. Each symbol's earlier session spans exactly its own ADR, so serving as a completed prior for the later session leaves the baseline unchanged and every reading stays a round number. The two symbols carry deliberately different baselines, so a symbol confused for the other changes the headline number and the baseline together:
+
+| | baseline | earlier session | later session | if the later low leaked |
+| --- | --- | --- | --- | --- |
+| AAPL | 5.00% | `1.00 ADR`, low 49.00 | `0.50 ADR`, low 98.00 | `1.15 ADR`, low 95.00 |
+| NVDA | 10.00% | `1.00 ADR`, low 200.00 | `0.50 ADR`, low 400.00 | `1.10 ADR`, low 380.00 |
+
+`scripts/replay-panel-check.mjs` now adds two steps to what it already drove:
+
+- **A backward seek into the previous session.** The panel derives its session from the clock and the core answers for the replay position's own session; this is where the two have to agree or the reading is for the wrong day. The panel must move from AAPL's later-session reading to its earlier-session one, and back.
+- **A ticker change mid-replay.** `plugin.md` asks that one symbol's ADR is never briefly shown while the ticker field says another. The check changes symbol through `/api/ticker`, the same path the ticker field uses, and requires the full NVDA reading including its 10.00% baseline, then the full AAPL reading on the way back.
+
+## What the mutations say, including the inconvenient one
+
+| Mutation | Detected |
+| --- | --- |
+| panels are never told about a snapshot, so a seek or symbol change leaves the previous answer on screen | yes |
+| session context reads the whole session instead of stopping at the as-of instant | yes |
+| `66453c4` reverted, so the core honours the browser's requested session in replay | **no** |
+
+The last row matters. `66453c4` overrides the requested session in replay and render modes to defend against a stale browser date, and with the override removed every assertion here still passes — including the cross-session seek written specifically to exercise it. The reason is the same one that made finding 11 a misdiagnosis: the browser adopts the authoritative instant from every snapshot before anything else in the message is applied, so by the time the panel asks, its date is already the replay's own. The override is correct and cheap defence in depth, and the comment in `panel_data.go` describes it accurately. It is not, on current evidence, load-bearing, and this handoff should not claim otherwise.
+
+The same is true of the `through_us` clamp from finding 1 in this scenario. What still justifies the clamp is the drift between snapshots — the browser clock advances at wall-clock rate while the replay position advances only when an event is emitted — which `TestReplayPanelSessionContextNeverLeaksALaterLow` covers directly at the handler.
+
+## One flake found and fixed in the check itself
+
+`SeekTo` relaunches the replay in a playing state, so pausing immediately after a seek races the play loop, which can finish first when the target leaves no events before the range end. The first version of the check pushed a bare `pause` and reported `replay is not running` on one run in five. It now polls the replay status and retries briefly, reporting the actual state if it never settles. Four consecutive clean runs after the change.
+
+## Verification rerun
+
+| Command | Result |
+| --- | --- |
+| `git diff --check origin/main...HEAD` | clean |
+| `go build -buildvcs=false ./cmd/tape-reading-tool` | pass |
+| `go vet ./...` | pass |
+| `gofmt -l .` | clean |
+| `go test -count=1 ./...` | pass |
+| `go test -count=1 -race ./...` | pass |
+| `node scripts/panel-host-check.mjs` | pass |
+| `node scripts/adr-panel-check.mjs` | pass |
+| `node scripts/audio-worklet-check.mjs` | pass |
+| `node scripts/rewind-check.mjs` | pass |
+| `node scripts/replay-panel-check.mjs` | pass, four consecutive runs |
+| `node scripts/browser-check.mjs` against `./go.sh demo -rewind` | pass |
+| `node scripts/browser-check.mjs` against `./go.sh demo` | pass |
+
+## What is left
+
+Only what cannot be reached without a broker: the IBKR and Massive live branches of `panel_data.go` are read, not run. Everything else on this branch — the panel contract, the ADR arithmetic, the session and symbol generation boundaries, and the no-look-ahead guarantees in replay and deterministic render — now has a check that has been shown to fail when the behaviour it describes is broken.

@@ -79,37 +79,57 @@ try {
   await waitForApp();
   await installProbe();
 
+  const aapl = fixture.readings.AAPL;
+  const nvda = fixture.readings.NVDA;
+
   step('seeking to a paused mid-session position');
-  await drive(fixture, fixture.steadyUS, true).catch(() => {});
+  await position(fixture, fixture.lateSteadyUS);
   // Selected once, with the replay already positioned. Every seek after this must
   // reach the same mounted panel: a replay generation boundary reloads a panel's
   // data, it does not replace the panel.
   const steady = await selectADR();
-  expect('paused mid-session', steady, fixture, fixture.steady);
+  expect('paused mid-session', steady, aapl, aapl.late);
   // The seek restarted the browser tape at 09:38, so it holds nothing at or below
   // the 09:32 low - often nothing at all, since a pause lands before prints flow.
   // The panel reports that low anyway, which it can only have got from the core.
-  if (steady.tapeLow !== null && steady.tapeLow <= Number(fixture.steady.low)) {
+  if (steady.tapeLow !== null && steady.tapeLow <= Number(aapl.late.low)) {
     throw new Error(`the running low must come from the core, not the browser tape: ${JSON.stringify(steady)}`);
   }
 
   // A paused replay is stopped in time; nothing delivered may move the reading.
   await sleep(1200);
   const frozen = await read();
-  expect('after holding the pause', frozen, fixture, fixture.steady);
+  expect('after holding the pause', frozen, aapl, aapl.late);
 
   // Backward across the running low. The low itself must disappear, and the
   // later low the recording holds at 09:45 must not appear in its place.
   step('seeking backward across the running low');
-  const backward = await drive(fixture, fixture.beforeLowUS, true);
-  expect('after seeking back before the low', backward, fixture, fixture.beforeLow);
+  const backward = await drive(fixture, fixture.lateBeforeLowUS);
+  expect('after seeking back before the low', backward, aapl, {
+    ...fixture.beforeLow, low: aapl.late.last, last: aapl.late.last
+  });
   if (backward.mounts !== steady.mounts) {
     throw new Error(`a seek must not remount the panel: ${steady.mounts} then ${backward.mounts}`);
   }
 
+  // Backward across a session boundary. The panel derives its session from the
+  // clock and the core answers for the replay position's own session, so this is
+  // where the two have to agree or the reading is for the wrong day.
+  step('seeking backward into the previous session');
+  const previousSession = await drive(fixture, fixture.earlySteadyUS);
+  expect('after seeking into the previous session', previousSession, aapl, aapl.early);
+
   step('seeking forward again');
-  const forward = await drive(fixture, fixture.steadyUS, true);
-  expect('after seeking forward again', forward, fixture, fixture.steady);
+  const forward = await drive(fixture, fixture.lateSteadyUS);
+  expect('after seeking forward again', forward, aapl, aapl.late);
+
+  // A ticker change mid-replay is a generation boundary too. The other symbol's
+  // baseline and reading are entirely different, so a stale answer is visible.
+  step('changing symbol mid-replay');
+  const switched = await changeSymbol('NVDA');
+  expect('after changing symbol mid-replay', switched, nvda, nvda.late);
+  const restored = await changeSymbol('AAPL');
+  expect('after changing back', restored, aapl, aapl.late);
 
   // Reload at a paused position. The browser clock cannot be extrapolated across
   // this: the position must come from the snapshot the server stamps.
@@ -119,17 +139,15 @@ try {
   await installProbe();
   await selectADR();
   const reloaded = await read();
-  expect('after reloading while paused', reloaded, fixture, fixture.steady);
+  expect('after reloading while paused', reloaded, aapl, aapl.late);
   if (!reloaded.clock.startsWith('09:38:')) {
     throw new Error(`a reload while paused must restore the replay position, not extrapolate: ${JSON.stringify(reloaded)}`);
   }
 
   // Only once the replay reaches it may the later low change the reading.
   step('advancing past the later low');
-  const afterLow = await drive(fixture, fixture.afterLowUS, true);
-  if (afterLow.low !== '$95.00' || afterLow.value === fixture.steady.value) {
-    throw new Error(`the 09:45 low must appear once the position passes it: ${JSON.stringify(afterLow)}`);
-  }
+  const afterLow = await drive(fixture, fixture.lateAfterLowUS);
+  expect('after advancing past the later low', afterLow, aapl, aapl.after);
 
   console.log('replay panel check: real replay seek, pause, reload, and no-look-ahead passed');
 } finally {
@@ -142,28 +160,56 @@ try {
   try { rmSync(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch (_) {}
 }
 
-function expect(label, reading, fixture, want) {
+function expect(label, reading, instrument, want) {
   const failure = (why) => { throw new Error(`${label}: ${why}: ${JSON.stringify(reading)}`); };
   if (reading.state) failure(`panel is not showing a reading (${reading.state})`);
   if (reading.value !== want.value || reading.percent !== want.percent) failure('wrong extension');
   if (reading.low !== `$${want.low}` || reading.last !== `$${want.last}`) failure('wrong low or last');
-  if (reading.baseline !== fixture.baseline || reading.history !== fixture.history) failure('wrong baseline');
+  if (reading.baseline !== instrument.baseline || reading.history !== instrument.history) failure('wrong baseline');
 }
 
-async function drive(fixture, targetUS, pause) {
-  await evaluate(`(async () => {
-    const post = (body) => fetch('/api/replay', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-    });
+// The ticker field's own path, so the check exercises what a trader does rather
+// than a shortcut the application does not use.
+async function changeSymbol(symbol) {
+  await evaluate(`fetch('/api/ticker', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol: ${JSON.stringify(symbol)} })
+  }).then((response) => response.ok || Promise.reject(new Error('ticker change failed')))`, true);
+  return readStable();
+}
+
+async function drive(fixture, targetUS) {
+  await position(fixture, targetUS);
+  return readStable();
+}
+
+// Starts the replay once, then seeks and pauses. Every response is checked: a
+// rejected seek would otherwise look like a panel that simply never updated.
+function position(fixture, targetUS) {
+  return evaluate(`(async () => {
+    const post = async (body) => {
+      const response = await fetch('/api/replay', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      });
+      if (!response.ok) throw new Error(body.action + ' failed: ' + (await response.text()).trim());
+      return response.json();
+    };
     if (!window.__tapeReadingReplayStarted) {
-      await post({ action: 'start', symbol: ${JSON.stringify(fixture.symbol)}, source: ${JSON.stringify(fixture.source)},
+      await post({ action: 'start', symbol: window.__tapeReadingPanels.symbol(), source: ${JSON.stringify(fixture.source)},
         provider: ${JSON.stringify(fixture.provider)}, start_us: ${fixture.startUS}, end_us: ${fixture.endUS}, speed: 0.25 });
       window.__tapeReadingReplayStarted = true;
     }
     await post({ action: 'seek', target_us: ${targetUS} });
-    ${pause ? `await post({ action: 'pause' });` : ''}
+    // The replay resumes playing from a seek, so the pause races the play loop:
+    // it can finish first when the target leaves no events before the range end.
+    // Retry briefly and report the state rather than the bare rejection.
+    for (let attempt = 0; ; attempt++) {
+      const status = await (await fetch('/api/replay')).json();
+      if (status.replay?.state === 'paused') return;
+      if (attempt >= 20) throw new Error('replay never paused at ${targetUS}: ' + JSON.stringify(status.replay));
+      try { await post({ action: 'pause' }); } catch (error) { await new Promise((resolve) => setTimeout(resolve, 50)); }
+    }
   })()`, true);
-  return readStable();
 }
 
 // A seek leaves the previous reading on screen while the panel reloads, so the
