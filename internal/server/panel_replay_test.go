@@ -195,6 +195,27 @@ func TestReplaySessionContextNeverLeaksALaterLow(t *testing.T) {
 	}
 }
 
+// The browser cannot ask for the right session if the wire never tells it where
+// the replay is. Every snapshot carries the authoritative instant, and in replay
+// and render modes that is the position rather than the wall clock: the browser
+// adopts it at each generation boundary because its own clock is an
+// extrapolation that a seek invalidates.
+func TestReplaySnapshotCarriesTheAuthoritativePosition(t *testing.T) {
+	fixture := newReplayPanelFixture(t)
+	for _, minute := range []int{36, 46} {
+		at := fixture.at(fixture.session, 9, minute)
+		if _, err := fixture.replay.StepRender(at); err != nil {
+			t.Fatal(err)
+		}
+		if got := fixture.server.streamTimeMS(); got != at/1000 {
+			t.Fatalf("snapshot clock was %d, want the replay position %d", got, at/1000)
+		}
+	}
+	if fixture.server.streamTimeMS()*1000 >= time.Now().UnixMicro() {
+		t.Fatal("an older replay must not stamp snapshots with the wall clock")
+	}
+}
+
 // History for an older replay is chosen from the replay session date. A session
 // that is completed, downloaded, and earlier than any real wall clock is still
 // in the replay's future, and must not enter the baseline.

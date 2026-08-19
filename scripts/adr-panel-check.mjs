@@ -41,6 +41,10 @@ assert.equal(classifyRTH(Date.parse('2026-03-09T13:30:00Z') * 1000).phase, 'open
 assert.equal(classifyRTH(Date.parse('2026-11-02T14:30:00Z') * 1000).phase, 'open', 'standard-time open must be timezone aware');
 assert.equal(seedRTHContext({ schemaVersion: 1, symbol: 'MSFT', sessionDateET: '2026-07-24' }, { symbol: 'AAPL', sessionDateET: '2026-07-24' }).status, 'stale');
 assert.equal(seedRTHContext({ schemaVersion: 1, symbol: 'AAPL', sessionDateET: '2026-07-24', status: 'incomplete', completeFromRTHOpen: false }, { symbol: 'AAPL', sessionDateET: '2026-07-24' }).status, 'incomplete');
+// A seed for another session is stale, not usable. In replay the core answers
+// for its own session, so the panel and the core agree only while the panel's
+// clock is the authoritative one it was given at the last generation boundary.
+assert.equal(seedRTHContext({ schemaVersion: 1, symbol: 'AAPL', sessionDateET: '2026-07-23', status: 'ready', completeFromRTHOpen: true, low: 1, last: 2 }, { symbol: 'AAPL', sessionDateET: '2026-07-24' }).status, 'stale');
 assert.equal(displayNumber(null), '--'); assert.equal(displayNumber(Number.NaN), '--');
 assert.equal(calculateADR(bars, 10, '2026-07-25').lookback, 10); assert.equal(calculateADR(bars, 10, '2026-07-25').bars.length, 10);
 

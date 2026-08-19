@@ -428,3 +428,51 @@ The first broad implementation clamped every mode and correctly failed the mount
 The complete suite passed on the final code: uncached Go tests, race tests, vet, build, formatting, panel-host and ADR checks, audio, rewind, both browser modes, and the feature diff audit. The unrelated local `go-render.sh` edit remains deliberately unstaged.
 
 The remaining replay gap is now specifically browser-to-real-replay lifecycle coverage, not the server data boundary.
+
+---
+
+# Sixth review pass after `66453c4`
+
+`66453c4` makes the core authoritative for the session in replay and deterministic render modes: the requested `session` is ignored there, so a stale browser date after a cross-session backward seek cannot select another day's data. Demo keeps honouring a requested historical session so the browser checks can exercise replay presentation without a recorded database. That split is right, and the added test covers both modes.
+
+The change is correct on its own terms. It also surfaced the thing underneath it.
+
+## 11. The browser threw away the authoritative clock it was already being sent
+
+Findings 1 and this commit both fix symptoms of one cause. Finding 1 clamped a `through_us` that had outrun the replay position; `66453c4` overrides a `session` that had done the same. Both exist because the browser keeps extrapolating a clock a seek has already invalidated.
+
+`streamTimeMS()` has always stamped every snapshot with the authoritative instant — the replay position in replay and render modes, the wall clock otherwise. The browser adopted it on the first snapshot and on status messages, but not on later snapshots. That is exactly backwards: a snapshot *is* the generation boundary, the one moment an extrapolated clock is guaranteed wrong.
+
+A replay seek makes it concrete. The seek publishes an empty same-symbol snapshot, `deferReplayReset` keeps the previous trades so the last complete frame stays on screen, and `observeReceiptClock` is skipped along with them. So the clock still reads the instant the seek just left, and that is the clock handed to the panels a few lines later.
+
+With `66453c4` in place, the consequence changed shape rather than going away. Before it, a cross-session seek asked for the wrong session and got an answer for it. Now the core correctly answers for its own session, the panel's `seedRTHContext` sees a `sessionDateET` it did not ask for, treats it as stale — which is right, its whole state is keyed to that date — and shows `ADR HISTORY UNAVAILABLE`. Correct core, correct panel, and a wrong result between them, until the first batch from the new position arrives and the session-change reload from finding 3 recovers it.
+
+The browser now adopts `server_time_ms` on every snapshot. The clamp and the session override both stay: they are the right behaviour for a core that owns the clock, and they are now defence in depth rather than load-bearing.
+
+## What is tested, and what is not
+
+Two contracts the fix rests on are now pinned:
+
+- `TestReplaySnapshotCarriesTheAuthoritativePosition` asserts the wire actually carries the replay position rather than the wall clock, at two stepped positions. Mutation tested: replacing `streamTimeMS` with `time.Now()` fails it.
+- `scripts/adr-panel-check.mjs` asserts a seed for a different session is stale rather than usable, so the panel's half of the agreement cannot quietly become tolerant.
+
+The browser half — that the app adopts the stamped clock across a real cross-session seek — is verified by reading, not by a check. Driving it needs a recorded database and a browser, which is the same gap named in every previous pass. This is worth being blunt about: findings 1, 3, 4, and now 11 all live in the replay path, all were found by reading, and none of them would have been caught by any check on this branch. The server half of that path now has real coverage. The browser half does not.
+
+Recording a short demo session to SQLite and replaying it under `scripts/browser-check.mjs` — start, pause, backward seek across a session boundary, forward seek, reload while paused — would close it, and would have caught four of the eleven findings on its own.
+
+## Verification rerun
+
+| Command | Result |
+| --- | --- |
+| `git diff --check origin/main...HEAD` | clean |
+| `go build -buildvcs=false ./cmd/tape-reading-tool` | pass |
+| `go vet ./...` | pass |
+| `gofmt -l .` | clean |
+| `go test -count=1 ./...` | pass |
+| `go test -count=1 -race ./...` | pass |
+| `node scripts/panel-host-check.mjs` | pass |
+| `node scripts/adr-panel-check.mjs` | pass |
+| `node scripts/audio-worklet-check.mjs` | pass |
+| `node scripts/rewind-check.mjs` | pass |
+| `node scripts/browser-check.mjs` against `./go.sh demo -rewind` | pass |
+| `node scripts/browser-check.mjs` against `./go.sh demo` | pass |

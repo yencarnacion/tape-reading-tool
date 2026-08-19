@@ -423,6 +423,16 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
         queueMicrotask(() => refreshReplayRange(false));
       }
       updateQuoteText();
+      // A snapshot is a generation boundary: a seek, a symbol change, or a
+      // reconnect. An extrapolated browser clock cannot survive one. A replay
+      // seek in particular publishes an empty same-symbol snapshot, so the
+      // retained trades are the ones the seek just left and the receipt clock is
+      // not resynchronised from them. The server stamps the authoritative
+      // instant on the snapshot itself - the replay position in replay and
+      // render modes - so adopt it before anything downstream reads the clock,
+      // or a backward seek asks the core for the instant it just moved away
+      // from and a cross-session seek asks for the wrong session entirely.
+      syncServerClock(message.server_time_ms);
       panelHost?.event({ type: 'snapshot', snapshot: { symbol: state.symbol, mode: state.status?.mode || '', generation: snapshot.generation, clockUS: serverNowUS(performance.now()), quote: { ...state.quote }, trades: state.trades.slice() } });
       return;
     }
