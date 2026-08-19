@@ -21,14 +21,20 @@ export class PanelHost {
     }
     this.active = null; this.root.className = 'analytics-panel-root panel-loading'; this.root.textContent = `LOADING ${manifest.name}`; this.picker.value = id;
     const controller = new AbortController();
+    // Core-owned fields are written after the capabilities so an application
+    // capability cannot shadow the generation guards a panel relies on. A panel
+    // may write only its own settings, so the host binds the mounted id and the
+    // manifest's declared fields rather than trusting the caller to name them.
     const host = Object.freeze({
+      ...this.capabilities,
       apiVersion: PANEL_API_VERSION, dataSchemaVersion: PANEL_DATA_SCHEMA_VERSION,
       signal: controller.signal, generation, isCurrent: () => this.generation === generation && !controller.signal.aborted,
-      ...this.capabilities
+      savePanelSettings: (next) => this.capabilities.savePanelSettings(id, next, manifest.defaultSettings)
     });
     try {
       this.root.className = 'analytics-panel-root'; this.root.replaceChildren();
-      const instance = manifest.factory({ root: this.root, host, manifest, settings: Object.freeze({ ...(this.settings.settings?.[id] || manifest.defaultSettings) }) });
+      const settings = Object.freeze({ ...manifest.defaultSettings, ...(this.settings.settings?.[id] || {}) });
+      const instance = manifest.factory({ root: this.root, host, manifest, settings });
       this.active = { id, manifest, instance: instance || {}, controller, generation };
       instance?.onEvent?.({ type: 'snapshot', snapshot: this.capabilities.currentSnapshot() });
     } catch (error) { this.fail(manifest, error, generation); }

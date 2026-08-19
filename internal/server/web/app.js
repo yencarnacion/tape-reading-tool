@@ -315,8 +315,14 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
               if (!response.ok) throw new Error((await response.text()).trim() || 'RTH context unavailable');
               return response.json();
             },
-            savePanelSettings: (next) => {
-              state.settings.panels.settings['adr-rth-extension'] = { lookbackSessions: clampInt(next?.lookbackSessions, 5, 60, 20) };
+            // The host supplies the mounted panel's id and its declared fields.
+            // Unknown fields are dropped and each panel's bounds are applied here,
+            // so a panel cannot widen its own limits or write another's settings.
+            savePanelSettings: (panelId, next, defaults) => {
+              const merged = { ...defaults };
+              for (const key of Object.keys(merged)) if (next?.[key] !== undefined) merged[key] = next[key];
+              if (panelId === 'adr-rth-extension') merged.lookbackSessions = clampInt(merged.lookbackSessions, 5, 60, 20);
+              state.settings.panels.settings[panelId] = merged;
               saveSettings();
             }
           }

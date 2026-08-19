@@ -52,6 +52,8 @@ panels.settings.<panel-id>
 
 Unknown IDs fall back to Tape Pressure. Reset restores Tape Pressure and ADR20.
 
+Settings are panel-owned in both directions. At mount a panel receives its manifest defaults merged with whatever is stored under its own id, so a field added in a later panel version still arrives with a value. The save capability is bound by the host to the mounted panel's id and to the fields its manifest declares: a panel cannot name another panel's id, cannot introduce undeclared fields, and cannot widen the bounds the application applies. Core-owned host fields — `signal`, `generation`, `isCurrent`, and the bound save capability — are written after the application capabilities so nothing can shadow the guards a panel relies on.
+
 Every lifecycle callback is wrapped. An exception replaces only the assigned root with a local error card and leaves the chart, tape, audio, feed, recording, replay, and WebSocket running. Details are restricted to the thrown message and browser console. The picker remains outside the panel root and can replace a failed panel.
 
 ## Performance and security expectations

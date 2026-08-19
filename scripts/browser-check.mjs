@@ -3,8 +3,9 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 
 const chrome = process.env.CHROME || 'google-chrome';
 
-// The demo prior sessions are synthetic and clock-independent: their mean
-// High / Low - 1 is always 4.90% over 20 completed sessions. The running low and
+// The demo prior sessions are synthetic and clock-independent: their range cycles
+// with period 5, so the mean High / Low - 1 is 4.90% for any lookback that is a
+// multiple of 5, including the default 20. The running low and
 // last, however, depend on when the check runs, so the extension is asserted
 // against the readings the panel itself displays rather than a fixed number.
 const DEMO_ADR_BASELINE = '4.90%';
@@ -134,6 +135,53 @@ try {
       panels.afterDebug.unmountCount < panels.beforeDebug.unmountCount + 3) {
     throw new Error(`analytics panel hot swap failed: ${JSON.stringify(panels)}`);
   }
+  // The ADR lookback is the one panel-owned setting in version 1. Changing it
+  // must relabel the baseline, reload the correct number of completed sessions,
+  // persist under this panel's own id, and leave the socket and tape alone.
+  const lookbackCheck = await command('Runtime.evaluate', {
+    expression: `(async () => {
+      const api = window.__tapeReadingPanels;
+      const socketBefore = api.socket();
+      api.swap('adr-rth-extension');
+      ${ADR_SETTLE_EXPRESSION}
+      const input = document.querySelector('.adr-lookback');
+      input.value = '10'; input.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const stored = JSON.parse(localStorage.getItem('tape-reading-tool.settings.v1')).panels.settings;
+      const changed = {
+        label: document.querySelector('.adr-label')?.textContent,
+        history: document.querySelector('.adr-history')?.textContent,
+        baseline: document.querySelector('.adr-baseline')?.textContent,
+        state: document.querySelector('.adr-state:not([hidden]) strong')?.textContent || '',
+        keys: Object.keys(stored), stored: stored['adr-rth-extension'],
+        sameSocket: socketBefore === api.socket()
+      };
+      input.value = '999'; input.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const clamped = { value: input.value, label: document.querySelector('.adr-label')?.textContent };
+      // Restore the default through the panel itself: the host persists the whole
+      // settings object on every swap, so editing localStorage here would be
+      // overwritten by the next mount.
+      input.value = '20'; input.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const restored = JSON.parse(localStorage.getItem('tape-reading-tool.settings.v1')).panels.settings['adr-rth-extension'];
+      api.swap('tape-pressure');
+      return { changed, clamped, restored };
+    })()`, awaitPromise: true, returnByValue: true
+  }, 10000);
+  const lookback = lookbackCheck.result.value;
+  if (lookback.changed.state !== '' && lookback.changed.state !== 'WAITING FOR RTH OPEN') {
+    throw new Error(`ADR lookback change left the panel unusable: ${JSON.stringify(lookback)}`);
+  }
+  if (lookback.changed.stored?.lookbackSessions !== 10 || lookback.changed.keys.join() !== 'adr-rth-extension' ||
+      !lookback.changed.sameSocket || lookback.clamped.value !== '60' ||
+      (lookback.changed.state === '' && (lookback.changed.label !== 'ADR10' || lookback.changed.history !== '10 / 10' ||
+        lookback.changed.baseline !== DEMO_ADR_BASELINE)) ||
+      (lookback.clamped.label && lookback.clamped.label !== 'ADR60') ||
+      lookback.restored?.lookbackSessions !== 20) {
+    throw new Error(`ADR lookback setting did not apply, bound, or persist: ${JSON.stringify(lookback)}`);
+  }
+
   await command('Runtime.evaluate', { expression: `window.__tapeReadingPanels.swap('adr-rth-extension')` });
   await sleep(150);
   await command('Page.reload', { ignoreCache: true });

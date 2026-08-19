@@ -138,3 +138,60 @@ The branch was fast-forwarded from GitHub and independently reviewed and tested 
 The complete documented suite passed: build, vet, formatting, Go unit and race tests, ADR model, audio, rewind, and browser checks in both normal demo and demo-with-rewind modes at 384, 634, 902, and 1372 pixels. The mounted checks covered hot swapping, persistence after reload, panel-local error recovery, stable slot geometry, and independent Live Rewind behavior.
 
 One review-hygiene issue was corrected after testing: six feature files had an extra blank line at EOF, causing `git diff --check origin/main...HEAD` to fail. This cleanup makes that diff audit pass and does not change runtime behavior. The pre-existing local `go-render.sh` edit remains deliberately unstaged.
+
+---
+
+# Second review pass after `13d3dae`
+
+`13d3dae` contains no runtime change — a trailing-newline cleanup and this document. The full documented suite was rerun against it and passed, including `git diff --check origin/main...HEAD`, which is now clean. The review effort therefore went into contract areas the first pass had only skimmed: settings ownership, the host object handed to a panel, and the Content Security Policy.
+
+CSP is unchanged and strict (`script-src 'self'`); the panel modules are same-origin ES modules and the `innerHTML` template strings contain no script. Nothing to do there.
+
+Two contract defects were found in settings ownership. Both are latent today because ADR is the only built-in panel with settings, and both become live the moment a second one exists.
+
+## 6. Any panel could write the ADR panel's settings, and no panel could write its own
+
+`plugin.md` scopes the capability to "read or save only that panel's settings", and `docs/PANEL_API_V1.md` calls settings panel-owned. The capability was hardcoded:
+
+```js
+savePanelSettings: (next) => {
+  state.settings.panels.settings['adr-rth-extension'] = { lookbackSessions: clampInt(...) };
+  saveSettings();
+}
+```
+
+Whichever panel called it wrote ADR's key, and no future panel could persist anything of its own. The host now binds the mounted panel's id and its manifest's declared fields, and the application applies each panel's bounds. A panel cannot name another id, introduce an undeclared field, or widen its own limits.
+
+## 7. Stored settings replaced manifest defaults instead of merging with them
+
+`plugin.md` requires that new fields merge with defaults. Mount read `{ ...(stored[id] || manifest.defaultSettings) }`, so a stored object won outright: a field added in a later panel version arrived `undefined` for every user who had already saved settings. Now `{ ...manifest.defaultSettings, ...(stored[id] || {}) }`.
+
+While in that constructor, the host object was also reordered. `...this.capabilities` was spread last, so an application capability named `signal`, `generation`, or `isCurrent` would silently replace the core-owned generation guards every panel depends on for stale-response rejection. Core fields are now written after the capabilities.
+
+## New coverage
+
+The ADR lookback is version 1's only panel-owned setting and nothing exercised it end to end. `scripts/browser-check.mjs` now drives it: changing 20 to 10 relabels the readout to `ADR10`, reloads exactly `10 / 10` completed sessions, keeps the same WebSocket, and persists under `adr-rth-extension` and no other key; an out-of-range 999 clamps to 60; and the default restores through the panel itself. The assertion was mutation-tested by binding the save capability to the wrong panel id — the check fails with the stray key visible.
+
+Note when extending that block: the host persists the whole settings object on every swap, so editing `localStorage` directly is undone by the next mount. Drive the panel's own control instead.
+
+Also corrected in the checks: the demo synthetic daily range cycles with period 5, so its mean `High / Low - 1` is 4.90% for any lookback that is a multiple of 5. An ADR10 and an ADR20 baseline are legitimately identical in demo mode; the comment now says so, to save the next reader the same wrong assumption.
+
+## Verification rerun
+
+| Command | Result |
+| --- | --- |
+| `git diff --check origin/main...HEAD` | clean |
+| `go build -buildvcs=false ./cmd/tape-reading-tool` | pass |
+| `go vet ./...` | pass |
+| `gofmt -l .` | clean |
+| `go test -count=1 ./...` | pass |
+| `go test -count=1 -race ./...` | pass |
+| `node scripts/adr-panel-check.mjs` | pass |
+| `node scripts/audio-worklet-check.mjs` | pass |
+| `node scripts/rewind-check.mjs` | pass |
+| `node scripts/browser-check.mjs` against `./go.sh demo -rewind` | pass |
+| `node scripts/browser-check.mjs` against `./go.sh demo` | pass |
+
+## Still the highest-value gap
+
+Unchanged from the first pass: no check drives a real historical replay. There is no recorded database in the working tree, and the browser check simulates replay by injecting panel events rather than by driving the server's replay lifecycle. A recorded session replayed end to end — start, pause, backward seek, forward seek, reload while paused — remains the most useful check nobody has written.
