@@ -569,3 +569,32 @@ The replay gap that motivated eight passes is closed on both sides. What remains
 
 - The generated recording has one symbol and one session, so a **cross-session** backward seek and a **symbol change mid-replay** are still unexercised. Both are generation boundaries where the panel and the core have to agree on a date, and `66453c4` was written for exactly that case.
 - No check covers **IBKR or Massive live** mode. That is inherent — they need a broker connection — but it means the live-mode branches of `panel_data.go` are read, not run.
+
+---
+
+# Ninth review pass after `73d9d3c`
+
+`73d9d3c` was pulled and reviewed. The correction is valid: `handleMessage` already synchronizes `server_time_ms` at the start of every snapshot, so the removed late call was redundant. The generated replay fixture and browser driver exercise the actual server, SQLite recording, replay feed, WebSocket snapshots, HTTP panel-data capabilities, panel lifecycle, and visible browser state rather than simulating panel events. The fixture's constant 5.00% ADR baseline and deliberately later low make both the arithmetic and no-look-ahead assertions meaningful.
+
+The generated replay check passed. A separate replay against the local August 18 SMCI IBKR/live recording also passed around 09:33: a paused position at 09:33:30 was sought backward to 09:33:00, the visible clock moved backward, the ADR panel stayed mounted, a paused reload restored 09:33:00, and the browser logged no errors. As in the prior pass, the real recording truthfully shows `INSUFFICIENT ADR HISTORY` because it has no SMCI daily bars and begins after the 09:30 open; the generated fixture is what validates the numeric `1.00 ADR` path.
+
+No product or test issue was found. The only change in this pass is this handoff note. The unrelated local `go-render.sh` edit remains deliberately unstaged.
+
+## Verification rerun
+
+| Command or scenario | Result |
+| --- | --- |
+| `git diff --check origin/main...HEAD` | clean |
+| `go build -buildvcs=false ./cmd/tape-reading-tool` | pass |
+| `go vet ./...` | pass |
+| `gofmt -l .` | clean |
+| `go test -count=1 ./...` | pass |
+| `go test -count=1 -race ./...` | pass |
+| `node scripts/panel-host-check.mjs` | pass |
+| `node scripts/adr-panel-check.mjs` | pass |
+| `node scripts/audio-worklet-check.mjs` | pass |
+| `node scripts/rewind-check.mjs` | pass |
+| `node scripts/replay-panel-check.mjs` | pass |
+| Real SMCI IBKR/live replay, backward seek and paused reload around 09:33 | pass; expected insufficient-history state, no browser errors |
+| `node scripts/browser-check.mjs` against `./go.sh demo -rewind` | pass |
+| `node scripts/browser-check.mjs` against `./go.sh demo` | pass |
