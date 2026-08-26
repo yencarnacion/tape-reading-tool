@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {
-  applyEligibleTrades, calculateADR, calculateExtension, classifyRTH, displayNumber, seedRTHContext, validCompletedDailyBar
+  applyEligibleTrades, calculateADR, calculateExtension, classifyRTH, displayNumber, extensionTone, seedRTHContext, validCompletedDailyBar
 } from '../internal/server/web/adr-rth-extension-model.js';
 
 const date = (index) => `2026-07-${String(index + 1).padStart(2, '0')}`;
@@ -52,5 +52,8 @@ assert.equal(seedRTHContext({ schemaVersion: 1, symbol: 'AAPL', sessionDateET: '
 assert.equal(seedRTHContext({ schemaVersion: 1, symbol: 'AAPL', sessionDateET: '2026-07-23', status: 'ready', completeFromRTHOpen: true, low: 1, last: 2 }, { symbol: 'AAPL', sessionDateET: '2026-07-24' }).status, 'stale');
 assert.equal(displayNumber(null), '--'); assert.equal(displayNumber(Number.NaN), '--');
 assert.equal(calculateADR(bars, 10, '2026-07-25').lookback, 10); assert.equal(calculateADR(bars, 10, '2026-07-25').bars.length, 10);
+assert.equal(extensionTone('low', .0101), 'bullish');
+assert.equal(extensionTone('high', .0101), 'bearish');
+assert.equal(extensionTone('low', .01), 'neutral', 'the threshold is strictly above 0.01 ADR');
 
 console.log('ADR panel check: formula, completeness, RTH boundaries, no-look-ahead, and formatting passed');

@@ -207,7 +207,7 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
         largeBoost: Number(audioConfig.large_boost) || 1.8,
         maxVoices: Number(audioConfig.max_voices) || 192
       },
-      panels: { slots: { primaryAnalytics: { activePanelId: 'adr-rth-extension' } }, settings: { 'adr-rth-extension': { lookbackSessions: 20, directionMode: 'auto' } } }
+      panels: { slots: { primaryAnalytics: { activePanelId: 'adr-rth-extension' } }, settings: { 'adr-rth-extension': { lookbackSessions: 20, directionMode: 'low' } } }
     };
   }
 
@@ -241,8 +241,10 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
     result.audio.largeBoost = clampNumber(result.audio.largeBoost, 1, 4, defaults.audio.largeBoost);
     result.audio.maxVoices = clampInt(result.audio.maxVoices, 8, 512, defaults.audio.maxVoices);
     if (!['tape-pressure', 'adr-rth-extension', 'blank'].includes(result.panels.slots.primaryAnalytics.activePanelId)) result.panels.slots.primaryAnalytics.activePanelId = 'adr-rth-extension';
-    const adrMode = String(result.panels.settings['adr-rth-extension']?.directionMode || 'auto').toLowerCase();
-    result.panels.settings['adr-rth-extension'] = { lookbackSessions: clampInt(result.panels.settings['adr-rth-extension']?.lookbackSessions, 5, 60, 20), directionMode: ['auto', 'low', 'high'].includes(adrMode) ? adrMode : 'auto' };
+    const adrMode = String(result.panels.settings['adr-rth-extension']?.directionMode || 'low').toLowerCase();
+    // AUTO was the former default. Migrate that inherited value to the new,
+    // deterministic FROM LOW default on the next settings load.
+    result.panels.settings['adr-rth-extension'] = { lookbackSessions: clampInt(result.panels.settings['adr-rth-extension']?.lookbackSessions, 5, 60, 20), directionMode: adrMode === 'high' ? 'high' : 'low' };
     return result;
   }
 
@@ -325,7 +327,7 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
               const merged = mergePanelSettings(defaults, next);
               if (panelId === 'adr-rth-extension') {
                 merged.lookbackSessions = clampInt(merged.lookbackSessions, 5, 60, 20);
-                merged.directionMode = ['auto', 'low', 'high'].includes(String(merged.directionMode || '').toLowerCase()) ? String(merged.directionMode).toLowerCase() : 'auto';
+                merged.directionMode = ['auto', 'low', 'high'].includes(String(merged.directionMode || '').toLowerCase()) ? String(merged.directionMode).toLowerCase() : 'low';
               }
               state.settings.panels.settings[panelId] = merged;
               saveSettings();
@@ -749,6 +751,7 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
     elements.minuteChartTab.setAttribute('aria-pressed', String(!daily));
     elements.dailyChartTab.setAttribute('aria-pressed', String(daily));
     document.querySelector('.legend-vwap').hidden = daily;
+    document.querySelector('.legend-volume').hidden = !daily;
     if (daily) {
       state.dirtyDailyChart = true;
       void loadDailyHistory();
@@ -1518,7 +1521,9 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
     const left = 7;
     const right = width - axisWidth;
     const top = 55;
-    const bottom = height - 22;
+    const volumeHeight = Math.max(42, Math.min(78, height * .24));
+    const volumeTop = height - 22 - volumeHeight;
+    const bottom = volumeTop - 8;
     const step = (right - left) / bars.length;
     const xAt = (index) => left + (index + .5) * step;
     let minimum = Infinity;
@@ -1557,6 +1562,17 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
         dailyContext.strokeRect(x - bodyWidth / 2, bodyTop, bodyWidth, bodyHeight);
       } else dailyContext.fillRect(x - bodyWidth / 2, bodyTop, bodyWidth, bodyHeight);
     });
+    const maximumVolume = Math.max(1, ...bars.map((bar) => Math.max(0, Number(bar.volume) || 0)));
+    dailyContext.strokeStyle = '#343c46'; dailyContext.lineWidth = 1;
+    dailyContext.beginPath(); dailyContext.moveTo(left, volumeTop); dailyContext.lineTo(right, volumeTop); dailyContext.stroke();
+    bars.forEach((bar, index) => {
+      const volume = Math.max(0, Number(bar.volume) || 0);
+      const barHeight = volume / maximumVolume * (volumeHeight - 4);
+      dailyContext.fillStyle = bar.close >= bar.open ? 'rgba(52,199,217,.58)' : 'rgba(255,77,94,.58)';
+      dailyContext.fillRect(xAt(index) - bodyWidth / 2, volumeTop + volumeHeight - barHeight, bodyWidth, barHeight);
+    });
+    dailyContext.fillStyle = '#8d96a2'; dailyContext.textAlign = 'left'; dailyContext.textBaseline = 'top';
+    dailyContext.fillText(`VOL ${formatSize(bars[bars.length - 1].volume)}`, left, volumeTop + 4);
     drawLine('lower', '#f2f5f7', 1, .72);
     drawLine('upper', '#f2f5f7', 1, .72);
     drawLine('sma20', '#56c7ff', 1.6, 1);

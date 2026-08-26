@@ -22,20 +22,17 @@ function assertDemoADR(label, reading) {
   const fail = (why) => { throw new Error(`${label}: ${why}: ${JSON.stringify(reading)}`); };
   if (!DOCUMENTED_ADR_STATES.includes(reading.state || '') && reading.state) fail('undocumented panel state');
   if (reading.state === 'WAITING FOR RTH OPEN') {
-    if (!String(reading.detail || '').includes(`ADR20 ${DEMO_ADR_BASELINE}`)) fail('waiting state lost the loaded baseline');
+    if (reading.stateBaseline !== DEMO_ADR_BASELINE || reading.stateLabel !== 'ADR20') fail('waiting state lost the loaded baseline');
     return;
   }
   if (reading.state) fail('demo mode must reach a ready ADR reading');
   if (reading.stateDisplayed || !reading.readyDisplayed) fail('loading and ready faces must be visually exclusive');
   if (reading.baseline !== DEMO_ADR_BASELINE || reading.history !== '20 / 20') fail('demo baseline is not the documented 20-session mean');
-  if (reading.mode !== 'auto' || !reading.fromLow.includes('ADR') || !reading.fromHigh.includes('ADR')) fail('AUTO mode must keep both directional readings visible');
-  const low = Number.parseFloat(String(reading.low).replace('$', ''));
-  const last = Number(String(reading.last).replace('$', ''));
+  if (reading.mode !== 'low') fail('FROM LOW must be the default direction');
   const extension = Number(String(reading.value).replace(' ADR', ''));
   const percent = Number.parseFloat(String(reading.percent));
-  if (!(low > 0) || !(last > 0) || !Number.isFinite(extension) || !Number.isFinite(percent)) fail('unreadable ADR readings');
-  if (Math.abs(percent - (last / low - 1) * 100) > 0.02) fail('raw move does not match the displayed low and last');
-  if (Math.abs(extension - (last / low - 1) / DEMO_ADR) > 0.02) fail('extension is not the raw move divided by the baseline');
+  if (!Number.isFinite(extension) || !Number.isFinite(percent)) fail('unreadable ADR readings');
+  if (Math.abs(extension - percent / 100 / DEMO_ADR) > 0.02) fail('extension is not the raw move divided by the baseline');
 }
 
 // Demo history is local, so the panel settles quickly; wait for it rather than
@@ -55,6 +52,8 @@ const ADR_READING_EXPRESSION = `({
   stateDisplayed: getComputedStyle(document.querySelector('.adr-state')).display !== 'none',
   readyDisplayed: getComputedStyle(document.querySelector('.adr-ready')).display !== 'none',
   detail: document.querySelector('.adr-state:not([hidden]) small')?.textContent || '',
+  stateLabel: document.querySelector('.adr-state:not([hidden]) .adr-state-baseline b')?.textContent || '',
+  stateBaseline: document.querySelector('.adr-state:not([hidden]) .adr-state-baseline output')?.textContent || '',
   value: document.querySelector('.adr-ready:not([hidden]) .adr-value')?.textContent || '',
   percent: document.querySelector('.adr-ready:not([hidden]) .adr-percent')?.textContent || '',
   low: document.querySelector('.adr-ready:not([hidden]) .adr-low')?.textContent || '',
@@ -173,7 +172,7 @@ try {
         value: document.querySelector('.adr-value')?.textContent,
         stored: JSON.parse(localStorage.getItem('tape-reading-tool.settings.v1')).panels.settings['adr-rth-extension']
       };
-      mode.value = 'auto'; mode.dispatchEvent(new Event('change', { bubbles: true }));
+      mode.value = 'low'; mode.dispatchEvent(new Event('change', { bubbles: true }));
       input.value = '999'; input.dispatchEvent(new Event('change', { bubbles: true }));
       await new Promise((resolve) => setTimeout(resolve, 600));
       const clamped = { value: input.value, label: document.querySelector('.adr-label')?.textContent };
@@ -191,13 +190,13 @@ try {
   if (lookback.changed.state !== '' && lookback.changed.state !== 'WAITING FOR RTH OPEN') {
     throw new Error(`ADR lookback change left the panel unusable: ${JSON.stringify(lookback)}`);
   }
-  if (lookback.changed.stored?.lookbackSessions !== 10 || lookback.changed.stored?.directionMode !== 'auto' || lookback.changed.keys.join() !== 'adr-rth-extension' ||
+  if (lookback.changed.stored?.lookbackSessions !== 10 || lookback.changed.stored?.directionMode !== 'low' || lookback.changed.keys.join() !== 'adr-rth-extension' ||
       !lookback.changed.sameSocket || lookback.clamped.value !== '60' ||
       lookback.highMode.mode !== 'high' || !lookback.highMode.percent.includes('FROM RTH HIGH') || lookback.highMode.stored?.directionMode !== 'high' ||
       (lookback.changed.state === '' && (lookback.changed.label !== 'ADR10' || lookback.changed.history !== '10 / 10' ||
         lookback.changed.baseline !== DEMO_ADR_BASELINE)) ||
       (lookback.clamped.label && lookback.clamped.label !== 'ADR60') ||
-      lookback.restored?.lookbackSessions !== 20 || lookback.restored?.directionMode !== 'auto') {
+      lookback.restored?.lookbackSessions !== 20 || lookback.restored?.directionMode !== 'low') {
     throw new Error(`ADR lookback setting did not apply, bound, or persist: ${JSON.stringify(lookback)}`);
   }
 

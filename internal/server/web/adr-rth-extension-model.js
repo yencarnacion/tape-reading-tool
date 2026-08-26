@@ -85,3 +85,11 @@ export function calculateExtension(adrResult, context, requestedMode = 'auto') {
 export function displayNumber(value, digits = 2) {
   return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '--';
 }
+
+// A move away from the running low is bullish context; a move down from the
+// running high is bearish context. Keep the first 0.01 ADR neutral so color is
+// a meaningful directional cue rather than decoration around market noise.
+export function extensionTone(mode, extension, threshold = 0.01) {
+  if (!['low', 'high'].includes(mode) || !Number.isFinite(Number(extension)) || Number(extension) <= threshold) return 'neutral';
+  return mode === 'low' ? 'bullish' : 'bearish';
+}

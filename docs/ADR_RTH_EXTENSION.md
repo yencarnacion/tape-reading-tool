@@ -54,7 +54,9 @@ History responses report source/provider and an adjustment convention. Version 1
 
 ## Presentation
 
-The main value is shown in ADR units with the selected raw percent and direction. Supporting fields always show both directional ADR readings, the running high and low with their times, last, ADR period/value, and history count. The neutral magnitude scale marks 0.00 through 1.25+; its fill may cap while the numeric value continues above 1.25. It issues no alerts and carries no buy, sell, safe, winner, or reversal label.
+The main value is shown in ADR units with the selected raw percent and direction. A persistent, readable basis line explains that `ADR20`, for example, is the average daily range of 20 completed RTH sessions; it remains visible during loading, insufficient-history, and waiting-for-open states. Supporting fields show both directional ADR readings, the running high and low with their times, last, ADR period/value, and history count.
+
+Directional color begins only when the displayed extension is strictly above `0.01 ADR`: extension from the running RTH low uses the bullish teal cue, while extension down from the running RTH high uses the bearish orange cue. Values at or below `0.01 ADR` remain neutral. The colors describe direction only—they are not trade or reversal signals. The magnitude scale marks 0.00 through 1.25+; its fill may cap while the numeric value continues above 1.25.
 
 The readout is achromatic on purpose. Every saturated hue in the application already carries an instant meaning — green/red delta, cyan/amber price direction, blue/orange tape sides, the violet RVOL magnitude ramp, amber Live Rewind chrome — so extension, which is neither a side nor an alarm, is carried by the number, the labels, and the meter position instead of by a colour that would read as one of those.
 
