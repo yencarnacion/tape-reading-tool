@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -64,6 +65,18 @@ type rvolHistoryCache struct {
 type dailyHistoryCache struct {
 	through string
 	bars    []storage.MinuteBar
+}
+
+type jsonNumber float64
+
+func (n *jsonNumber) UnmarshalJSON(data []byte) error {
+	text := strings.Trim(strings.TrimSpace(string(data)), `"`)
+	value, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return err
+	}
+	*n = jsonNumber(value)
+	return nil
 }
 
 type streamMessage struct {
@@ -141,6 +154,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	mux.HandleFunc("/api/daily-history", s.handleDailyHistory)
 	mux.HandleFunc("/api/panel-data/daily-bars", s.handlePanelDailyBars)
 	mux.HandleFunc("/api/panel-data/rth-context", s.handlePanelRTHContext)
+	mux.HandleFunc("/api/trading-position", s.handleTradingPosition)
 	mux.HandleFunc("/ws", s.handleWebSocket)
 
 	sub, err := fs.Sub(webFS, "web")
@@ -173,6 +187,56 @@ func (s *Server) Serve(ctx context.Context) error {
 		}
 		return err
 	}
+}
+
+// handleTradingPosition is a read-only, loopback bridge to the private trading
+// controller. The public tape tool exposes only the chart data it needs and
+// remains useful when the private service is absent.
+func (s *Server) handleTradingPosition(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	target := strings.TrimSpace(os.Getenv("TRADING_TOOLS_STATUS_URL"))
+	if target == "" {
+		target = "http://127.0.0.1:8176/api/status"
+	}
+	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
+	if err != nil {
+		http.Error(w, "position unavailable", http.StatusBadGateway)
+		return
+	}
+	client := &http.Client{Timeout: 400 * time.Millisecond}
+	response, err := client.Do(request)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"available": false})
+		return
+	}
+	defer response.Body.Close()
+	var status struct {
+		ManagedSymbol string
+		Position      *struct {
+			Symbol       string     `json:"symbol"`
+			Quantity     int64      `json:"quantity"`
+			AveragePrice jsonNumber `json:"average_price"`
+		}
+		Stop *struct {
+			StopPrice jsonNumber `json:"stop_price"`
+		}
+	}
+	if response.StatusCode != http.StatusOK || json.NewDecoder(http.MaxBytesReader(w, response.Body, 1<<20)).Decode(&status) != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"available": false})
+		return
+	}
+	if status.Position == nil || status.Position.Quantity == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"available": true, "symbol": status.ManagedSymbol})
+		return
+	}
+	stop := jsonNumber(0)
+	if status.Stop != nil {
+		stop = status.Stop.StopPrice
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"available": true, "symbol": status.Position.Symbol, "shares": status.Position.Quantity, "average_cost": float64(status.Position.AveragePrice), "stop": float64(stop)})
 }
 
 func (s *Server) SetMode(mode string) { s.mode = strings.ToLower(mode) }

@@ -71,7 +71,7 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
     minuteBars: [], dailyBars: [], marketChartView: 'minute', dailyHistorySymbol: '', dailyHistoryPending: false, dirtyDailyChart: true,
     replayChartEndUS: 0, replayChartKey: '', dirtyReplayChart: true, marketChartEnabled: false, xtraEnabled: false,
     rvolWarmup: { symbol: '', ready: false, pending: false, attempt: 0, token: 0, timer: null, controller: null },
-    tickScale: null, minuteScale: null, renderNowMS: null, renderInitialized: false,
+    tickScale: null, minuteScale: null, renderNowMS: null, renderInitialized: false, tradingPosition: null,
     rewindConfig: null, rewindPaneAvailable: false,
     rewind: {
       active: false, playing: false, buffer: null, source: null, targetSeq: 0, targetUS: 0,
@@ -814,6 +814,32 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
   // Exposed solely for deterministic browser validation.
   window.__tapeReadingScale = updatePriceScale;
 
+  function drawTradingPositionLevels(chartContext, priceY, minimum, maximum, left, right, priceTop, priceBottom, background) {
+    if (state.tradingPosition?.symbol !== state.symbol) return;
+    const position = state.tradingPosition;
+    const levels = [
+      { price: Number(position.average_cost), color: '#58c8e8', dash: [], label: `AVG ${formatPrice(position.average_cost)} · ${Math.abs(Number(position.shares))} SH` },
+      { price: Number(position.stop), color: '#ff6b76', dash: [5, 4], label: `STOP ${formatPrice(position.stop)}` },
+    ].filter((level) => level.price > 0);
+    const edgeCounts = { above: 0, below: 0 };
+    for (const level of levels) {
+      const edge = level.price > maximum ? 'above' : level.price < minimum ? 'below' : '';
+      const edgeOffset = edge ? edgeCounts[edge]++ * 18 : 0;
+      const y = edge === 'above' ? priceTop + 10 + edgeOffset : edge === 'below' ? priceBottom - 10 - edgeOffset : priceY(level.price);
+      const label = edge ? `${edge === 'above' ? '↑' : '↓'} ${level.label}` : level.label;
+      chartContext.save();
+      chartContext.font = '700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+      chartContext.setLineDash(level.dash); chartContext.strokeStyle = level.color; chartContext.globalAlpha = 0.72; chartContext.lineWidth = 1;
+      chartContext.beginPath(); chartContext.moveTo(left, y); chartContext.lineTo(edge ? Math.min(right, left + 22) : right, y); chartContext.stroke();
+      chartContext.setLineDash([]); chartContext.globalAlpha = 0.94; chartContext.fillStyle = background;
+      const labelWidth = chartContext.measureText(label).width + 8;
+      chartContext.fillRect(left + 3, y - 8, labelWidth, 16);
+      chartContext.fillStyle = level.color; chartContext.textAlign = 'left'; chartContext.textBaseline = 'middle';
+      chartContext.fillText(label, left + 7, y);
+      chartContext.restore();
+    }
+  }
+
   // One tick-chart renderer, two render targets. The live pane and the Live
   // Rewind pane pass different bars, tick sizes, scales, and panels; nothing
   // about the drawing itself is duplicated or forked.
@@ -926,6 +952,8 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
       context.stroke();
     });
 
+    if (target.showTradingPosition) drawTradingPositionLevels(context, priceY, minimum, maximum, left, right, priceTop, priceBottom, target.background);
+
     drawPaneBorder(deltaTop, deltaBottom, 'VOLUME DELTA', formatSigned(visible[visible.length - 1].delta));
     const zero = deltaTop + (deltaBottom - deltaTop) / 2;
     context.setLineDash([4, 4]);
@@ -988,7 +1016,7 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
 
   const liveChartTarget = {
     canvas: elements.chart, context, empty: elements.chartEmpty, background: '#0c0f13',
-    bars: () => state.bars,
+    bars: () => state.bars, showTradingPosition: true,
     visibleBars: () => state.settings.visibleBars,
     getScale: () => state.tickScale,
     setScale: (value) => { state.tickScale = value; },
@@ -1279,6 +1307,8 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
       xtraLevels = calculateXtraLevels(state.minuteBars).filter((level) => level.price >= candleMinimum && level.price <= candleMaximum);
       drawXtraLevels(xtraLevels, priceY, left, right, rightAxis, top, priceBottom);
     }
+
+    drawTradingPositionLevels(replayContext, priceY, minimum, maximum, left, right, top, priceBottom, '#0c0f13');
 
     replayContext.strokeStyle = '#3a424c';
     replayContext.beginPath(); replayContext.moveTo(left, volumeTop); replayContext.lineTo(width, volumeTop); replayContext.stroke();
@@ -2774,6 +2804,16 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
   connect();
   refreshExternalReplayStatus();
   setInterval(refreshExternalReplayStatus, 500);
+  async function refreshTradingPosition() {
+    try {
+      const response = await fetch('/api/trading-position', { cache: 'no-store' });
+      const position = response.ok ? await response.json() : null;
+      state.tradingPosition = position?.available && Number(position.shares) !== 0 ? position : null;
+      state.dirtyChart = true;
+    } catch (_) { state.tradingPosition = null; }
+  }
+  void refreshTradingPosition();
+  setInterval(refreshTradingPosition, 1000);
   updateNavButtons();
   updateSoundButton();
   requestAnimationFrame(animationLoop);
