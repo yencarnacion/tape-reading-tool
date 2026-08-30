@@ -5,15 +5,12 @@ import {
 (() => {
   'use strict';
 
-  // The chart renderer is intentionally left untouched. This module listens at
-  // the Canvas 2D boundary, where the renderer has already established the exact
-  // visible price scale. Pivot lines therefore cannot change chart scaling or
-  // consume horizontal bar space, and the same overlay works for live, replay,
-  // deterministic render, and Live Rewind canvases.
+  // Daily pivots belong only on the ordinary one-minute market chart. The live
+  // tick chart and Live Rewind remain pure tape/price-action views. This module
+  // listens at the one-minute canvas boundary, after app.js has established the
+  // exact visible price scale, so pivots never alter scaling or candle capacity.
   const TARGETS = new Map([
-    ['chartCanvas', { left: 6, priceElement: 'lastPrice', background: '#0c0f13' }],
-    ['replayChartCanvas', { left: 7, priceElement: 'lastPrice', background: '#0c0f13' }],
-    ['rewindCanvas', { left: 6, priceElement: 'rewindLast', background: '#080a0d' }]
+    ['replayChartCanvas', { left: 7, priceElement: 'lastPrice', background: '#0c0f13' }]
   ]);
   const ET_DATE = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit'
@@ -166,7 +163,7 @@ import {
     try {
       if (path === '/api/replay') {
         const payload = await response.json();
-        setObservedClockUS(payload.chart_end_us || payload.replay?.position_us);
+        setObservedClockUS(payload.chart_end_us || payload.replay?.position_us || payload.position_us);
         return;
       }
       if (path === '/api/render') {
@@ -181,8 +178,8 @@ import {
     } catch (_) {}
   }
 
-  // Observe only the application requests that establish an authoritative replay
-  // date. The response returned to app.js is untouched; parsing happens on a clone.
+  // Observe only application requests that establish an authoritative replay
+  // date. The response returned to app.js is untouched; parsing uses a clone.
   window.fetch = async function pivotAwareFetch(input, init) {
     const path = requestPath(input);
     const requestBody = parseRequestBody(init);
@@ -233,8 +230,8 @@ import {
       blockedY: capture.blockedY, target
     };
     mappings.set(canvas.id, mapping);
-    // Grid labels are the final operation before price bars begin. Draw guides
-    // now so the renderer paints candles and indicators over them.
+    // Guides are painted immediately after the grid and before candles. Labels
+    // are deferred until the chart has painted bars, indicators, and positions.
     drawLines(mapping);
     queueMicrotask(() => drawLabels(mapping));
   }
@@ -319,6 +316,7 @@ import {
       status: pivotState.status,
       message: pivotState.message,
       priorRange: pivotState.priorRange,
+      targets: [...TARGETS.keys()],
       levels: pivotState.levels.map(({ key, price }) => ({ key, price }))
     })
   };
