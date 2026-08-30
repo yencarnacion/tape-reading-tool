@@ -50,12 +50,21 @@ export function dailyPivotProximity(levels, currentPrice, priceY = null, priorRa
   const pixelDistance = typeof priceY === 'function'
     ? Math.abs(Number(priceY(last)) - Number(priceY(nearest.level.price)))
     : Infinity;
-  const normalizedThreshold = Math.max(last * 0.002, Math.max(0, Number(priorRange) || 0) * 0.05);
+
+  // A dual threshold avoids the two common failures of a fixed-dollar alert:
+  // it scales across $1 and $500 stocks, and it respects what is visually close
+  // on the trader's current chart. The RTH-range component adapts to volatility
+  // but is capped so an extreme prior day cannot make "near" mean several percent.
+  const priceFloor = last * 0.0015;
+  const priceCeiling = last * 0.004;
+  const rangeScaled = Math.max(0, Number(priorRange) || 0) * 0.04;
+  const normalizedThreshold = Math.max(priceFloor, Math.min(priceCeiling, rangeScaled || priceFloor));
   return {
     ...nearest,
     signedPercent: (last - nearest.level.price) / nearest.level.price * 100,
     pixelDistance,
-    near: nearest.distance <= normalizedThreshold || pixelDistance <= 24
+    normalizedThreshold,
+    near: nearest.distance <= normalizedThreshold || pixelDistance <= 22
   };
 }
 
@@ -132,9 +141,11 @@ export function drawDailyPivotLabels(chartContext, options = {}) {
     top, bottom, background = '#0c0f13', formatPrice = (value) => String(value), blockedY = []
   } = options;
   if (!chartContext || typeof priceY !== 'function') return;
-  const visible = levels.filter((level) => level.price >= minimum && level.price <= maximum);
-  if (!visible.length) return;
   const proximity = dailyPivotProximity(levels, currentPrice, priceY, priorRange);
+  const visible = levels.filter((level) => level.price >= minimum && level.price <= maximum);
+  const offscreenActive = proximity?.near && !visible.some((level) => level.key === proximity.level.key)
+    ? proximity.level : null;
+  if (!visible.length && !offscreenActive) return;
   const items = visible.map((level) => ({ ...level, lineY: priceY(level.price) }));
   const placed = layoutDailyPivotLabels(items, top, bottom, blockedY);
 
@@ -171,6 +182,28 @@ export function drawDailyPivotLabels(chartContext, options = {}) {
     chartContext.fillStyle = level.color;
     chartContext.globalAlpha = active ? 1 : 0.86;
     chartContext.fillText(label, left + (active ? 8 : 7), level.labelY);
+  }
+
+  // Price can be materially near a pivot while a very tight tick-chart scale
+  // leaves the level a few pixels beyond the viewport. A small edge badge keeps
+  // the trader aware without expanding the scale or drawing a misleading line.
+  if (offscreenActive) {
+    const above = offscreenActive.price > maximum;
+    let labelY = above ? Number(top) + 9 : Number(bottom) - 9;
+    for (const blocker of blockedY.map(Number).filter(Number.isFinite)) {
+      if (Math.abs(labelY - blocker) < 17) labelY += above ? 17 : -17;
+    }
+    labelY = Math.max(Number(top) + 9, Math.min(Number(bottom) - 9, labelY));
+    const sign = proximity.signedPercent > 0 ? '+' : proximity.signedPercent < 0 ? '−' : '';
+    const label = `${above ? '↑' : '↓'} ${offscreenActive.key} ${formatPrice(offscreenActive.price)} · ${sign}${Math.abs(proximity.signedPercent).toFixed(2)}%`;
+    chartContext.font = '700 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    const labelWidth = chartContext.measureText(label).width + 10;
+    chartContext.fillStyle = background;
+    chartContext.globalAlpha = 0.94;
+    chartContext.fillRect(left + 3, labelY - 8, labelWidth, 16);
+    chartContext.fillStyle = offscreenActive.color;
+    chartContext.globalAlpha = 1;
+    chartContext.fillText(label, left + 8, labelY);
   }
   chartContext.restore();
 }
