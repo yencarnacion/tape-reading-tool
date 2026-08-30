@@ -5,7 +5,8 @@ const sourceURL = new URL('../internal/server/web/daily-pivots.js', import.meta.
 const source = await readFile(sourceURL, 'utf8');
 const moduleURL = `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`;
 const {
-  calculateDailyPivots, dailyPivotLevels, dailyPivotProximity, layoutDailyPivotLabels
+  calculateDailyPivots, dailyPivotLevels, dailyPivotProximity,
+  drawDailyPivotLabels, layoutDailyPivotLabels
 } = await import(moduleURL);
 
 const symmetric = calculateDailyPivots({ high: 110, low: 90, close: 100 });
@@ -37,9 +38,15 @@ assert.equal(proximity.level.key, 'R1');
 assert.equal(proximity.near, true);
 proximity = dailyPivotProximity(levels, 105, priceY, symmetric.priorRange);
 assert.equal(proximity.level.key, 'R1');
-assert.equal(proximity.near, true);
+assert.equal(proximity.near, true, 'screen-space proximity should remain salient');
 proximity = dailyPivotProximity(levels, 105, null, symmetric.priorRange);
 assert.equal(proximity.near, false);
+
+const volatile = calculateDailyPivots({ high: 150, low: 50, close: 100 });
+proximity = dailyPivotProximity(dailyPivotLevels(volatile), 149, null, volatile.priorRange);
+assert.equal(proximity.level.key, 'R1');
+assert.equal(proximity.near, false, 'an extreme prior range must not make a one-dollar gap look near');
+assert.ok(proximity.normalizedThreshold <= 149 * 0.004 + Number.EPSILON);
 
 const placed = layoutDailyPivotLabels([
   { key: 'R1', lineY: 100 }, { key: 'PP', lineY: 104 }, { key: 'S1', lineY: 108 }
@@ -48,5 +55,38 @@ for (let index = 1; index < placed.length; index++) {
   assert.ok(placed[index].labelY - placed[index - 1].labelY >= 14);
 }
 assert.ok(placed.every((item) => item.labelY >= 97 && item.labelY <= 133));
+
+class FakeContext {
+  constructor() { this.text = []; this.rects = []; }
+  save() {}
+  restore() {}
+  setLineDash() {}
+  beginPath() {}
+  moveTo() {}
+  lineTo() {}
+  stroke() {}
+  fillRect(...args) { this.rects.push(args); }
+  fillText(text, x, y) { this.text.push({ text: String(text), x, y }); }
+  measureText(text) { return { width: String(text).length * 6 }; }
+}
+
+const edgeContext = new FakeContext();
+const edgePriceY = (price) => 100 - (price - 109.7) / 0.2 * 80;
+drawDailyPivotLabels(edgeContext, {
+  levels, priceY: edgePriceY, minimum: 109.7, maximum: 109.9,
+  left: 6, currentPrice: 109.85, priorRange: symmetric.priorRange,
+  top: 20, bottom: 100, background: '#000', formatPrice: (value) => value.toFixed(2)
+});
+assert.ok(edgeContext.text.some(({ text }) => text.startsWith('↑ R1 110.00')),
+  'a nearby pivot just beyond the scale should produce an edge cue');
+
+const atContext = new FakeContext();
+drawDailyPivotLabels(atContext, {
+  levels, priceY: (price) => 100 - (price - 109.7) / 0.5 * 80,
+  minimum: 109.7, maximum: 110.2, left: 6, currentPrice: 110.001,
+  priorRange: symmetric.priorRange, top: 20, bottom: 100,
+  background: '#000', formatPrice: (value) => value.toFixed(2)
+});
+assert.ok(atContext.text.some(({ text }) => text === 'R1 110.00 · AT'));
 
 console.log('daily pivot checks passed');
