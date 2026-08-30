@@ -9,8 +9,7 @@ const overlayURL = `data:text/javascript;base64,${Buffer.from(overlaySource).toS
 
 const elements = new Map([
   ['tickerInput', { value: 'AAPL' }],
-  ['lastPrice', { textContent: '100.01' }],
-  ['rewindLast', { textContent: '100.01' }]
+  ['lastPrice', { textContent: '100.01' }]
 ]);
 const calls = [];
 const listeners = new Map();
@@ -94,16 +93,34 @@ await until(() => window.__tapeReadingDailyPivots.state().status === 'ready', 'i
 const initial = window.__tapeReadingDailyPivots.state();
 assert.equal(initial.symbol, 'AAPL');
 assert.equal(initial.levels.find((level) => level.key === 'PP').price, 100);
+assert.deepEqual(initial.targets, ['replayChartCanvas'], 'tick and rewind canvases must not receive pivots');
 assert.ok(calls.some((call) => call.path === '/api/panel-data/daily-bars' && call.search.includes('limit=1')));
 
-const canvas = { id: 'chartCanvas', getBoundingClientRect: () => ({ width: 800 }) };
-const context = new CanvasRenderingContext2D(canvas);
-context.fillStyle = '#8d96a2';
-[102, 101, 100, 99, 98].forEach((price, index) => context.fillText(price.toFixed(2), 753, 20 + index * 20));
+const tickCanvas = { id: 'chartCanvas', getBoundingClientRect: () => ({ width: 800 }) };
+const tickContext = new CanvasRenderingContext2D(tickCanvas);
+tickContext.fillStyle = '#8d96a2';
+[102, 101, 100, 99, 98].forEach((price, index) => tickContext.fillText(price.toFixed(2), 753, 20 + index * 20));
 await new Promise((resolve) => setImmediate(resolve));
-assert.ok(context.operations.some((operation) => operation[0] === 'stroke'), 'pivot guide was not drawn');
-assert.ok(context.operations.some((operation) => operation[0] === 'text' && operation[1].startsWith('PP 100.00')),
-  'active left-side pivot label was not drawn');
+assert.equal(tickContext.operations.some((operation) => operation[0] === 'stroke'), false,
+  'the tick chart must remain pivot-free');
+
+const regularCanvas = { id: 'replayChartCanvas', getBoundingClientRect: () => ({ width: 800 }) };
+const regularContext = new CanvasRenderingContext2D(regularCanvas);
+regularContext.fillStyle = '#8d96a2';
+[135, 117.5, 100, 82.5, 65].forEach((price, index) => regularContext.fillText(price.toFixed(2), 753, 20 + index * 25));
+await new Promise((resolve) => setImmediate(resolve));
+const pivotText = regularContext.operations
+  .filter((operation) => operation[0] === 'text')
+  .map((operation) => operation[1]);
+assert.ok(regularContext.operations.some((operation) => operation[0] === 'stroke'), 'regular-chart pivot guides were not drawn');
+assert.ok(pivotText.some((text) => text.startsWith('NEAR PP 100.00')),
+  'near pivot was not identified');
+assert.ok(pivotText.some((text) => text.startsWith('↑ R1 110.00')),
+  'next pivot above the near pivot was not identified');
+assert.ok(pivotText.some((text) => text.startsWith('↓ S1 90.00')),
+  'next pivot below the near pivot was not identified');
+assert.equal(pivotText.some((text) => /^R2|^R3|^S2|^S3/.test(text)), false,
+  'non-context pivots should not be labeled');
 
 await window.fetch('/api/replay');
 await until(() => window.__tapeReadingDailyPivots.state().sessionDateET === '2024-06-14', 'replay date was not adopted');
