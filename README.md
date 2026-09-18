@@ -352,3 +352,14 @@ Started as `./go.sh demo -rewind`, the same check also drives Live Rewind: it co
 - Price scales expand immediately for genuine eligible highs/lows. Contraction waits 1.5 seconds and then eases by elapsed time, avoiding redraw-rate-dependent breathing while never clipping a new market move.
 - Massive live mode also stamps each event when the Go server receives it; neither provider's browser WebSocket batching time is used for rolling metrics.
 - The referenced `ticksonic-original` repository returned GitHub 404 during implementation. The mixer and synthesis path here were implemented directly from the requested behavior.
+
+### Experimental automatic Kronos panel
+
+The lower chart section is a plugin slot with **KRONOS FORECAST** (default),
+**TICK CHART** (original price chart), or **BLANK**. The ADR slot is independent.
+Kronos refreshes automatically for completed one-minute bars on the IBKR live
+feed. It displays large, uncalibrated model frequencies, not buy/sell signals.
+Default service: `http://10.17.17.99:8787`; connection and private bearer key are
+configured only on the tape backend. See [setup, interpretation, tests and
+limitations](docs/KRONOS_FORECAST.md). Demo/replay/Massive modes do not generate
+forecasts in this first adapter.

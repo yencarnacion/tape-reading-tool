@@ -2,7 +2,7 @@ export const PANEL_API_VERSION = 1;
 export const PANEL_DATA_SCHEMA_VERSION = 1;
 export const PRIMARY_ANALYTICS_SLOT = 'primaryAnalytics';
 export const PANEL_CAPABILITIES = Object.freeze([
-  'stream', 'formatters', 'clock', 'trades', 'completed-daily-rth-bars', 'rth-session-context', 'settings'
+  'stream', 'formatters', 'clock', 'trades', 'completed-daily-rth-bars', 'rth-session-context', 'settings', 'forecast', 'tick-chart'
 ]);
 
 export function immutablePanelData(value) {

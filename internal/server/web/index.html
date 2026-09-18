@@ -137,12 +137,16 @@
             </div>
           </section>
         </section>
-        <section id="chartPanel" class="chart-panel" aria-label="Volume delta, rolling tape pressure, and tick chart">
+        <section id="chartPanel" class="chart-panel" aria-label="Volume delta, primary analytics, and lower plugin">
         <canvas id="chartCanvas"></canvas>
         <section id="rollingPanel" class="analytics-slot" aria-label="Primary analytics panel slot">
           <div class="analytics-slot-chrome"><label for="analyticsPanelPicker">PANEL</label><select id="analyticsPanelPicker" aria-label="Analytics panel"></select></div>
           <div id="analyticsPanelRoot" class="analytics-panel-root"></div>
         </section>
+          <section id="lowerPanelSlot" class="lower-panel-slot" aria-label="Lower plugin slot">
+            <div class="analytics-slot-chrome"><label for="lowerPanelPicker">PANEL</label><select id="lowerPanelPicker" aria-label="Lower panel plugin"></select></div>
+            <div id="lowerPanelRoot" class="analytics-panel-root"></div>
+          </section>
           <div id="chartEmpty" class="chart-empty">WAITING FOR PRINTS</div>
           <div id="marketClock" class="market-clock" aria-label="Market time in New York">
             <span id="marketClockLabel">MARKET TIME</span>

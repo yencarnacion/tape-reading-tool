@@ -25,6 +25,7 @@ import (
 var webFS embed.FS
 
 type Server struct {
+	forecast       *forecastService
 	cfg            config.Config
 	store          *tape.Store
 	feed           feed.Feed
@@ -101,7 +102,7 @@ type streamMessage struct {
 func New(cfg config.Config, store *tape.Store, source feed.Feed, liveChart ...bool) *Server {
 	started := time.Now()
 	server := &Server{
-		cfg: cfg, store: store, feed: source,
+		cfg: cfg, store: store, feed: source, forecast: newForecastService(loadForecastConfig()),
 		rvolCache: make(map[string]rvolHistoryCache), dailyCache: make(map[string]dailyHistoryCache), panelDataCache: make(map[string]panelDataCacheEntry), now: time.Now,
 		uiEventAt: make(map[string]time.Time), processStartUS: started.UnixMicro(),
 		symbolActiveUS: map[string]int64{store.Active(): started.UnixMicro()},
@@ -139,8 +140,10 @@ func (s *Server) ReserveRewindPane(reserve bool) {
 }
 
 func (s *Server) Serve(ctx context.Context) error {
+	defer s.forecast.cancel()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", s.handleHealth)
+	mux.HandleFunc("/api/forecast", s.handleForecast)
 	mux.HandleFunc("/api/ticker", s.handleTicker)
 	mux.HandleFunc("/api/tape/range", s.handleTapeRange)
 	mux.HandleFunc("/api/ui-event", s.handleUIEvent)
