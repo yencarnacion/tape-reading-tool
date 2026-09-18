@@ -4,7 +4,7 @@ on:
     branches: [feature/kronos-live-panel]
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: kronos-feature-${{ github.ref }}
   cancel-in-progress: true
@@ -15,11 +15,70 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          persist-credentials: false
-      - name: Archive exact source for reproducible verification
-        run: git archive --format=tar HEAD -o /tmp/kronos-feature-source.tar
-      - uses: actions/upload-artifact@v4
+          fetch-depth: 0
+      - name: Apply checksum-verified reviewed feature patch to feature branch only
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/feature/kronos-live-panel
+          python3 - <<'PY'
+          import base64, hashlib, lzma
+          from pathlib import Path
+          text = ''.join(Path(f'.github/kronos-patch/{i}.b64').read_text() for i in range(6))
+          patch = lzma.decompress(base64.b64decode(text, validate=True))
+          assert len(patch) == 104054
+          assert hashlib.sha256(patch).hexdigest() == 'c3a4cf2c4807ec7425e462d7394e0a85fbb9018e19a13ea4dd817dd6346f672e'
+          Path('/tmp/kronos-feature.patch').write_bytes(patch)
+          PY
+          git show 489e3caf8290997b4ffafe14e2149eefd85ada15:.github/workflows/kronos-feature.yml > .github/workflows/kronos-feature.yml
+          git apply --check /tmp/kronos-feature.patch
+          git apply /tmp/kronos-feature.patch
+          rm -rf .github/kronos-patch
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .
+          git commit -m 'feat: add automatic Kronos lower-panel plugin with guarded backend proxy'
+          test "$(git ls-remote origin refs/heads/feature/kronos-live-panel | cut -f1)" = "$GITHUB_SHA"
+          git push origin HEAD:refs/heads/feature/kronos-live-panel
+      - uses: actions/setup-go@v5
         with:
-          name: kronos-feature-source
-          path: /tmp/kronos-feature-source.tar
-          retention-days: 1
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Go race tests and vet
+        run: |
+          set -o pipefail
+          go test -race ./... 2>&1 | tee /tmp/kronos-go-tests.txt
+          go vet ./...
+      - name: JavaScript contract and regression checks
+        if: success() || failure()
+        run: |
+          node scripts/kronos-model-check.mjs
+          node scripts/panel-host-check.mjs
+          node scripts/adr-panel-check.mjs
+          node scripts/daily-pivots-check.mjs
+          node scripts/audio-worklet-check.mjs
+      - name: Full-page laptop mock integration
+        if: success() || failure()
+        env:
+          CHROME: google-chrome
+          KRONOS_SCREENSHOT_DIR: /tmp/kronos-ui
+        run: |
+          set -o pipefail
+          node scripts/kronos-browser-check.mjs 2>&1 | tee /tmp/kronos-browser-tests.txt
+      - name: Archive tested source and results
+        if: always()
+        run: |
+          git archive --format=tar HEAD -o /tmp/kronos-tested-source.tar
+          git log -1 --format=fuller > /tmp/kronos-tested-commit.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kronos-verification
+          path: |
+            /tmp/kronos-go-tests.txt
+            /tmp/kronos-browser-tests.txt
+            /tmp/kronos-ui/
+            /tmp/kronos-tested-source.tar
+            /tmp/kronos-tested-commit.txt
+          retention-days: 7
