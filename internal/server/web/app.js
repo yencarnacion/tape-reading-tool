@@ -10,6 +10,7 @@ import { tapePressureManifest, createTapePressureInstance } from './tape-pressur
 import { blankPanelManifest } from './blank-panel.js';
 import { adrRTHManifest } from './adr-rth-extension-panel.js';
 import { AutoTrendlinesController } from './auto-trendlines-controller.js';
+import { ChartHistoryLoader, mergeChartHistory } from './chart-history.js';
 import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js';
 
 (() => {
@@ -90,6 +91,18 @@ import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js'
     redraw: () => { state.dirtyReplayChart = true; }
   });
   window.__tapeReadingAutoTrendlines = () => autoTrendlines.debug();
+  const chartHistory = new ChartHistoryLoader({ apply: (payload) => {
+    const boundary = Math.min(Number(payload.through_us), serverNowUS(performance.now()));
+    state.minuteBars = mergeChartHistory(state.minuteBars, payload.bars, boundary);
+    autoTrendlines.invalidate();
+    state.dirtyReplayChart = true;
+    state.dirtyDayContext = true;
+  } });
+  window.addEventListener('pagehide', () => chartHistory.reset());
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) chartHistory.reset();
+    else state.dirtyReplayChart = true;
+  });
   const DAY_MAP_CORNERS = ['', 'day-map-lower-left', 'day-map-lower-right', 'day-map-upper-right'];
   const DAY_MAP_CORNER_NAMES = ['upper-left', 'lower-left', 'lower-right', 'upper-right'];
 
@@ -439,6 +452,7 @@ import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js'
       state.dirtyTape = true;
       setConnection(state.status);
       resetRVOLWarmup();
+      chartHistory.reset();
       const chartKey = `${state.symbol}|${state.replayConfig?.source || 'live'}|${state.replayConfig?.provider || 'all'}`;
       if (state.status.mode === 'replay' && state.replayChartKey !== chartKey) {
         state.replayChartKey = chartKey;
@@ -631,7 +645,7 @@ import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js'
   }
 
   function addTradeToMinuteBars(trade) {
-    const updated = appendMinuteBar(state.minuteBars, trade, state.status.mode === 'replay' && state.xtraEnabled ? 5001 : 2000);
+    const updated = appendMinuteBar(state.minuteBars, trade, 5001);
     if (updated && updated !== state.minuteBars[state.minuteBars.length - 1]) autoTrendlines.invalidate();
   }
 
@@ -640,7 +654,8 @@ import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js'
       timeUS: Number(bar.time_us), open: Number(bar.open), high: Number(bar.high), low: Number(bar.low),
       close: Number(bar.close), volume: Number(bar.volume) || 0, dollarVolume: Number(bar.dollar_volume) || 0
     })).filter((bar) => bar.timeUS > 0 && bar.close > 0);
-    state.minuteBars = loaded.slice(-(state.xtraEnabled ? 5001 : 2000));
+    state.minuteBars = loaded.slice(-5001);
+    chartHistory.reset();
     state.replayChartEndUS = Number(chartEndUS) || 0;
     // Preserve prints that arrived while an ordinary chart-history request was
     // in flight. During a replay rewind these are prints from the old future
@@ -723,7 +738,12 @@ import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js'
     for (const bar of state.minuteBars) {
       if (Number(bar.timeUS) >= boundary) merged.set(Number(bar.timeUS), bar);
     }
-    const historyLimit = state.xtraEnabled ? 2200 : 2000;
+    // Keep previously loaded older background context across RVOL refreshes.
+    const firstWarmup = Math.min(...merged.keys());
+    for (const bar of state.minuteBars) {
+      if (bar.timeUS < firstWarmup) merged.set(bar.timeUS, bar);
+    }
+    const historyLimit = 5001;
     state.minuteBars = [...merged.values()].sort((left, right) => left.timeUS - right.timeUS).slice(-historyLimit);
     state.dirtyReplayChart = true;
     state.dirtyDayContext = true;
@@ -1231,6 +1251,12 @@ import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js'
 
   function drawReplayChart() {
     syncTrendlineVisibility();
+    if (!document.hidden && state.settings?.showChart && state.marketChartView === 'minute' && !state.rewind.active &&
+        ((state.status.mode === 'live' && state.rvolWarmup.ready) ||
+         state.status.mode === 'massive' ||
+         (state.status.mode === 'replay' && state.replayChartEndUS > 0 && !state.pendingReplayReset))) {
+      chartHistory.ensure(`${state.symbol}|${state.status.mode}|${state.replay?.generation || 0}`, state.symbol);
+    }
     autoTrendlines.update(state.minuteBars, state.symbol, state.status?.mode || '');
     resizeReplayCanvas();
     const rect = elements.replayChart.getBoundingClientRect();

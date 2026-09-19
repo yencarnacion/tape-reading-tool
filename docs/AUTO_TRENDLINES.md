@@ -14,7 +14,8 @@ No qualifying lines is a legitimate result, not necessarily an error.
 The overlay does not change candle capacity, price autoscaling, daily pivots,
 VWAP, moving averages, order/position levels, the tape, audio, ADR panels, the
 90-day chart, the tick chart, or the Live Rewind view. It uses existing loaded
-one-minute bars, not an additional feed or HTTP history request.
+one-minute bars. After the initial chart loads, a low-priority background request
+fills its history to 5,000 completed minute candles, then recomputes trendlines.
 
 ## Algorithm and provenance
 
@@ -73,9 +74,17 @@ A result computed for an old history is never installed on a newer history.
 
 ## Performance and memory
 
-- At most 5,000 loaded **closed** bars are analyzed. Historical replay with
-  `-xtra` loads the latest 5,000 cached completed minute bars plus the forming
-  candle; live history retains its existing limits. Downloads remain explicit.
+- At most 5,000 loaded **closed** bars are analyzed, plus one forming candle
+  retained by the chart. Background hydration starts after a 2.5-second delay
+  (and after live RVOL warmup). IBKR live uses IBKR aggregates; Massive live and historical
+  replay uses Massive aggregates through the replay clock, never future candles.
+  A recording database is required. Other replay sources stay cache-only.
+- Only one background history job runs at a time. Seven-day ranges reuse persisted
+  coverage, including empty weekends, with one second between missing-range requests.
+  The search is bounded to 91 calendar days and four minutes; new/sparse symbols
+  may have fewer than 5,000 candles. Three quiet client attempts handle transient
+  failures. Chart/tape delivery never waits for this job. Switching charts cancels
+  the request and rejects stale results. Missing credentials leave the chart usable.
 - At most 1,104 pairs are evaluated and 12 lines retained. ATR/pivot extraction
   is linear; the bounded candidate checks scan at most the retained history.
 - One module worker per active chart, one in-flight job, one coalesced pending

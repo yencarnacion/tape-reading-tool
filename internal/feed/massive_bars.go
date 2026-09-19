@@ -15,8 +15,8 @@ import (
 	"tape-reading-tool/internal/tape"
 )
 
-// DownloadMassiveMinuteBars is deliberately an explicit CLI operation. It
-// requests unadjusted aggregates so cached chart context matches raw prints.
+// DownloadMassiveMinuteBars is used by the CLI and paced background chart
+// hydration. Unadjusted aggregates keep cached context consistent with raw prints.
 func DownloadMassiveMinuteBars(ctx context.Context, cfg config.MassiveConfig, database *storage.Database, options HistoricalOptions) error {
 	if cfg.APIKey == "" {
 		return fmt.Errorf("MASSIVE_API_KEY is required in .env")

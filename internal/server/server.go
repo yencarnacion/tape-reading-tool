@@ -25,22 +25,24 @@ import (
 var webFS embed.FS
 
 type Server struct {
-	forecast       *forecastService
-	cfg            config.Config
-	store          *tape.Store
-	feed           feed.Feed
-	upgrader       websocket.Upgrader
-	rvolMu         sync.Mutex
-	rvolCache      map[string]rvolHistoryCache
-	rvolMinuteBars func(context.Context, string, time.Time, int) ([]storage.MinuteBar, error)
-	dailyBars      func(context.Context, string, time.Time, int) ([]storage.MinuteBar, error)
-	dailyMu        sync.Mutex
-	dailyCache     map[string]dailyHistoryCache
-	panelDataMu    sync.Mutex
-	panelDataCache map[string]panelDataCacheEntry
-	now            func() time.Time
-	liveChart      bool
-	liveXtra       bool
+	chartHistorySlot  chan struct{}
+	chartHistoryFetch func(context.Context, string, string, time.Time, time.Time) error
+	forecast          *forecastService
+	cfg               config.Config
+	store             *tape.Store
+	feed              feed.Feed
+	upgrader          websocket.Upgrader
+	rvolMu            sync.Mutex
+	rvolCache         map[string]rvolHistoryCache
+	rvolMinuteBars    func(context.Context, string, time.Time, int) ([]storage.MinuteBar, error)
+	dailyBars         func(context.Context, string, time.Time, int) ([]storage.MinuteBar, error)
+	dailyMu           sync.Mutex
+	dailyCache        map[string]dailyHistoryCache
+	panelDataMu       sync.Mutex
+	panelDataCache    map[string]panelDataCacheEntry
+	now               func() time.Time
+	liveChart         bool
+	liveXtra          bool
 
 	recorder       *storage.Database
 	rewindPane     bool
@@ -102,7 +104,8 @@ type streamMessage struct {
 func New(cfg config.Config, store *tape.Store, source feed.Feed, liveChart ...bool) *Server {
 	started := time.Now()
 	server := &Server{
-		cfg: cfg, store: store, feed: source, forecast: newForecastService(loadForecastConfig()),
+		chartHistorySlot: make(chan struct{}, 1),
+		cfg:              cfg, store: store, feed: source, forecast: newForecastService(loadForecastConfig()),
 		rvolCache: make(map[string]rvolHistoryCache), dailyCache: make(map[string]dailyHistoryCache), panelDataCache: make(map[string]panelDataCacheEntry), now: time.Now,
 		uiEventAt: make(map[string]time.Time), processStartUS: started.UnixMicro(),
 		symbolActiveUS: map[string]int64{store.Active(): started.UnixMicro()},
@@ -154,6 +157,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	mux.HandleFunc("/api/historical/coverage/check", s.handleCoverageCheck)
 	mux.HandleFunc("/api/render", s.handleRender)
 	mux.HandleFunc("/api/rvol-history", s.handleRVOLHistory)
+	mux.HandleFunc("/api/chart-history", s.handleChartHistory)
 	mux.HandleFunc("/api/daily-history", s.handleDailyHistory)
 	mux.HandleFunc("/api/panel-data/daily-bars", s.handlePanelDailyBars)
 	mux.HandleFunc("/api/panel-data/rth-context", s.handlePanelRTHContext)

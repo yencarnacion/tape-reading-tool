@@ -362,6 +362,12 @@ Reset Controls restores ON. Small/large support and resistance lines are compute
 locally in a bounded worker using already-loaded candles; turning them off also
 stops the worker. Tick, daily, and Live Rewind charts are unchanged.
 
+After the chart opens, background history loading targets 5,000 completed
+one-minute candles without blocking the initial chart or tape. It reuses cached
+history and downloads missing ranges from IBKR live or Massive live/historical
+replay. Replay history is capped at the replay clock. A recording database and
+provider access are required; sparse/new tickers may have fewer candles.
+
 See [Auto Trendlines](docs/AUTO_TRENDLINES.md) for the algorithm, confirmation delay,
 performance limits, tests, and deliberate differences from TradingView.
 

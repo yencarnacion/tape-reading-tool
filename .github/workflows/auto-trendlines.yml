@@ -6,6 +6,8 @@ on:
     paths:
       - 'internal/server/web/**'
       - 'scripts/*auto-trendlines*'
+      - 'scripts/chart-history-check.mjs'
+      - 'internal/server/chart_history*'
       - '.github/workflows/auto-trendlines.yml'
 permissions:
   contents: read
@@ -24,6 +26,7 @@ jobs:
       - name: JavaScript tests and syntax
         run: |
           node --test scripts/auto-trendlines.test.mjs
+          node scripts/chart-history-check.mjs
           for file in internal/server/web/auto-trendlines*.js internal/server/web/app.js; do node --check "$file"; done
       - name: Go tests
         run: go test ./...

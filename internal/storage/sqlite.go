@@ -811,6 +811,33 @@ func (d *Database) RecentMinuteBarStart(ctx context.Context, symbol, provider st
 	return first.Int64, err
 }
 
+// RecentCachedMinuteBars reads compact aggregates only, never detailed prints.
+func (d *Database) RecentCachedMinuteBars(ctx context.Context, symbol, provider string, beforeUS int64, limit int) ([]MinuteBar, error) {
+	resolved, err := resolveProvider(provider)
+	if err != nil {
+		return nil, err
+	}
+	if limit < 1 || limit > 5000 {
+		return nil, fmt.Errorf("invalid candle limit")
+	}
+	rows, err := d.db.QueryContext(ctx, `SELECT minute_us,open,high,low,close,volume,dollar_volume FROM
+	 (SELECT * FROM minute_bars WHERE symbol=? AND provider=? AND source='historical' AND minute_us<?
+	 ORDER BY minute_us DESC LIMIT ?) ORDER BY minute_us`, tape.NormalizeSymbol(symbol), resolved, beforeUS, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	bars := make([]MinuteBar, 0, limit)
+	for rows.Next() {
+		var bar MinuteBar
+		if err := rows.Scan(&bar.TimeUS, &bar.Open, &bar.High, &bar.Low, &bar.Close, &bar.Volume, &bar.DollarVolume); err != nil {
+			return nil, err
+		}
+		bars = append(bars, bar)
+	}
+	return bars, rows.Err()
+}
+
 // coveredMinute answers the per-minute precedence question from one merged
 // interval list instead of one query per minute, which keeps a full session
 // chart to a single bounded coverage read.
