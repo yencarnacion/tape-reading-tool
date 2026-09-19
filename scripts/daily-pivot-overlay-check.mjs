@@ -119,6 +119,8 @@ assert.ok(pivotText.some((text) => text.startsWith('↑ R1 110.00')),
   'next pivot above the near pivot was not identified');
 assert.ok(pivotText.some((text) => text.startsWith('↓ S1 90.00')),
   'next pivot below the near pivot was not identified');
+assert.ok(pivotText.some((text) => text.startsWith('↑ R2 120.00')),
+  'second pivot above price was not identified');
 assert.equal(pivotText.some((text) => /^R2|^R3|^S2|^S3/.test(text)), false,
   'non-context pivots should not be labeled');
 

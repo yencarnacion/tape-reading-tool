@@ -32,6 +32,31 @@ func TestInvalidateCoveragePreservesOnlyUnaffectedRemainders(t *testing.T) {
 
 const minuteSizeUS = int64(time.Minute / time.Microsecond)
 
+func TestRecentMinuteBarStartBoundsContextAndExcludesFuture(t *testing.T) {
+	db := testDatabase(t)
+	ctx := context.Background()
+	base := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC).UnixMicro()
+	bars := make([]MinuteBar, 5010)
+	for i := range bars {
+		bars[i] = MinuteBar{TimeUS: base + int64(i)*minuteSizeUS, Open: 10, High: 11, Low: 9, Close: 10, Volume: 100}
+	}
+	if err := db.UpsertMinuteBars(ctx, "RKLB", "massive", bars); err != nil {
+		t.Fatal(err)
+	}
+	first, err := db.RecentMinuteBarStart(ctx, "rklb", "massive", base+5005*minuteSizeUS, 5000)
+	if err != nil || first != base+5*minuteSizeUS {
+		t.Fatalf("first=%d err=%v", first, err)
+	}
+	first, err = db.RecentMinuteBarStart(ctx, "RKLB", "massive", base+2*minuteSizeUS, 5000)
+	if err != nil || first != base {
+		t.Fatalf("short history first=%d err=%v", first, err)
+	}
+	first, err = db.RecentMinuteBarStart(ctx, "OTHER", "massive", base+5005*minuteSizeUS, 5000)
+	if err != nil || first != 0 {
+		t.Fatalf("cross-symbol history first=%d err=%v", first, err)
+	}
+}
+
 func easternMinute(t *testing.T, year int, month time.Month, day, hour, minute int) int64 {
 	t.Helper()
 	location, err := time.LoadLocation("America/New_York")

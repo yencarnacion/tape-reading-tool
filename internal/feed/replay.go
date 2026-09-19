@@ -250,12 +250,12 @@ func (r *Replay) DataRange(ctx context.Context, symbol, source, provider string)
 	return r.database.DataRange(ctx, symbol, source, provider)
 }
 
-func (r *Replay) MinuteBars(ctx context.Context, symbol, source, provider string, startUS, endUS int64) ([]storage.MinuteBar, error) {
+func (r *Replay) MinuteBars(ctx context.Context, symbol, source, provider string, startUS, endUS int64, availableThroughUS ...int64) ([]storage.MinuteBar, error) {
 	symbol = tape.NormalizeSymbol(symbol)
 	if symbol == "" || startUS <= 0 || endUS < startUS {
 		return nil, fmt.Errorf("invalid minute chart range")
 	}
-	return r.database.MinuteBars(ctx, symbol, source, provider, startUS, endUS)
+	return r.database.MinuteBars(ctx, symbol, source, provider, startUS, endUS, availableThroughUS...)
 }
 
 func (r *Replay) RenderAudioEvents(ctx context.Context, symbol, source, provider string, startUS, endUS int64) ([]RenderAudioEvent, error) {

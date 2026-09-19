@@ -21,6 +21,9 @@ const reading = forecastReading(r, 5, now);
 assert.equal(reading.above.value, 20/32); assert.equal(reading.below.value, 11/32); assert.equal(reading.equal.yes, 1);
 assert.equal(percent(reading.above.value), '63%'); assert.equal(percent(null), '—'); assert.equal(percent(0), '0%');
 assert.equal(reading.close-reading.origin, 300000); assert.equal(etTime(reading.origin), '10:17');
+const replayResult = { ...r, mode: 'replay' };
+assert.equal(forecastReading(replayResult, 5, now).above.value, 20/32);
+assert.equal(forecastReading(replayResult, 5, now).expired, false); // Paused replay clock, not wall time.
 assert.ok(reading.above.interval[0] < .5 && reading.above.interval[1] > .75);
 assert.equal(forecastReading(r, 5, now+60e6).expired, true); assert.equal(forecastReading(r, 5, now-3e6).expired, true);
 for (const mutation of [
@@ -35,7 +38,7 @@ for (const mutation of [
   x => x.calibration.status = 'validated_in_scope',
   x => x.expected_value_usd = 2,
   x => x.reference_kind = 'current_price',
-  x => x.mode = 'replay',
+  x => x.mode = 'demo',
   x => x.paths_attempted = 0,
   x => x.horizons['5'].paths_price_unknown = 1,
   x => delete x.horizons['5'],

@@ -27,7 +27,7 @@ export function eventReading(event, { horizon, reference, comparator, paths }) {
 export function forecastReading(result, horizon, nowUS) {
   if (!FORECAST_HORIZONS.includes(horizon)) throw new Error('Unsupported horizon');
   const origin = Date.parse(result?.forecast_origin), n = result?.paths_attempted, reference = result?.reference_price;
-  if (result?.model_id !== 'kronos-base' || result.schema_version !== '1.0' || result.bar_seconds !== 60 || result.reference_kind !== 'last_closed_close' || result.mode !== 'live' || !finite(origin) || !Number.isInteger(n) || n < 1 || !finite(reference) || reference <= 0) throw new Error('Unsupported forecast contract');
+  if (result?.model_id !== 'kronos-base' || result.schema_version !== '1.0' || result.bar_seconds !== 60 || result.reference_kind !== 'last_closed_close' || !['live', 'replay'].includes(result.mode) || !finite(origin) || !Number.isInteger(n) || n < 1 || !finite(reference) || reference <= 0) throw new Error('Unsupported forecast contract');
   if (!['ok', 'late', 'invalid_output'].includes(result.status)) throw new Error('Unsupported forecast status');
   if (result.calibration?.status !== 'not_fitted' || result.calibration?.artifact_id != null || result.expected_value_usd !== null) throw new Error('This panel supports uncalibrated research results only');
   if (!Number.isInteger(result.unique_decoded_paths) || result.unique_decoded_paths < 2) throw new Error('No decoded path diversity; forecast withheld');
@@ -57,7 +57,7 @@ export function forecastReading(result, horizon, nowUS) {
 
 export function describeForecastError(state) {
   return ({ key_required: 'KEY REQUIRED', key_rejected: 'KEY REJECTED', disabled: 'DISABLED', configuration: 'CHECK CONFIG',
-    unsupported_mode: 'LIVE HISTORY ONLY', feed_offline: 'FEED OFFLINE', delayed_feed: 'DELAYED DATA', outside_session: 'SESSION CLOSED',
+    unsupported_mode: 'HISTORY UNAVAILABLE', feed_offline: 'FEED OFFLINE', delayed_feed: 'DELAYED DATA', outside_session: 'SESSION CLOSED',
     waiting_bar: 'NEXT CANDLE', running: 'CALCULATING', busy: 'SERVER BUSY', offline: 'KRONOS OFFLINE', not_ready: 'MODEL LOADING',
     history_unavailable: 'HISTORY UNAVAILABLE', input_unavailable: 'HISTORY NOT READY', late_input: 'HISTORY ARRIVED LATE',
     input_rejected: 'INPUT REJECTED', superseded: 'UPDATING SYMBOL', invalid_response: 'INVALID RESPONSE', service_error: 'SERVICE ERROR'

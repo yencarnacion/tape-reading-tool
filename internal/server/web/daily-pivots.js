@@ -1,14 +1,22 @@
 const DAILY_PIVOT_SPECS = Object.freeze([
+  ...Array.from({ length: 7 }, (_, index) => ({
+    valueKey: `r${10 - index}`, key: `R${10 - index}`, color: '#CC79A7', dash: [2, 4], width: 0.8
+  })),
   { valueKey: 'r3', key: 'R3', color: '#CC79A7', dash: [2, 4], width: 0.8 },
   { valueKey: 'r2', key: 'R2', color: '#D55E00', dash: [6, 4], width: 0.8 },
   { valueKey: 'r1', key: 'R1', color: '#E69F00', dash: [], width: 0.9 },
   { valueKey: 'pp', key: 'PP', color: '#F0E442', dash: [], width: 1.1 },
   { valueKey: 's1', key: 'S1', color: '#009E73', dash: [], width: 0.9 },
   { valueKey: 's2', key: 'S2', color: '#0072B2', dash: [6, 4], width: 0.8 },
-  { valueKey: 's3', key: 'S3', color: '#56B4E9', dash: [2, 4], width: 0.8 }
+  { valueKey: 's3', key: 'S3', color: '#56B4E9', dash: [2, 4], width: 0.8 },
+  ...Array.from({ length: 7 }, (_, index) => ({
+    valueKey: `s${index + 4}`, key: `S${index + 4}`, color: '#56B4E9', dash: [2, 4], width: 0.8
+  }))
 ]);
 
-// Classic floor pivots, matching polygon-charts exactly. The caller supplies
+// Classic floor pivots through R3/S3, matching polygon-charts exactly.
+// R4–R10/S4–S10 extend R3/S3 by one prior-session range per level.
+// The caller supplies
 // one completed prior regular-session bar (or equivalent RTH candles reduced to
 // high, low, and final close). No current-session value enters this calculation.
 export function calculateDailyPivots(session) {
@@ -17,7 +25,7 @@ export function calculateDailyPivots(session) {
   const close = Number(session?.close);
   if (![high, low, close].every(Number.isFinite) || high <= 0 || low <= 0 || close <= 0 || high < low) return null;
   const pp = (high + low + close) / 3;
-  return {
+  const pivots = {
     pp,
     r1: 2 * pp - low,
     s1: 2 * pp - high,
@@ -27,6 +35,11 @@ export function calculateDailyPivots(session) {
     s3: low - 2 * (high - pp),
     priorRange: high - low
   };
+  for (let level = 4; level <= 10; level++) {
+    pivots[`r${level}`] = pivots.r3 + (level - 3) * pivots.priorRange;
+    pivots[`s${level}`] = pivots.s3 - (level - 3) * pivots.priorRange;
+  }
+  return pivots;
 }
 
 export function dailyPivotLevels(pivots) {
@@ -68,12 +81,10 @@ export function dailyPivotProximity(levels, currentPrice, priceY = null, priorRa
   };
 }
 
-// Returns the small, decision-useful pivot set for an intraday chart:
-// - away from a pivot: nearest pivot above and nearest pivot below price;
-// - near/at a pivot: that pivot plus the next pivot above and below it.
-// A selected context level is displayed only if it is already in the viewport or
-// close enough to deserve a non-scaling edge cue. This keeps distant pivots from
-// forcing visual compression or turning the chart into a seven-line ladder.
+// Keep the nearest two pivots on each side of price, regardless of distance.
+// Proximity only highlights a selected level; it never changes the selection.
+// An exact-price pivot occupies an upper slot. Offscreen levels retain edge
+// labels without expanding the chart scale.
 export function selectDailyPivotContext(
   levels, currentPrice, priceY = null, priorRange = 0, minimum = NaN, maximum = NaN
 ) {
@@ -88,22 +99,13 @@ export function selectDailyPivotContext(
 
   const proximity = dailyPivotProximity(ordered, last, priceY, priorRange);
   const nearLevel = proximity?.near ? proximity.level : null;
-  const anchor = nearLevel ? Number(nearLevel.price) : last;
   const epsilon = Math.max(1e-9, last * 1e-9);
-  const upLevel = ordered.find((level) => level.price > anchor + epsilon) || null;
-  const downLevel = ordered.slice().reverse().find((level) => level.price < anchor - epsilon) || null;
+  const upLevels = ordered.filter((level) => level.price >= last - epsilon).slice(0, 2);
+  const downLevels = ordered.filter((level) => level.price < last - epsilon).reverse().slice(0, 2);
 
   const low = Number(minimum);
   const high = Number(maximum);
   const hasViewport = Number.isFinite(low) && Number.isFinite(high) && high > low;
-  const viewportSpan = hasViewport ? high - low : 0;
-  // Edge cues are useful when a nearby structural level sits just outside a
-  // tight chart. The allowance follows the current viewport, has a 0.75% floor,
-  // and is capped at 3% of price so a remote pivot is intentionally omitted.
-  const contextDistanceLimit = Math.min(
-    last * 0.03,
-    Math.max(last * 0.0075, viewportSpan * 0.75)
-  );
 
   const decorate = (level, role) => {
     if (!level) return null;
@@ -114,26 +116,26 @@ export function selectDailyPivotContext(
     const direction = price > high ? 'above' : price < low ? 'below' : '';
     return {
       ...level,
-      role,
+      role: nearLevel?.key === level.key ? 'near' : role,
       distance,
       percentAway: distance / last * 100,
       signedTargetPercent: (price - last) / last * 100,
       lineY,
       inView,
       direction,
-      display: role === 'near' || inView || distance <= contextDistanceLimit
+      display: true
     };
   };
 
-  const near = decorate(nearLevel, 'near');
-  const up = decorate(upLevel, 'up');
-  const down = decorate(downLevel, 'down');
+  const above = upLevels.map((level) => decorate(level, 'up'));
+  const below = downLevels.map((level) => decorate(level, 'down'));
+  const selected = [...above, ...below];
   return {
-    near,
-    up,
-    down,
-    selected: [near, up, down].filter((level) => level?.display),
-    contextDistanceLimit,
+    near: selected.find((level) => level.role === 'near') || null,
+    up: above[0] || null,
+    down: below[0] || null,
+    selected,
+    contextDistanceLimit: Infinity,
     proximity
   };
 }
@@ -195,7 +197,7 @@ export function drawDailyPivotLines(chartContext, options = {}) {
     }
     chartContext.strokeStyle = level.color;
     chartContext.globalAlpha = active ? 0.68 : 0.34;
-    chartContext.lineWidth = active ? 1.4 : Math.max(0.9, Number(level.width) || 1);
+    chartContext.lineWidth = 2 * (active ? 1.4 : Math.max(0.9, Number(level.width) || 1));
     chartContext.setLineDash(level.dash || []);
     chartContext.beginPath();
     chartContext.moveTo(left, y);

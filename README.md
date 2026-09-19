@@ -373,5 +373,5 @@ Kronos refreshes automatically for completed one-minute bars on the IBKR live
 feed. It displays large, uncalibrated model frequencies, not buy/sell signals.
 Default service: `http://10.17.17.99:8787`; connection and private bearer key are
 configured only on the tape backend. See [setup, interpretation, tests and
-limitations](docs/KRONOS_FORECAST.md). Demo/replay/Massive modes do not generate
-forecasts in this first adapter.
+limitations](docs/KRONOS_FORECAST.md). Recorded replay uses its own clock and
+completed local candles; demo and Massive live do not generate forecasts.

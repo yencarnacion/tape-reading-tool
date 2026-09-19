@@ -5,7 +5,7 @@ export const kronosPanelManifest = {
   id: 'kronos-forecast', name: 'KRONOS FORECAST', version: '1.0.0',
   panelApiVersion: PANEL_API_VERSION, dataSchemaVersion: PANEL_DATA_SCHEMA_VERSION,
   description: 'Automatic completed-minute model frequencies. Experimental, uncalibrated, read-only.',
-  supportedModes: ['live'], requestedCapabilities: ['clock', 'forecast', 'settings'],
+  supportedModes: ['live', 'replay'], requestedCapabilities: ['clock', 'forecast', 'settings'],
   defaultSettings: { horizon: 5 }, minimumWidth: 240,
   factory: createKronosPanel
 };
@@ -49,7 +49,7 @@ export function createKronosPanel({ root, host, settings }) {
     lastSecond = second;
     buttons.forEach((b,i) => b.setAttribute('aria-pressed', String(horizon === FORECAST_HORIZONS[i])));
     ui.values.hidden = true; ui.state.hidden = false;
-    ui.basis.textContent = 'KRONOS · UNCALIBRATED';
+    ui.basis.textContent = `KRONOS${snapshot.mode === 'replay' ? ' · REPLAY' : ''} · UNCALIBRATED`;
     ui.clock.textContent = `${snapshot.symbol || '—'} · AUTO · ${horizon} completed bars`;
     ui.state.querySelector('strong').textContent = describeForecastError(stateMessage.state);
     ui.state.querySelector('span').textContent = stateMessage.message;
@@ -65,7 +65,7 @@ export function createKronosPanel({ root, host, settings }) {
       }
       const valid = view.n - view.above.unknown, partial = view.above.unknown > 0;
       ui.state.hidden = true; ui.values.hidden = false;
-      ui.basis.textContent = `KRONOS · ${valid}/${view.n} USABLE · UNCALIBRATED${view.shortContext ? " · SHORT HISTORY" : ""}`;
+      ui.basis.textContent = `KRONOS${snapshot.mode === 'replay' ? ' · REPLAY' : ''} · ${valid}/${view.n} USABLE · UNCALIBRATED${view.shortContext ? " · SHORT HISTORY" : ""}`;
       ui.question.textContent = `Close vs $${view.reference.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 })} at ${etTime(view.close)} ET`;
       ui.above.textContent = percent(view.above.validValue); ui.below.textContent = percent(view.below.validValue);
       const leader = view.above.yes > view.below.yes ? 'above' : view.below.yes > view.above.yes ? 'below' : 'tie';
@@ -96,22 +96,22 @@ export function createKronosPanel({ root, host, settings }) {
   async function poll(nowUS) {
     if (!current() || inFlight || !visible() || performance.now() < nextPoll) return;
     snapshot = host.currentSnapshot();
-    if (snapshot.mode !== 'live') {
-      result = null; stateMessage = { state: 'unsupported_mode', message: 'Forecasts pause in replay/demo; existing charts and tape are unchanged.' };
+    if (!['live', 'replay'].includes(snapshot.mode)) {
+      result = null; stateMessage = { state: 'unsupported_mode', message: 'Forecasts require IBKR live history or recorded replay data.' };
       nextPoll = performance.now()+1000; paint(nowUS); return;
     }
     if (!snapshot.symbol) return;
-    const mine = epoch, symbol = snapshot.symbol, generation = snapshot.generation;
+    const mine = epoch, symbol = snapshot.symbol, generation = snapshot.generation, mode = snapshot.mode;
     const controller = new AbortController(); inFlight = controller;
     const abort = () => controller.abort(); host.signal.addEventListener('abort', abort, { once: true });
     const timeout = setTimeout(abort, 5000);
     try {
       const response = await host.requestForecast({ symbol, signal: controller.signal });
-      if (!current() || mine !== epoch || symbol !== host.currentSnapshot().symbol || generation !== host.currentSnapshot().generation) return;
+      if (!current() || mine !== epoch || symbol !== host.currentSnapshot().symbol || generation !== host.currentSnapshot().generation || mode !== host.currentSnapshot().mode) return;
       if (response.symbol !== symbol || response.generation !== generation) { result = null; stateMessage = { state: 'superseded', message: 'Waiting for the current symbol/data generation' }; return; }
       stateMessage = response;
       if (response.state === 'forecast' && response.result) {
-        if (response.result.symbol !== symbol || Date.parse(response.result.forecast_origin)*1000 !== response.origin_us) throw new Error('Response origin/symbol mismatch');
+        if (response.result.mode !== mode || response.result.symbol !== symbol || Date.parse(response.result.forecast_origin)*1000 !== response.origin_us) throw new Error('Response mode/origin/symbol mismatch');
         result = response.result;
       } else { result = null; }
       // Short local status polling while working; model itself runs once per bar.

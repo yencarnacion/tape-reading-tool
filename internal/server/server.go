@@ -736,13 +736,18 @@ func (s *Server) extendChartStartWithCachedBars(ctx context.Context, symbol, sou
 	if s.recorder == nil || source != "historical" || provider == "" || provider == "all" || chartEndUS <= 0 {
 		return chartStartUS
 	}
-	// Five calendar days always contains the previous trading session, including
-	// a long weekend or a holiday. Without -xtra there are no prior-session
-	// levels to draw, so the window stays inside the current session's premarket.
-	lookback := 12 * time.Hour
+	// Extended replay context supplies 5,000 completed candles for trendlines,
+	// independent of weekends or sparse premarket activity.
 	if s.liveXtra {
-		lookback = 5 * 24 * time.Hour
+		boundary := chartEndUS - chartEndUS%int64(time.Minute/time.Microsecond)
+		firstUS, err := s.recorder.RecentMinuteBarStart(ctx, symbol, provider, boundary, 5000)
+		if err == nil && firstUS > 0 && firstUS < chartStartUS {
+			return firstUS
+		}
+		return chartStartUS
 	}
+	// Without -xtra, retain the existing current-session premarket context.
+	lookback := 12 * time.Hour
 	lookbackUS := chartStartUS - int64(lookback/time.Microsecond)
 	firstUS, _, count, err := s.recorder.MinuteBarRange(ctx, symbol, provider, lookbackUS, chartEndUS)
 	if err != nil || count == 0 || firstUS <= 0 || firstUS >= chartStartUS {

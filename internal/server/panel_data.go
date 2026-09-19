@@ -245,10 +245,13 @@ func (s *Server) localCompletedDailyBars(ctx context.Context, symbol, source, pr
 		if !covered {
 			continue
 		}
-		bars, err := s.recorder.MinuteBars(ctx, symbol, source, provider, start.UnixMicro(), end.UnixMicro()-1)
+		// At 16:00 the 15:59 cached candle is completed. Querying 16:00-1µs
+		// would treat it as forming and omit it when only aggregates exist.
+		bars, err := s.recorder.MinuteBars(ctx, symbol, source, provider, start.UnixMicro(), end.UnixMicro())
 		if err != nil {
 			return nil, err
 		}
+		bars = barsInside(bars, start.UnixMicro(), end.UnixMicro()-1)
 		if bar, ok := aggregateRTHBars(bars); ok {
 			bar.SessionDateET, bar.StartUS, bar.EndUS, bar.Complete = day.Format("2006-01-02"), start.UnixMicro(), end.UnixMicro(), true
 			result = append(result, bar)
@@ -353,17 +356,41 @@ func (s *Server) handlePanelRTHContext(w http.ResponseWriter, r *http.Request) {
 		complete = err == nil
 	} else if s.recorder != nil && provider != "all" {
 		var stats storage.SessionTradeStats
+		tradeComplete := false
 		stats, err = s.recorder.EligibleSessionTradeStats(ctx, symbol, source, provider, start.UnixMicro(), endUS, throughUS)
 		if err == nil {
 			complete, err = s.recorder.HasCoverage(ctx, symbol, provider, "trades", start.UnixMicro(), endUS)
-			if err == nil && !complete {
-				complete, err = s.recorder.HasCoverage(ctx, symbol, provider, "minute_bars", start.UnixMicro(), endUS)
+			tradeComplete = complete
+			if err == nil && !complete && source == "historical" {
+				// Fill only completed-minute trade gaps with cached aggregates.
+				// Aggregate coverage cannot prove the forming candle's prefix.
+				_, missing, coverageErr := s.recorder.CoverageIntervals(ctx, symbol, provider, "trades", start.UnixMicro(), endUS)
+				err = coverageErr
+				boundary := throughUS - throughUS%forecastMinuteUS
+				complete = err == nil
+				for _, gap := range missing {
+					if gap.EndUS >= boundary {
+						complete = false
+						break
+					}
+					covered, coverErr := s.recorder.HasCoverage(ctx, symbol, provider, "minute_bars", gap.StartUS, gap.EndUS)
+					if coverErr != nil {
+						err = coverErr
+						complete = false
+						break
+					}
+					if !covered {
+						complete = false
+						break
+					}
+				}
 			}
 			if err == nil && !complete && mode == "massive" && source == "live" {
 				complete = s.symbolActiveAt(symbol) > 0 && s.symbolActiveAt(symbol) <= start.UnixMicro()
+				tradeComplete = complete
 			}
 		}
-		if err == nil && complete && stats.Count > 0 {
+		if err == nil && tradeComplete && stats.Count > 0 {
 			response.CompleteFromRTHOpen = true
 			response.Open, response.High, response.HighTimeUS, response.Low, response.LowTimeUS = stats.Open, stats.High, stats.HighTimeUS, stats.Low, stats.LowTimeUS
 			response.Last, response.LastTimeUS, response.EligibleTradeCount = stats.Last, stats.LastTimeUS, stats.Count
@@ -375,7 +402,12 @@ func (s *Server) handlePanelRTHContext(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err == nil && complete {
-			bars, err = s.recorder.MinuteBars(ctx, symbol, source, provider, start.UnixMicro(), endUS)
+			queryEnd := endUS
+			if throughUS >= closeTime.UnixMicro() {
+				queryEnd = closeTime.UnixMicro()
+			}
+			bars, err = s.recorder.MinuteBars(ctx, symbol, source, provider, start.UnixMicro(), queryEnd)
+			bars = barsInside(bars, start.UnixMicro(), endUS)
 		}
 	}
 	if err != nil {

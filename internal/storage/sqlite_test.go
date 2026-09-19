@@ -126,6 +126,26 @@ func TestMinuteBarsRespectExactReplayPosition(t *testing.T) {
 	}
 }
 
+func TestMinuteBarsExcludeLatePrintUntilRecordedArrival(t *testing.T) {
+	db := testDatabase(t)
+	ctx := context.Background()
+	base := time.Date(2026, 9, 18, 13, 30, 0, 0, time.UTC).UnixMicro()
+	if err := db.InsertTrades(ctx, []TradeRecord{
+		{Symbol: "RKLB", EventUS: base + 1e6, MarketTimeUS: base + 1e6, ReceivedUS: base + 1e6, SequenceID: 1, Price: 100, Size: 1, ChartEligible: true, Source: "live", Provider: "ibkr"},
+		{Symbol: "RKLB", EventUS: base + 2e6, MarketTimeUS: base + 2e6, ReceivedUS: base + 90e6, SequenceID: 2, Price: 200, Size: 1, ChartEligible: true, Source: "live", Provider: "ibkr"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := db.MinuteBars(ctx, "RKLB", "live", "ibkr", base, base+60e6, base+60e6)
+	if err != nil || len(before) != 1 || before[0].High != 100 {
+		t.Fatalf("late print leaked: %+v %v", before, err)
+	}
+	after, err := db.MinuteBars(ctx, "RKLB", "live", "ibkr", base, base+90e6, base+90e6)
+	if err != nil || len(after) != 1 || after[0].High != 200 {
+		t.Fatalf("arrived print missing: %+v %v", after, err)
+	}
+}
+
 func TestMinuteBarsUseEligibleMarketTimeAndDeterministicOrder(t *testing.T) {
 	database := testDatabase(t)
 	ctx := context.Background()

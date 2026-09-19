@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"tape-reading-tool/internal/config"
+	"tape-reading-tool/internal/feed"
 	"tape-reading-tool/internal/storage"
 	"tape-reading-tool/internal/tape"
 )
@@ -113,6 +114,77 @@ func openPanelDatabase(t *testing.T) *storage.Database {
 	}
 	t.Cleanup(func() { _ = database.Close() })
 	return database
+}
+
+func TestReplayADRIncludesFinalCachedMinuteAndNoCurrentSession(t *testing.T) {
+	s := panelServer(t, "replay")
+	db := openPanelDatabase(t)
+	s.AttachRecorder(db)
+	location, _ := time.LoadLocation("America/New_York")
+	start := time.Date(2026, 7, 23, 9, 30, 0, 0, location)
+	end := time.Date(2026, 7, 23, 16, 0, 0, 0, location)
+	bars := []storage.MinuteBar{
+		{TimeUS: start.UnixMicro(), Open: 100, High: 105, Low: 99, Close: 102, Volume: 10},
+		{TimeUS: end.Add(-time.Minute).UnixMicro(), Open: 102, High: 120, Low: 90, Close: 110, Volume: 20},
+		{TimeUS: start.AddDate(0, 0, 1).UnixMicro(), Open: 100, High: 999, Low: 1, Close: 200, Volume: 100},
+	}
+	if err := db.UpsertMinuteBars(context.Background(), "AAPL", "massive", bars); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkCoverage(context.Background(), storage.Coverage{Symbol: "AAPL", Provider: "massive", Kind: "minute_bars", StartUS: start.UnixMicro(), EndUS: end.UnixMicro() - 1}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := s.localCompletedDailyBars(context.Background(), "AAPL", "historical", "massive", start.AddDate(0, 0, 1), 1, location)
+	if err != nil || len(result) != 1 {
+		t.Fatalf("%+v %v", result, err)
+	}
+	if result[0].High != 120 || result[0].Low != 90 || result[0].Close != 110 || result[0].Volume != 30 {
+		t.Fatalf("final minute missing or future leaked: %+v", result[0])
+	}
+}
+
+func TestReplayRTHCombinesCachedEarlyRangeAndPartialTrades(t *testing.T) {
+	ctx := context.Background()
+	db := openPanelDatabase(t)
+	store := tape.NewStore("AAPL", 100, 4)
+	replay := feed.NewReplay(db, store, "historical", "massive", 1)
+	s := New(config.Defaults(), store, replay)
+	s.SetMode("replay")
+	s.AttachRecorder(db)
+	t.Cleanup(s.forecast.cancel)
+	location, _ := time.LoadLocation("America/New_York")
+	start := time.Date(2026, 7, 24, 9, 30, 0, 0, location).UnixMicro()
+	minute := int64(time.Minute / time.Microsecond)
+	through := start + 2*minute + 5e6
+	bars := []storage.MinuteBar{
+		{TimeUS: start, Open: 100, High: 150, Low: 95, Close: 110, Volume: 10},
+		{TimeUS: start + minute, Open: 110, High: 120, Low: 50, Close: 100, Volume: 10},
+		{TimeUS: start + 2*minute, Open: 100, High: 999, Low: 1, Close: 900, Volume: 100},
+	}
+	if err := db.UpsertMinuteBars(ctx, "AAPL", "massive", bars); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertTrades(ctx, []storage.TradeRecord{
+		{Symbol: "AAPL", EventUS: through, MarketTimeUS: through, SequenceID: 1, Price: 101, Size: 1, ChartEligible: true, Source: "historical", Provider: "massive"},
+		{Symbol: "AAPL", EventUS: through + 1e6, MarketTimeUS: through + 1e6, SequenceID: 2, Price: 999, Size: 1, ChartEligible: true, Source: "historical", Provider: "massive"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []storage.Coverage{
+		{Symbol: "AAPL", Provider: "massive", Kind: "minute_bars", StartUS: start, EndUS: start + 3*minute - 1},
+		{Symbol: "AAPL", Provider: "massive", Kind: "trades", StartUS: start + 2*minute, EndUS: start + 3*minute - 1},
+	} {
+		if err := db.MarkCoverage(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := replay.Cue(ctx, feed.ReplayRequest{Symbol: "AAPL", Source: "historical", Provider: "massive", EndUS: start + 3*minute, Speed: 1}, start, through, false); err != nil {
+		t.Fatal(err)
+	}
+	_, result := decodeRTH(t, s, "symbol=AAPL&session=2026-07-24")
+	if result.Status != "ready" || !result.CompleteFromRTHOpen || result.High != 150 || result.Low != 50 || result.Last != 101 {
+		t.Fatalf("lost early range or leaked forming/future data: %+v", result)
+	}
 }
 
 func TestPanelRTHContextUsesExactEligibleTradesThroughTimestamp(t *testing.T) {

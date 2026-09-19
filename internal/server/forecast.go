@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"tape-reading-tool/internal/feed"
 	"tape-reading-tool/internal/storage"
 	"tape-reading-tool/internal/tape"
 )
@@ -111,6 +112,43 @@ type forecastReply struct {
 	OriginUS   int64           `json:"origin_us"`
 	ClockUS    int64           `json:"clock_us"`
 	Result     json.RawMessage `json:"result,omitempty"`
+	RetryAfter time.Time       `json:"-"`
+}
+
+type forecastContext struct {
+	Mode, Source, Provider string
+	Clock                  time.Time
+	ReplayGeneration       uint64
+}
+
+func (s *Server) currentForecastContext(symbol string) (forecastContext, error) {
+	c := forecastContext{Mode: "live", Source: "live", Provider: "ibkr", Clock: s.now().UTC()}
+	if s.store.Status().Mode == "replay" {
+		r, ok := s.feed.(*feed.Replay)
+		if !ok {
+			return c, errors.New("Replay history adapter is unavailable")
+		}
+		state := r.Status()
+		if state.Symbol != symbol || state.PositionUS <= 0 || (state.State != "paused" && state.State != "replaying" && state.State != "complete") {
+			return c, errors.New("Choose a replay position before requesting a forecast")
+		}
+		if (state.Source != "historical" && state.Source != "live") || (state.Provider != "massive" && state.Provider != "ibkr") {
+			return c, errors.New("Choose a single replay data source and provider")
+		}
+		return forecastContext{Mode: "replay", Source: state.Source, Provider: state.Provider, Clock: time.UnixMicro(state.PositionUS).UTC(), ReplayGeneration: state.Generation}, nil
+	}
+	if s.store.Status().Mode != "live" || s.rvolMinuteBars == nil {
+		return c, errors.New("Forecasts require IBKR live history or a recorded replay")
+	}
+	return c, nil
+}
+
+func (s *Server) forecastContextMatches(symbol string, generation uint64, expected forecastContext, origin time.Time) (forecastContext, bool) {
+	current, err := s.currentForecastContext(symbol)
+	snap := s.store.Snapshot(symbol, 1)
+	return current, err == nil && s.store.Active() == symbol && snap.Generation == generation && snap.Status.Connected &&
+		current.Mode == expected.Mode && current.Source == expected.Source && current.Provider == expected.Provider &&
+		current.ReplayGeneration == expected.ReplayGeneration && current.Clock.Truncate(time.Minute).Equal(origin)
 }
 
 type forecastService struct {
@@ -192,7 +230,8 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snap := s.store.Snapshot(symbol, 1)
-	now := s.now().UTC()
+	context, contextErr := s.currentForecastContext(symbol)
+	now := context.Clock
 	origin := now.Truncate(time.Minute)
 	reply := forecastReply{Symbol: symbol, Generation: snap.Generation, OriginUS: origin.UnixMicro(), ClockUS: now.UnixMicro()}
 	finish := func(state, message string) { reply.State = state; reply.Message = message; writeJSON(w, 200, reply) }
@@ -214,17 +253,15 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		finish("key_required", "Set KRONOS_API_KEY_FILE on the tape backend, then restart it")
 		return
 	}
-	// Do not label receipt-time reconstruction, demo prints, or replay history as
-	// causally available live market bars. Those adapters need separate qualification.
-	if snap.Status.Mode != "live" || s.rvolMinuteBars == nil {
-		finish("unsupported_mode", "Automatic forecasting currently requires the IBKR live minute-history adapter")
+	if contextErr != nil {
+		finish("unsupported_mode", contextErr.Error())
 		return
 	}
 	if !snap.Status.Connected {
 		finish("feed_offline", "Waiting for the live market-data connection")
 		return
 	}
-	if s.cfg.IBKR.MarketDataType != 1 {
+	if context.Mode == "live" && s.cfg.IBKR.MarketDataType != 1 {
 		finish("delayed_feed", "Forecasting requires real-time market data (market_data_type: 1)")
 		return
 	}
@@ -232,10 +269,10 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 		finish("outside_session", "Waiting for an eligible trading-session minute")
 		return
 	}
-	key := fmt.Sprintf("%s:%d:%d", symbol, snap.Generation, origin.UnixMicro())
+	key := fmt.Sprintf("%s:%d:%s:%s:%s:%d:%d", symbol, snap.Generation, context.Mode, context.Source, context.Provider, context.ReplayGeneration, origin.UnixMicro())
 	f.mu.Lock()
 	if cached, ok := f.entries[key]; ok {
-		retryHistory := (cached.State == "history_unavailable" || cached.State == "input_unavailable") && now.UnixMicro()-cached.ClockUS >= (5*time.Second).Microseconds()
+		retryHistory := !cached.RetryAfter.IsZero() && !s.now().Before(cached.RetryAfter)
 		if !retryHistory {
 			cached.ClockUS = now.UnixMicro()
 			f.mu.Unlock()
@@ -250,7 +287,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if f.busy || now.Before(f.cooldown) {
+	if f.busy || s.now().Before(f.cooldown) {
 		f.mu.Unlock()
 		finish("busy", "Kronos is finishing earlier work; no new request queued")
 		return
@@ -268,7 +305,7 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	f.mu.Unlock()
 	// Lifetime is owned by the backend, not by a browser HTTP connection. A symbol
 	// switch/abort cannot release the in-flight slot while GPU work still runs.
-	go s.runForecast(key, reply, origin)
+	go s.runForecast(key, reply, origin, context)
 	writeJSON(w, 200, reply)
 }
 
@@ -342,6 +379,19 @@ func forecastWindow(bars []storage.MinuteBar, origin time.Time, session string) 
 	if len(selected) > 240 {
 		selected = selected[len(selected)-240:]
 	}
+	for i, b := range selected {
+		if b.TimeUS%forecastMinuteUS != 0 || (i > 0 && b.TimeUS <= selected[i-1].TimeUS) {
+			return nil, errors.New("History has a duplicate, unaligned, or out-of-order minute")
+		}
+	}
+	// Sparse premarket trading can leave gaps. Use the latest contiguous suffix
+	// rather than rejecting a later, sufficiently long uninterrupted history.
+	for i := len(selected) - 1; i > 0; i-- {
+		if selected[i].TimeUS-selected[i-1].TimeUS > forecastMinuteUS {
+			selected = selected[i:]
+			break
+		}
+	}
 	if len(selected) < 32 {
 		return nil, fmt.Errorf("Need at least 32 completed same-session bars; available %d (target 240)", len(selected))
 	}
@@ -409,7 +459,7 @@ func (f *forecastService) call(ctx context.Context, method, path string, body []
 	return data, response.StatusCode, nil
 }
 
-func (s *Server) runForecast(key string, reply forecastReply, origin time.Time) {
+func (s *Server) runForecast(key string, reply forecastReply, origin time.Time, inputContext forecastContext) {
 	f := s.forecast
 	uncertain := false
 	defer func() {
@@ -420,6 +470,9 @@ func (s *Server) runForecast(key string, reply forecastReply, origin time.Time) 
 		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		if reply.State == "history_unavailable" || reply.State == "input_unavailable" || reply.State == "not_ready" || (reply.State == "offline" && !uncertain) {
+			reply.RetryAfter = s.now().Add(5 * time.Second)
+		}
 		f.entries[key] = reply
 		f.busy = false
 		// A failed connection after POST does not prove remote GPU work stopped.
@@ -445,7 +498,15 @@ func (s *Server) runForecast(key string, reply forecastReply, origin time.Time) 
 		return
 	}
 	historyCtx, historyCancel := context.WithTimeout(ctx, 6*time.Second)
-	bars, err := s.completedForecastBars(historyCtx, reply.Symbol, origin)
+	var bars []storage.MinuteBar
+	if inputContext.Mode == "replay" {
+		replay := s.feed.(*feed.Replay)
+		// Read through the boundary, then forecastWindow removes the forming
+		// candle. This includes the just-completed cached aggregate in full.
+		bars, err = replay.MinuteBars(historyCtx, reply.Symbol, inputContext.Source, inputContext.Provider, origin.Add(-24*time.Hour).UnixMicro(), origin.UnixMicro(), inputContext.Clock.UnixMicro())
+	} else {
+		bars, err = s.completedForecastBars(historyCtx, reply.Symbol, origin)
+	}
 	historyCancel()
 	if err != nil {
 		fail("history_unavailable", "Completed market-minute history is unavailable")
@@ -463,19 +524,24 @@ func (s *Server) runForecast(key string, reply forecastReply, origin time.Time) 
 		fail("input_unavailable", err.Error())
 		return
 	}
-	snap := s.store.Snapshot(reply.Symbol, 1)
-	if s.store.Active() != reply.Symbol || snap.Generation != reply.Generation || snap.Status.Mode != "live" || !snap.Status.Connected {
+	currentContext, matches := s.forecastContextMatches(reply.Symbol, reply.Generation, inputContext, origin)
+	if !matches {
 		fail("superseded", "Symbol or data generation changed before inference")
 		return
 	}
-	now := s.now().UTC()
+	now := currentContext.Clock
 	if now.Sub(origin) >= time.Minute || now.Before(origin) {
 		fail("late_input", "A newer completed minute is available; updating forecast input")
 		return
 	}
 	hash := sha256.Sum256([]byte(f.nonce + ":" + key))
 	requestID := "tape-v1." + hex.EncodeToString(hash[:])
-	body, err := json.Marshal(forecastPayload(reply.Symbol, requestID, origin, now, window, f.config))
+	payload := forecastPayload(reply.Symbol, requestID, origin, now, window, f.config)
+	payload["mode"] = inputContext.Mode
+	if inputContext.Mode == "replay" {
+		payload["source"].(map[string]any)["provider"] = inputContext.Provider + "_" + inputContext.Source + "_replay_minutes"
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		fail("input_invalid", "Could not encode numerical candles")
 		return
@@ -502,7 +568,11 @@ func (s *Server) runForecast(key string, reply forecastReply, origin time.Time) 
 		}
 		return
 	}
-	if err := validateForecastReply(data, reply.Symbol, requestID, origin, f.config.Paths, window[len(window)-1].Close); err != nil {
+	if _, matches := s.forecastContextMatches(reply.Symbol, reply.Generation, inputContext, origin); !matches {
+		fail("superseded", "Replay position, symbol, or input minute changed during inference")
+		return
+	}
+	if err := validateForecastReply(data, reply.Symbol, requestID, origin, f.config.Paths, window[len(window)-1].Close, inputContext.Mode); err != nil {
 		fail("invalid_response", err.Error())
 		return
 	}
@@ -511,7 +581,7 @@ func (s *Server) runForecast(key string, reply forecastReply, origin time.Time) 
 	reply.Result = data
 }
 
-func validateForecastReply(data []byte, symbol, requestID string, origin time.Time, paths int, ref float64) error {
+func validateForecastReply(data []byte, symbol, requestID string, origin time.Time, paths int, ref float64, mode string) error {
 	var r struct {
 		Schema    string                     `json:"schema_version"`
 		Symbol    string                     `json:"symbol"`
@@ -526,7 +596,7 @@ func validateForecastReply(data []byte, symbol, requestID string, origin time.Ti
 		Status    string                     `json:"status"`
 		Seconds   int                        `json:"bar_seconds"`
 	}
-	if json.Unmarshal(data, &r) != nil || r.Schema != "1.0" || r.Symbol != symbol || r.RequestID != requestID || r.Model != "kronos-base" || r.Mode != "live" || !r.Origin.Equal(origin) || r.Reference != ref || r.Kind != "last_closed_close" || r.Paths != paths || r.Seconds != 60 {
+	if json.Unmarshal(data, &r) != nil || r.Schema != "1.0" || r.Symbol != symbol || r.RequestID != requestID || r.Model != "kronos-base" || r.Mode != mode || !r.Origin.Equal(origin) || r.Reference != ref || r.Kind != "last_closed_close" || r.Paths != paths || r.Seconds != 60 {
 		return errors.New("Kronos response identity or numerical contract did not match the request")
 	}
 	if r.Status != "ok" && r.Status != "late" && r.Status != "invalid_output" {

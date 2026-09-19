@@ -120,15 +120,26 @@ cancellation does not prematurely free GPU capacity. A transport failure after
 POST imposes an extra 135-second cooldown because failure is not proof that
 remote GPU work stopped. The upstream also retains its bounded worker queue.
 
-The current data adapter is the existing **IBKR live completed-minute TRADES
-history**, sharing its core RVOL cache and connection. It requests up to 240
-same-date, same-session bars and requires at least 32. Below 120 bars is visibly
-marked short history. No browser receipt-time bars, forming candle, forward-fill,
-previous-day padding, second market-data feed, or Massive fallback is used.
-Any gap, malformed OHLC, nonfinite value, duplicate, negative volume or stale
-last minute stops the forecast. Turnover is omitted deliberately so the service
-labels its OHLC-times-volume estimate rather than claiming reconstructed
-turnover is exact. IBKR real-time market-data type 1 is required.
+Live forecasts use **IBKR completed-minute TRADES history**, sharing the core
+RVOL cache and connection. Replay forecasts use the selected replay source and
+provider from the local database, with `mode=replay` and the authoritative replay
+position as `as_of`. Only candles completed by that position enter the model;
+the forming candle and later database rows are excluded. Paused replay can
+calculate without advancing playback. Results are scoped to symbol, source,
+provider, replay generation and minute; seeks discard in-flight old results.
+Readiness is checked before inference, with bounded retries if the service is
+unavailable. Playback itself never waits on the GPU.
+
+Both modes use up to 240 same-date, same-session bars and require at least 32
+contiguous completed minutes. If an earlier gap exists, only the contiguous
+suffix is used; no missing candles are invented. Below 120 bars is marked short
+history. Invalid OHLC, nonfinite values, duplicates, negative volume or a missing
+latest minute prevent inference. Turnover is omitted, so Kronos labels its
+OHLC-times-volume estimate. Real-time IBKR type 1 is required only for live mode.
+
+Historical provider aggregates may contain later corrections. Replay is labeled
+as replay research; bounding timestamps prevents future-candle leakage but does
+not establish that the downloaded dataset matches the original real-time feed.
 
 The initial time gate is conservative weekday/clock filtering. The **Kronos
 server's pinned XNYS calendar validation is authoritative** for holidays,
@@ -138,11 +149,9 @@ minute grid subject to that validation; it cannot promise absence of future
 halts. No rejected session is retried with relaxed validation. Inspect the
 Kronos logs for detailed 422 diagnostics.
 
-**Deliberate v1 limitation:** demo, Massive live, historical replay and live
-rewind are not sent to the model. They show `LIVE HISTORY ONLY` or an explicit
-unsupported state. A future replay adapter must reconstruct data as actually
-available at its replay clock; blindly using revised historical bars would not
-establish that. Existing replay behavior is not modified by this limitation.
+Demo, Massive live, deterministic video render, and the independent live rewind
+pane are not forecast adapters. Recorded replay requires one specific source
+and provider; combined-provider replay is rejected.
 
 The Spark service's existing request/response JSONL and raw-path artifacts are
 the research record. This panel adds no outcome calibrator or claimed Brier

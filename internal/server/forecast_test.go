@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"tape-reading-tool/internal/config"
+	"tape-reading-tool/internal/feed"
 	"tape-reading-tool/internal/storage"
 	"tape-reading-tool/internal/tape"
 )
@@ -40,7 +41,7 @@ func TestForecastWindowIsCompletedContiguousAndSameSession(t *testing.T) {
 	for name, mutate := range map[string]func([]storage.MinuteBar) []storage.MinuteBar{
 		"short":           func(b []storage.MinuteBar) []storage.MinuteBar { return b[:20] },
 		"stale":           func(b []storage.MinuteBar) []storage.MinuteBar { return b[:239] },
-		"gap":             func(b []storage.MinuteBar) []storage.MinuteBar { return append(b[:50], b[51:]...) },
+		"gap":             func(b []storage.MinuteBar) []storage.MinuteBar { return append(b[:230], b[231:]...) },
 		"duplicate":       func(b []storage.MinuteBar) []storage.MinuteBar { b[50] = b[49]; return b },
 		"nan":             func(b []storage.MinuteBar) []storage.MinuteBar { b[50].High = math.NaN(); return b },
 		"bad-ohlc":        func(b []storage.MinuteBar) []storage.MinuteBar { b[50].Low = 102; return b },
@@ -133,7 +134,7 @@ func mockForecastWire(input map[string]any) []byte {
 	lastTime, _ := time.Parse(time.RFC3339, last["timestamp"].(string))
 	// Identity fixture only. Full statistical contracts are checked in JS and
 	// against the real Pydantic launcher fixture by the Python contract check.
-	b, _ := json.Marshal(map[string]any{"schema_version": "1.0", "symbol": input["symbol"], "request_id": input["request_id"], "model_id": "kronos-base", "mode": "live",
+	b, _ := json.Marshal(map[string]any{"schema_version": "1.0", "symbol": input["symbol"], "request_id": input["request_id"], "model_id": "kronos-base", "mode": input["mode"],
 		"forecast_origin": lastTime.Add(time.Minute), "reference_price": last["close"], "reference_kind": "last_closed_close", "paths_attempted": 32, "bar_seconds": 60, "status": "ok",
 		"horizons": map[string]any{"1": map[string]any{}, "3": map[string]any{}, "5": map[string]any{}, "10": map[string]any{}}})
 	return b
@@ -373,4 +374,124 @@ func TestForecastProxyNeverFollowsRedirectWithKey(t *testing.T) {
 	if err != nil || code != 307 || leaked.Load() {
 		t.Fatalf("redirect %d %v leaked=%v", code, err, leaked.Load())
 	}
+}
+
+func replayForecastServer(t *testing.T, remote string, origin time.Time) (*Server, *feed.Replay) {
+	t.Helper()
+	db := openPanelDatabase(t)
+	store := tape.NewStore("QQQ", 100, 4)
+	replay := feed.NewReplay(db, store, "historical", "massive", 1)
+	s := New(config.Defaults(), store, replay)
+	s.SetMode("replay")
+	s.AttachRecorder(db)
+	s.forecast.cancel()
+	s.forecast = newForecastService(forecastConfig{Enabled: true, URL: remote, Key: strings.Repeat("k", 32), Paths: 32, Session: "extended"})
+	t.Cleanup(s.forecast.cancel)
+	// Include a forming and future candle with extreme prices: neither may
+	// reach the forecast model, even though it exists in the replay database.
+	bars := forecastTestBars(origin, 240)
+	for i := 0; i < 3; i++ {
+		bars = append(bars, storage.MinuteBar{TimeUS: origin.Add(time.Duration(i) * time.Minute).UnixMicro(), Open: 999, High: 999, Low: 999, Close: 999, Volume: 1})
+	}
+	if err := db.UpsertMinuteBars(context.Background(), "QQQ", "massive", bars); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := replay.Cue(context.Background(), feed.ReplayRequest{Symbol: "QQQ", Source: "historical", Provider: "massive", EndUS: origin.Add(time.Hour).UnixMicro(), Speed: 1}, origin.Add(-time.Minute).UnixMicro(), origin.Add(20*time.Second).UnixMicro(), false); err != nil {
+		t.Fatal(err)
+	}
+	return s, replay
+}
+
+func TestForecastReplayUsesPausedClockAndExcludesFuture(t *testing.T) {
+	var calls atomic.Int32
+	seen := make(chan map[string]any, 1)
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ready" {
+			_, _ = io.WriteString(w, `{"ready":true}`)
+			return
+		}
+		calls.Add(1)
+		var input map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&input)
+		seen <- input
+		_, _ = w.Write(mockForecastWire(input))
+	}))
+	defer remote.Close()
+	origin := time.Date(2026, 9, 18, 14, 17, 0, 0, time.UTC)
+	s, _ := replayForecastServer(t, remote.URL, origin)
+	s.now = func() time.Time { return origin.Add(24 * time.Hour) }
+	postForecast(s, "QQQ")
+	if r := waitForecast(t, s); r.State != "forecast" || r.ClockUS != origin.Add(20*time.Second).UnixMicro() {
+		t.Fatal(r)
+	}
+	input := <-seen
+	if input["mode"] != "replay" || input["as_of"] != "2026-09-18T14:17:20Z" {
+		t.Fatal(input)
+	}
+	if input["source"].(map[string]any)["provider"] != "massive_historical_replay_minutes" {
+		t.Fatal("wrong replay provenance")
+	}
+	bars := input["bars"].([]any)
+	if len(bars) != 240 {
+		t.Fatal(len(bars))
+	}
+	for _, raw := range bars {
+		bar := raw.(map[string]any)
+		at, _ := time.Parse(time.RFC3339, bar["timestamp"].(string))
+		if !at.Before(origin) || bar["close"] != float64(100) {
+			t.Fatal("future candle in model input", bar)
+		}
+	}
+	for i := 0; i < 5; i++ {
+		postForecast(s, "QQQ")
+	}
+	if calls.Load() != 1 {
+		t.Fatal("paused replay resampled")
+	}
+}
+
+func TestForecastReplaySeekDiscardsInflightResult(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ready" {
+			_, _ = io.WriteString(w, `{"ready":true}`)
+			return
+		}
+		var input map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&input)
+		close(entered)
+		<-release
+		_, _ = w.Write(mockForecastWire(input))
+	}))
+	defer remote.Close()
+	origin := time.Date(2026, 9, 18, 14, 17, 0, 0, time.UTC)
+	s, replay := replayForecastServer(t, remote.URL, origin)
+	postForecast(s, "QQQ")
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		close(release)
+		t.Fatal("no inference")
+	}
+	_, err := replay.Cue(context.Background(), feed.ReplayRequest{Symbol: "QQQ", Source: "historical", Provider: "massive", EndUS: origin.Add(time.Hour).UnixMicro(), Speed: 1}, origin.Add(-2*time.Minute).UnixMicro(), origin.Add(-time.Minute).UnixMicro(), false)
+	close(release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		s.forecast.mu.Lock()
+		busy := s.forecast.busy
+		for _, r := range s.forecast.entries {
+			if !busy && r.State != "superseded" {
+				t.Errorf("old seek result retained: %s", r.State)
+			}
+		}
+		s.forecast.mu.Unlock()
+		if !busy {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("worker did not finish")
 }

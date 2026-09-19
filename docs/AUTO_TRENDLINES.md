@@ -73,8 +73,9 @@ A result computed for an old history is never installed on a newer history.
 
 ## Performance and memory
 
-- At most 5,000 loaded **closed** bars are analyzed; existing history limits
-  (usually 2,000/2,200 bars) are not expanded and no extra history is downloaded.
+- At most 5,000 loaded **closed** bars are analyzed. Historical replay with
+  `-xtra` loads the latest 5,000 cached completed minute bars plus the forming
+  candle; live history retains its existing limits. Downloads remain explicit.
 - At most 1,104 pairs are evaluated and 12 lines retained. ATR/pivot extraction
   is linear; the bounded candidate checks scan at most the retained history.
 - One module worker per active chart, one in-flight job, one coalesced pending

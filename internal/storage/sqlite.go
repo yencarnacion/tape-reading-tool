@@ -793,6 +793,24 @@ func (d *Database) MinuteBarRange(ctx context.Context, symbol, provider string, 
 	return first.Int64, last.Int64, total.Int64, nil
 }
 
+// RecentMinuteBarStart finds bounded completed-bar context without assuming
+// calendar days contain a fixed number of traded minutes.
+func (d *Database) RecentMinuteBarStart(ctx context.Context, symbol, provider string, beforeUS int64, limit int) (int64, error) {
+	resolved, err := resolveProvider(provider)
+	if err != nil {
+		return 0, err
+	}
+	if limit < 1 || limit > 5000 {
+		return 0, fmt.Errorf("minute-bar context limit must be 1 through 5000")
+	}
+	var first sql.NullInt64
+	err = d.db.QueryRowContext(ctx, `SELECT MIN(minute_us) FROM (
+      SELECT minute_us FROM minute_bars WHERE symbol=? AND source='historical'
+      AND provider=? AND minute_us<? ORDER BY minute_us DESC LIMIT ?)`,
+		strings.ToUpper(strings.TrimSpace(symbol)), resolved, beforeUS, limit).Scan(&first)
+	return first.Int64, err
+}
+
 // coveredMinute answers the per-minute precedence question from one merged
 // interval list instead of one query per minute, which keeps a full session
 // chart to a single bounded coverage read.
@@ -863,15 +881,22 @@ func (d *Database) Events(ctx context.Context, symbol, source, provider string, 
 // MinuteBars aggregates exact trade prints up to endUS. Keeping this on the
 // replay API prevents a browser reload or seek from exposing the unfinished
 // portion of the current minute.
-func (d *Database) MinuteBars(ctx context.Context, symbol, source, provider string, startUS, endUS int64) ([]MinuteBar, error) {
+func (d *Database) MinuteBars(ctx context.Context, symbol, source, provider string, startUS, endUS int64, availableThroughUS ...int64) ([]MinuteBar, error) {
 	filter, filterArgs, err := dataFilter(source, provider)
 	if err != nil {
 		return nil, err
 	}
-	query := `SELECT market_time_us,price,size FROM trades WHERE symbol=? AND ` + filter + ` AND market_time_us>=? AND market_time_us<=? AND chart_eligible=1 ORDER BY market_time_us,sequence_id,id`
+	query := `SELECT market_time_us,price,size FROM trades WHERE symbol=? AND ` + filter + ` AND market_time_us>=? AND market_time_us<=? AND chart_eligible=1`
 	args := []any{symbol}
 	args = append(args, filterArgs...)
 	args = append(args, startUS, endUS)
+	// Forecasts need an independent arrival cutoff as well as a market-time
+	// window. Preserve the existing chart aggregation API when no cutoff is set.
+	if len(availableThroughUS) > 0 {
+		query += ` AND (CASE WHEN source='live' AND received_us>0 THEN received_us ELSE event_us END)<=?`
+		args = append(args, availableThroughUS[0])
+	}
+	query += ` ORDER BY market_time_us,sequence_id,id`
 	rows, err := d.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err

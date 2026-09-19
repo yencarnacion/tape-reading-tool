@@ -631,7 +631,7 @@ import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js'
   }
 
   function addTradeToMinuteBars(trade) {
-    const updated = appendMinuteBar(state.minuteBars, trade);
+    const updated = appendMinuteBar(state.minuteBars, trade, state.status.mode === 'replay' && state.xtraEnabled ? 5001 : 2000);
     if (updated && updated !== state.minuteBars[state.minuteBars.length - 1]) autoTrendlines.invalidate();
   }
 
@@ -640,7 +640,7 @@ import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js'
       timeUS: Number(bar.time_us), open: Number(bar.open), high: Number(bar.high), low: Number(bar.low),
       close: Number(bar.close), volume: Number(bar.volume) || 0, dollarVolume: Number(bar.dollar_volume) || 0
     })).filter((bar) => bar.timeUS > 0 && bar.close > 0);
-    state.minuteBars = loaded;
+    state.minuteBars = loaded.slice(-(state.xtraEnabled ? 5001 : 2000));
     state.replayChartEndUS = Number(chartEndUS) || 0;
     // Preserve prints that arrived while an ordinary chart-history request was
     // in flight. During a replay rewind these are prints from the old future

@@ -30,7 +30,7 @@ const server=createServer(async(req,res)=>{
       assert.equal(req.headers['x-tape-forecast'],'1');assert.equal(req.headers.authorization,undefined);
       const sent=JSON.parse(text);assert.equal(sent.symbol,symbol);assert.deepEqual(Object.keys(sent),['symbol']);pollCount++;
       const body={state:responseState,message:responseState==='forecast'?'Fabricated UI test result':'Test service unavailable',symbol,generation,origin_us:(start-2000)*1000,clock_us:start*1000};
-      if(responseState==='forecast')body.result=mockForecast(symbol,start-2000);
+      if(responseState==='forecast')body.result={...mockForecast(symbol,start-2000),mode};
       if(hold){held.push(()=>json(res,body));return;}json(res,body);return;
     }
     if(req.url.startsWith('/api/rvol-history')){json(res,{symbol,through_us:(start-2000)*1000,bars:[]});return;}
@@ -88,7 +88,8 @@ try{
  symbol='AAPL';generation=2;sendSnapshot();hold=false;for(const finish of held.splice(0))finish();
  await waitFor(`document.querySelector('.kronos-clock')?.textContent.startsWith('AAPL')`);
  await waitFor(`document.querySelector('.kronos-above')?.textContent === '63%'`);
- mode='replay';generation=3;sendSnapshot();await waitFor(`document.querySelector('.kronos-state strong')?.textContent === 'LIVE HISTORY ONLY'`);
+ mode='replay';generation=3;sendSnapshot();await waitFor(`document.querySelector('.kronos-basis')?.textContent.includes('REPLAY') && document.querySelector('.kronos-above')?.textContent === '63%' && !document.querySelector('.kronos-values').hidden`);
+ mode='demo';generation=4;sendSnapshot();await waitFor(`document.querySelector('.kronos-state strong')?.textContent === 'HISTORY UNAVAILABLE'`);
  const paused=pollCount;await sleep(1500);assert.equal(pollCount,paused);
  assert.equal(errors.length,0,JSON.stringify(errors));
  console.log('kronos browser check: laptop layouts, large type, independent slots, automatic polling, tick rollback, offline, symbol race, and replay isolation passed');
