@@ -49,6 +49,27 @@ eq.count_true = 0; eq.count_false++; eq.identified_bounds = [0,1/32];
 unknown.horizons['5'].paths_price_valid = 31; unknown.horizons['5'].paths_price_unknown = 1;
 assert.equal(forecastReading(unknown, 5, now).above.value, null);
 assert.equal(forecastReading(unknown, 5, now).median, null);
+const partial = forecastReading(unknown, 5, now);
+assert.equal(partial.above.validValue, 20/31);
+assert.deepEqual(partial.above.bounds, [20/32, 21/32]);
+assert.equal(partial.above.interval, null); // No confidence interval for selected survivors.
+// Exercise every possible usable count, including zero and one: never invent
+// a 50% result, and keep conditional estimates separate from all-path odds.
+for (let usable = 0; usable <= 32; usable++) {
+  const sample = structuredClone(r), h = sample.horizons['5'];
+  const above = Math.floor(usable * .75), below = usable-above;
+  for (const [field, yes] of [['close_above_reference',above],['close_below_reference',below],['close_equal_reference',0]]) {
+    Object.assign(h[field], { count_true: yes, count_false: usable-yes, count_unknown: 32-usable,
+      probability: usable === 32 ? yes/32 : null, identified_bounds: [yes/32,(yes+32-usable)/32] });
+  }
+  h.paths_price_valid = usable; h.paths_price_unknown = 32-usable;
+  const v = forecastReading(sample, 5, now);
+  assert.equal(v.above.validValue, usable ? above/usable : null);
+  assert.equal(v.above.value, usable === 32 ? above/32 : null);
+  assert.deepEqual(v.above.bounds, [above/32,(above+32-usable)/32]);
+  if (usable === 24) { assert.equal(v.above.validValue,.75); assert.deepEqual(v.above.bounds,[.5625,.8125]); }
+  if (usable) assert.equal(v.above.validValue + v.below.validValue, 1);
+}
 const panels = { slots: { primaryAnalytics: { activePanelId: 'adr-rth-extension' } }, settings: {} };
 assert.equal(lowerPanelSettings(panels, {}).slots.lowerAnalytics.activePanelId, 'kronos-forecast');
 assert.equal(lowerPanelSettings(panels, { slots: { lowerAnalytics: { activePanelId: 'tick-chart' } } }).slots.lowerAnalytics.activePanelId, 'tick-chart');

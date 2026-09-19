@@ -235,24 +235,28 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	key := fmt.Sprintf("%s:%d:%d", symbol, snap.Generation, origin.UnixMicro())
 	f.mu.Lock()
 	if cached, ok := f.entries[key]; ok {
-		cached.ClockUS = now.UnixMicro()
-		f.mu.Unlock()
-		writeJSON(w, 200, cached)
-		return
+		retryHistory := (cached.State == "history_unavailable" || cached.State == "input_unavailable") && now.UnixMicro()-cached.ClockUS >= (5*time.Second).Microseconds()
+		if !retryHistory {
+			cached.ClockUS = now.UnixMicro()
+			f.mu.Unlock()
+			writeJSON(w, 200, cached)
+			return
+		}
+		delete(f.entries, key)
+		for i, old := range f.order {
+			if old == key {
+				f.order = append(f.order[:i], f.order[i+1:]...)
+				break
+			}
+		}
 	}
 	if f.busy || now.Before(f.cooldown) {
 		f.mu.Unlock()
 		finish("busy", "Kronos is finishing earlier work; no new request queued")
 		return
 	}
-	// A forecast is never silently re-anchored to a mid-minute price. Wait for the
-	// next close when the browser first opens outside the strict freshness window.
-	age := now.Sub(origin)
-	if age < time.Second || age > 8*time.Second {
-		f.mu.Unlock()
-		finish("waiting_bar", "Automatic update at the next completed one-minute candle")
-		return
-	}
+	// Start immediately with the latest completed minute, even mid-minute.
+	// The reference and future grid remain anchored to that candle's close.
 	reply.State, reply.Message = "running", "Generating model paths"
 	f.entries[key] = reply
 	f.order = append(f.order, key)
@@ -378,7 +382,9 @@ func forecastPayload(symbol, requestID string, origin, asOf time.Time, bars []fo
 		"reference": map[string]any{"kind": "last_closed_close"},
 		"sampling":  map[string]any{"paths": c.Paths, "temperature": 1.0, "top_p": 1.0, "top_k": 0},
 		"events":    map[string]any{"terminal_thresholds_bps": []float64{10, -10}, "reach_thresholds_bps": []float64{}},
-		"options":   map[string]any{"raw_paths": false, "allow_stale_research": false, "invalid_output_policy": "unknown_no_repair_v1"},
+		// Spark defaults to a 10-second origin window. Explicitly allow a
+		// mid-minute start; runForecast still requires the current minute origin.
+		"options": map[string]any{"raw_paths": false, "allow_stale_research": true, "invalid_output_policy": "unknown_no_repair_v1"},
 	}
 }
 
@@ -447,6 +453,13 @@ func (s *Server) runForecast(key string, reply forecastReply, origin time.Time) 
 	}
 	window, err := forecastWindow(bars, origin, f.config.Session)
 	if err != nil {
+		// An early poll may precede IBKR finalization. Fetch history again on
+		// the next retry rather than retaining an incomplete minute in cache.
+		s.rvolMu.Lock()
+		if entry, ok := s.rvolCache[reply.Symbol]; ok && entry.throughUS == origin.UnixMicro() {
+			delete(s.rvolCache, reply.Symbol)
+		}
+		s.rvolMu.Unlock()
 		fail("input_unavailable", err.Error())
 		return
 	}
@@ -456,8 +469,8 @@ func (s *Server) runForecast(key string, reply forecastReply, origin time.Time) 
 		return
 	}
 	now := s.now().UTC()
-	if now.Sub(origin) > 9*time.Second || now.Before(origin) {
-		fail("late_input", "History arrived outside the 10-second origin window; waiting for next minute")
+	if now.Sub(origin) >= time.Minute || now.Before(origin) {
+		fail("late_input", "A newer completed minute is available; updating forecast input")
 		return
 	}
 	hash := sha256.Sum256([]byte(f.nonce + ":" + key))
@@ -478,7 +491,7 @@ func (s *Server) runForecast(key string, reply forecastReply, origin time.Time) 
 		case 401, 403:
 			fail("key_rejected", "Kronos rejected the server-side API key")
 		case 422:
-			fail("input_rejected", "Kronos rejected the input/session/profile; inspect its server log (no stale bypass)")
+			fail("input_rejected", "Kronos rejected the input/session/profile; inspect its server log")
 		case 429:
 			fail("busy", "Kronos queue is full; this origin will not be resampled")
 		case 503:

@@ -81,12 +81,21 @@ The small 95% interval is a Wilson interval for finite **model sampling only**.
 It is not a market-prediction confidence interval, real-market calibration,
 accuracy percentage, fill probability, or guarantee. Intervals are computed
 from validated event counts. The median move is a distribution summary, not
-an expected trade profit. No directional traffic-light grading is used.
+an expected trade profit. The leading ABOVE side is highlighted green and the
+leading BELOW side red, with a LEADS label and arrow. Ties stay neutral. Color
+indicates which model frequency is larger, not confidence or a trading recommendation.
 
-Unknown/invalid paths never become exact probabilities, and null never becomes
-0% or 50%. The selected horizon is withheld when price-path validity or the
-response contract fails. A lack of decoded sample diversity also withholds the
-headline. No empirical calibrator, measured forecasting edge, setup/tape model,
+When some paths are invalid, the headline shows conditional frequencies among
+usable paths only, explicitly labeled with the usable/attempted count and a
+selection-bias warning. All-path bounds show the range obtained by allowing the
+invalid paths to fall on either side; these are not confidence intervals. For
+example, 18 above out of 24 usable paths (32 attempted) displays 75% above among
+usable paths, with all-path above bounds of 56–81%. Usable-path counts measure
+output validity, not historical prediction accuracy. No Wilson interval or
+median is displayed for partial results. Zero usable paths remain UNKNOWN;
+null never becomes 0% or 50%. Contract failures or lack of decoded sample
+diversity still withhold the headline.
+No empirical calibrator, measured forecasting edge, setup/tape model,
 execution model, or automated trading feature is included.
 
 ## Automatic scheduling and data ownership
@@ -98,9 +107,12 @@ job and stores up to 16 origin/generation results, including failures. Repeated
 tabs/polls for a given symbol, data generation and completed minute reuse one
 job. No repeated random draws are taken to search for favorable odds.
 
-The first job starts approximately 1–8 seconds after a minute close. If the
-panel opens mid-minute, it waits for the next close instead of silently enabling
-stale research. If history arrives too late, that origin is skipped. Forecasts
+The first job starts immediately when the panel opens, using the latest completed
+minute even when opening mid-minute. Missing or incomplete history is retried
+every five seconds, without submitting inference until input is valid. The
+Spark request explicitly enables `allow_stale_research` to permit starts beyond
+its default ten-second cutoff; the app still refuses to submit an origin from
+a previous minute. Forecasts
 are labelled with their true age and withheld once a new minute origin exists.
 Slow results never overwrite another symbol or generation. Hidden/unmounted
 panels start no new work; an already accepted job may finish server-side so
@@ -141,7 +153,7 @@ score. Retain those records for later chronological/forward evaluation.
 `forecast.go` targets the **actual supplied self-contained Kronos launcher's
 `contracts.py` v1.0**, not illustrative response JSON in a research report.
 It sends numerical candles with offset timestamps, exact sampling fields,
-explicit source units, `allow_stale_research=false`, and the four horizons.
+explicit source units, `allow_stale_research=true`, and the four horizons.
 The response origin, request identity, reference, symbol, mode, model, path count
 and horizon presence are checked in Go. The panel additionally verifies event
 definitions, exhaustive counts, bounds, null semantics and calibration status.

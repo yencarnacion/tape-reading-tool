@@ -14,13 +14,14 @@ export function eventReading(event, { horizon, reference, comparator, paths }) {
   if (!finite(lo) || !finite(hi) || Math.abs(lo - yes / n) > 1e-8 || Math.abs(hi - (yes + unknown) / n) > 1e-8) throw new Error('Invalid unknown-path bounds');
   if (unknown) {
     if (event.probability !== null) throw new Error('Unknown paths cannot have exact odds');
-    return { unknown, yes, n, value: null, interval: null };
+    // Conditional frequency among usable paths is not the all-path probability.
+    return { unknown, yes, n, value: null, validValue: n > unknown ? yes / (n-unknown) : null, bounds: [lo, hi], interval: null };
   }
   if (!finite(event.probability) || Math.abs(event.probability - yes / n) > 1e-8) throw new Error('Frequency does not match counts');
   // Compute the interval from the counts, never call it real-world confidence.
   const p = yes / n, z = 1.959963984540054, den = 1 + z*z/n;
   const center = (p + z*z/(2*n))/den, radius = z*Math.sqrt(p*(1-p)/n + z*z/(4*n*n))/den;
-  return { unknown: 0, yes, n, value: p, interval: [Math.max(0, center-radius), Math.min(1, center+radius)] };
+  return { unknown: 0, yes, n, value: p, validValue: p, bounds: [lo, hi], interval: [Math.max(0, center-radius), Math.min(1, center+radius)] };
 }
 
 export function forecastReading(result, horizon, nowUS) {

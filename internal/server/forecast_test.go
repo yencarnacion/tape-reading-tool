@@ -224,8 +224,8 @@ func TestForecastProxyDedupeAuthAndCanonicalRequest(t *testing.T) {
 		t.Fatal(future)
 	}
 	options := input["options"].(map[string]any)
-	if options["allow_stale_research"] != false {
-		t.Fatal("stale bypass")
+	if options["allow_stale_research"] != true {
+		t.Fatal("mid-minute requests must opt into Spark's extended origin window")
 	}
 	if bytes.Contains(final.Result, []byte(strings.Repeat("k", 32))) {
 		t.Fatal("bearer in response")
@@ -237,11 +237,8 @@ func TestForecastProxyDedupeAuthAndCanonicalRequest(t *testing.T) {
 		t.Fatal("context wrong")
 	}
 }
-func TestForecastDoesNotLaunchForReplayLateOrMissingKey(t *testing.T) {
+func TestForecastDoesNotLaunchForReplayOrMissingKey(t *testing.T) {
 	s := forecastTestServer(t, "http://127.0.0.1:1", time.Date(2026, 9, 18, 14, 17, 20, 0, time.UTC))
-	if r, _ := postForecast(s, "QQQ"); r.State != "waiting_bar" {
-		t.Fatal(r)
-	}
 	s.store.SetStatus(tape.FeedStatus{Mode: "replay", Connected: true})
 	if r, _ := postForecast(s, "QQQ"); r.State != "unsupported_mode" {
 		t.Fatal(r)
@@ -251,6 +248,77 @@ func TestForecastDoesNotLaunchForReplayLateOrMissingKey(t *testing.T) {
 		t.Fatal(r)
 	}
 }
+func TestForecastStartsImmediatelyThroughoutMinute(t *testing.T) {
+	for _, second := range []int{0, 20, 59} {
+		t.Run(time.Duration(second*int(time.Second)).String(), func(t *testing.T) {
+			var calls atomic.Int32
+			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/ready" {
+					_, _ = io.WriteString(w, `{"ready":true}`)
+					return
+				}
+				calls.Add(1)
+				var input map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&input)
+				if input["options"].(map[string]any)["allow_stale_research"] != true {
+					t.Error("Spark mid-minute permission missing")
+				}
+				_, _ = w.Write(mockForecastWire(input))
+			}))
+			defer remote.Close()
+			s := forecastTestServer(t, remote.URL, time.Date(2026, 9, 18, 14, 17, second, 0, time.UTC))
+			if r, _ := postForecast(s, "QQQ"); r.State != "running" {
+				t.Fatalf("did not start immediately: %+v", r)
+			}
+			if r := waitForecast(t, s); r.State != "forecast" {
+				t.Fatal(r)
+			}
+			postForecast(s, "QQQ")
+			if calls.Load() != 1 {
+				t.Fatal("same-minute forecast was resampled")
+			}
+		})
+	}
+}
+
+func TestForecastRetriesIncompleteHistoryWithoutWaitingForNextMinute(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ready" {
+			_, _ = io.WriteString(w, `{"ready":true}`)
+			return
+		}
+		var input map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&input)
+		_, _ = w.Write(mockForecastWire(input))
+	}))
+	defer remote.Close()
+	origin := time.Date(2026, 9, 18, 14, 17, 0, 0, time.UTC)
+	s := forecastTestServer(t, remote.URL, origin)
+	var clock atomic.Int64
+	clock.Store(origin.UnixNano())
+	s.now = func() time.Time { return time.Unix(0, clock.Load()) }
+	var historyCalls atomic.Int32
+	s.rvolMinuteBars = func(context.Context, string, time.Time, int) ([]storage.MinuteBar, error) {
+		bars := forecastTestBars(origin, 240)
+		if historyCalls.Add(1) == 1 {
+			return bars[:239], nil
+		}
+		return bars, nil
+	}
+	postForecast(s, "QQQ")
+	if r := waitForecast(t, s); r.State != "input_unavailable" {
+		t.Fatal(r)
+	}
+	clock.Store(origin.Add(5 * time.Second).UnixNano())
+	postForecast(s, "QQQ")
+	if r := waitForecast(t, s); r.State != "forecast" {
+		t.Fatal(r)
+	}
+	if historyCalls.Load() != 2 {
+		t.Fatal("incomplete history was not refreshed")
+	}
+}
+
 func TestForecastAbortDoesNotReleaseBackendWork(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})

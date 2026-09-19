@@ -20,17 +20,18 @@ export function createKronosPanel({ root, host, settings }) {
       <div class="kronos-question"></div>
       <div class="kronos-numbers"><div><output class="kronos-above">—</output><span>ABOVE</span></div><div><output class="kronos-below">—</output><span>BELOW</span></div></div>
       <div class="kronos-sampling"></div>
+      <div class="kronos-bounds" hidden></div>
       <div class="kronos-move"></div>
       <div class="kronos-details"></div>
     </div>
     <div class="kronos-clock"></div>
   </section>`;
   const query = (name) => root.querySelector(`.kronos-${name}`);
-  const ui = Object.fromEntries(['controls','basis','state','values','question','above','below','sampling','move','details','clock'].map((name) => [name, query(name)]));
+  const ui = Object.fromEntries(['controls','basis','state','values','question','numbers','above','below','sampling','bounds','move','details','clock'].map((name) => [name, query(name)]));
   let horizon = FORECAST_HORIZONS.includes(settings.horizon) ? settings.horizon : 5;
   let epoch = 0, stopped = false, inFlight = null, result = null, lastSecond = -1, nextPoll = 0;
   let snapshot = host.currentSnapshot(), lastOriginUS = 0;
-  let stateMessage = { state: 'waiting_bar', message: 'Automatic update after each completed one-minute candle' };
+  let stateMessage = { state: 'running', message: 'Requesting forecast from the latest completed minute' };
   const buttons = FORECAST_HORIZONS.map((value) => {
     const b = document.createElement('button'); b.type = 'button'; b.textContent = `${value}m`;
     b.setAttribute('aria-label', `${value} completed one-minute bars`);
@@ -57,20 +58,32 @@ export function createKronosPanel({ root, host, settings }) {
       const view = forecastReading(result, horizon, nowUS);
       ui.clock.textContent = `${snapshot.symbol} · origin ${etTime(view.origin)} ET · age ${Math.floor(view.age)}s`;
       if (view.expired) { ui.state.querySelector('strong').textContent = 'NEXT CANDLE'; ui.state.querySelector('span').textContent = 'Previous forecast is no longer current; automatic update pending'; return; }
-      if (view.above.unknown) {
+      if (view.above.unknown === view.n) {
         ui.state.querySelector('strong').textContent = 'UNKNOWN';
-        ui.state.querySelector('span').textContent = `${view.above.unknown}/${view.n} model paths invalid at ${horizon}m. No exact odds displayed.`;
+        ui.state.querySelector('span').textContent = `0/${view.n} paths usable at ${horizon}m. No directional estimate available.`;
         return;
       }
+      const valid = view.n - view.above.unknown, partial = view.above.unknown > 0;
       ui.state.hidden = true; ui.values.hidden = false;
-      ui.basis.textContent = `KRONOS · ${view.n} PATHS · UNCALIBRATED${view.shortContext ? " · SHORT HISTORY" : ""}`;
+      ui.basis.textContent = `KRONOS · ${valid}/${view.n} USABLE · UNCALIBRATED${view.shortContext ? " · SHORT HISTORY" : ""}`;
       ui.question.textContent = `Close vs $${view.reference.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 })} at ${etTime(view.close)} ET`;
-      ui.above.textContent = percent(view.above.value); ui.below.textContent = percent(view.below.value);
-      ui.above.setAttribute('aria-label', `${view.above.yes} of ${view.n} generated paths close above the reference`);
-      ui.below.setAttribute('aria-label', `${view.below.yes} of ${view.n} generated paths close below the reference`);
-      ui.sampling.textContent = `Above: ${view.above.yes}/${view.n} · equal ${view.equal.yes}/${view.n} · 95% sampling ${percent(view.above.interval[0])}–${percent(view.above.interval[1])}`;
-      ui.sampling.title = 'Wilson interval for finite model sampling only. NOT a real-market probability or prediction-accuracy interval.';
+      ui.above.textContent = percent(view.above.validValue); ui.below.textContent = percent(view.below.validValue);
+      const leader = view.above.yes > view.below.yes ? 'above' : view.below.yes > view.above.yes ? 'below' : 'tie';
+      ui.numbers.dataset.leader = leader;
+      ui.above.nextElementSibling.textContent = leader === 'above' ? '▲ ABOVE · LEADS' : leader === 'tie' ? 'ABOVE · TIED' : 'ABOVE';
+      ui.below.nextElementSibling.textContent = leader === 'below' ? '▼ BELOW · LEADS' : leader === 'tie' ? 'BELOW · TIED' : 'BELOW';
+      ui.above.setAttribute('aria-label', `${view.above.yes} of ${valid} usable generated paths close above the reference; ${view.above.unknown} unusable paths excluded`);
+      ui.below.setAttribute('aria-label', `${view.below.yes} of ${valid} usable generated paths close below the reference; ${view.below.unknown} unusable paths excluded`);
+      ui.sampling.textContent = partial
+        ? `USABLE PATHS ONLY · ${view.above.unknown} invalid · may be biased`
+        : `Above: ${view.above.yes}/${view.n} · equal ${view.equal.yes}/${view.n} · 95% sampling ${percent(view.above.interval[0])}–${percent(view.above.interval[1])}`;
+      ui.sampling.title = partial
+        ? 'Percentages exclude invalid paths. Validity is not prediction accuracy; excluding paths may bias the estimate. Ranges allow invalid paths to fall on either side, and are not confidence intervals.'
+        : 'Wilson interval for finite model sampling only. NOT a real-market probability or prediction-accuracy interval.';
       ui.move.textContent = view.median === null ? '' : `Median close move ${view.median >= 0 ? '+' : ''}${(view.median/100).toFixed(2)}%`;
+      ui.bounds.hidden = !partial;
+      ui.bounds.textContent = partial ? `All-path bounds: ↑ ${percent(view.above.bounds[0])}–${percent(view.above.bounds[1])} · ↓ ${percent(view.below.bounds[0])}–${percent(view.below.bounds[1])}` : '';
+      ui.bounds.title = ui.sampling.title;
       ui.details.textContent = `${view.context} bars${view.shortContext ? ' · SHORT CONTEXT' : ''} · equal ${view.equal.yes}/${view.n}`;
       ui.details.title = `Amount is estimated by Kronos from volume × mean OHLC. No tape, news, execution or calibration model.${view.qualityWarning ? ` ${view.qualityWarning}.` : ''}`;
       ui.clock.textContent = `${snapshot.symbol} · ${etTime(view.origin)} → ${etTime(view.close)} ET · ${Math.floor(view.age)}s old${view.late ? ' · BAR-ANCHORED' : ''}`;
@@ -117,7 +130,7 @@ export function createKronosPanel({ root, host, settings }) {
     onEvent(event) {
       if (event.type === 'snapshot' || event.type === 'modeChanged') {
         clear(); snapshot = host.currentSnapshot();
-        stateMessage = { state: 'waiting_bar', message: 'Waiting for a completed one-minute market candle' };
+        stateMessage = { state: 'running', message: 'Requesting forecast from the latest completed minute' };
       }
     },
     render(nowUS) {
@@ -126,8 +139,7 @@ export function createKronosPanel({ root, host, settings }) {
       // Do not use replay wall time, receipt-time candles or a selected tick size.
       const origin = Math.floor(nowUS/60e6)*60e6;
       if (origin !== lastOriginUS) { lastOriginUS = origin; nextPoll = 0; lastSecond = -1; }
-      // Delay until 1s after the boundary so the provider can finalize the bar.
-      if (nowUS-origin >= 1e6) void poll(nowUS);
+      void poll(nowUS);
       paint(nowUS);
     },
     unmount() { stopped = true; clear(); root.classList.remove('kronos-root'); root.replaceChildren(); }
