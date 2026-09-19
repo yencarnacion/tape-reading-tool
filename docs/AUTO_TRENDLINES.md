@@ -76,9 +76,15 @@ A result computed for an old history is never installed on a newer history.
 
 - At most 5,000 loaded **closed** bars are analyzed, plus one forming candle
   retained by the chart. Background hydration starts after a 2.5-second delay
-  (and after live RVOL warmup). IBKR live uses IBKR aggregates; Massive live and historical
-  replay uses Massive aggregates through the replay clock, never future candles.
-  A recording database is required. Other replay sources stay cache-only.
+  (and after live RVOL warmup). IBKR live and replay use IBKR aggregates; Massive
+  live and historical replay use Massive aggregates. Replay requests stop at the
+  replay clock, never future candles. A recording database is required.
+- IBKR historical and recorded-live replay open one history-only TWS/IB Gateway
+  connection per missing-history job, using the configured client ID plus 2
+  (default 99). Keep that ID available. No live subscriptions or orders are made,
+  and connection callbacks do not touch the replay store. The connection closes
+  when the job finishes or fails; fully cached history needs no connection.
+  Mixed-provider (`all`) replays remain cache-only.
 - Only one background history job runs at a time. Seven-day ranges reuse persisted
   coverage, including empty weekends, with one second between missing-range requests.
   The search is bounded to 91 calendar days and four minutes; new/sparse symbols

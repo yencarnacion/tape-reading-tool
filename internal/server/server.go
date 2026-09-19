@@ -25,24 +25,25 @@ import (
 var webFS embed.FS
 
 type Server struct {
-	chartHistorySlot  chan struct{}
-	chartHistoryFetch func(context.Context, string, string, time.Time, time.Time) error
-	forecast          *forecastService
-	cfg               config.Config
-	store             *tape.Store
-	feed              feed.Feed
-	upgrader          websocket.Upgrader
-	rvolMu            sync.Mutex
-	rvolCache         map[string]rvolHistoryCache
-	rvolMinuteBars    func(context.Context, string, time.Time, int) ([]storage.MinuteBar, error)
-	dailyBars         func(context.Context, string, time.Time, int) ([]storage.MinuteBar, error)
-	dailyMu           sync.Mutex
-	dailyCache        map[string]dailyHistoryCache
-	panelDataMu       sync.Mutex
-	panelDataCache    map[string]panelDataCacheEntry
-	now               func() time.Time
-	liveChart         bool
-	liveXtra          bool
+	chartHistorySlot     chan struct{}
+	chartHistoryFetch    func(context.Context, string, string, time.Time, time.Time) error
+	chartHistoryOpenIBKR func(context.Context) (feed.MinuteBarReader, func(), error)
+	forecast             *forecastService
+	cfg                  config.Config
+	store                *tape.Store
+	feed                 feed.Feed
+	upgrader             websocket.Upgrader
+	rvolMu               sync.Mutex
+	rvolCache            map[string]rvolHistoryCache
+	rvolMinuteBars       func(context.Context, string, time.Time, int) ([]storage.MinuteBar, error)
+	dailyBars            func(context.Context, string, time.Time, int) ([]storage.MinuteBar, error)
+	dailyMu              sync.Mutex
+	dailyCache           map[string]dailyHistoryCache
+	panelDataMu          sync.Mutex
+	panelDataCache       map[string]panelDataCacheEntry
+	now                  func() time.Time
+	liveChart            bool
+	liveXtra             bool
 
 	recorder       *storage.Database
 	rewindPane     bool

@@ -54,11 +54,13 @@ func (s *Server) handleChartHistory(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		status := replay.Status()
-		if status.Symbol != symbol || status.Source != "historical" || status.Provider != "massive" || status.PositionUS <= 0 {
-			http.Error(w, "background replay history requires Massive historical replay", 422)
+		canDownload := (status.Provider == "massive" && status.Source == "historical") ||
+			(status.Provider == "ibkr" && (status.Source == "historical" || status.Source == "live"))
+		if status.Symbol != symbol || !canDownload || status.PositionUS <= 0 {
+			http.Error(w, "background replay history requires a specific IBKR or Massive historical provider", 422)
 			return
 		}
-		provider = "massive"
+		provider = status.Provider
 		through = time.UnixMicro(status.PositionUS).UTC().Truncate(time.Minute)
 	default:
 		http.Error(w, "history unavailable in this mode", 422)
@@ -87,6 +89,37 @@ func (s *Server) handleChartHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) loadChartHistory(ctx context.Context, symbol, provider string, through time.Time) ([]storage.MinuteBar, error) {
+	reader := feed.MinuteBarReader(s.rvolMinuteBars)
+	var closeSession func()
+	defer func() {
+		if closeSession != nil {
+			closeSession()
+		}
+	}()
+	// Open a replay history connection lazily, only if cached coverage is missing,
+	// and reuse it for this whole job. Live mode retains its existing connection.
+	fetch := s.chartHistoryFetch
+	if fetch == nil {
+		fetch = func(ctx context.Context, symbol, provider string, start, end time.Time) error {
+			if provider == "massive" {
+				return s.fetchChartHistoryRange(ctx, symbol, provider, start, end)
+			}
+			if reader == nil {
+				open := s.chartHistoryOpenIBKR
+				if open == nil {
+					open = func(ctx context.Context) (feed.MinuteBarReader, func(), error) {
+						return feed.OpenIBKRMinuteHistory(ctx, s.cfg.IBKR)
+					}
+				}
+				var err error
+				reader, closeSession, err = open(ctx)
+				if err != nil {
+					return err
+				}
+			}
+			return s.saveIBKRChartHistory(ctx, symbol, start, end, reader)
+		}
+	}
 	// Walk from newest to oldest, checking coverage (including empty weekends)
 	// rather than assuming that an old cached block is current and contiguous.
 	end := through
@@ -108,10 +141,6 @@ func (s *Server) loadChartHistory(ctx context.Context, symbol, provider string, 
 				timer.Stop()
 				return nil, ctx.Err()
 			case <-timer.C:
-			}
-			fetch := s.chartHistoryFetch
-			if fetch == nil {
-				fetch = s.fetchChartHistoryRange
 			}
 			if err := fetch(ctx, symbol, provider, time.UnixMicro(gap.StartUS), time.UnixMicro(gap.EndUS+1)); err != nil {
 				return nil, err
@@ -139,9 +168,16 @@ func (s *Server) fetchChartHistoryRange(ctx context.Context, symbol, provider st
 			Symbol: symbol, Start: start, End: end.Add(-time.Microsecond),
 		})
 	}
+	return s.saveIBKRChartHistory(ctx, symbol, start, end, s.rvolMinuteBars)
+}
+
+func (s *Server) saveIBKRChartHistory(ctx context.Context, symbol string, start, end time.Time, reader feed.MinuteBarReader) error {
+	if reader == nil {
+		return fmt.Errorf("IBKR history unavailable")
+	}
 	// IBKR returns a seven-day window. An effectively unlimited result count
 	// avoids marking truncated windows covered; only the requested gap is saved.
-	bars, err := s.rvolMinuteBars(ctx, symbol, end, 11000)
+	bars, err := reader(ctx, symbol, end, 11000)
 	if err != nil {
 		return err
 	}
@@ -151,8 +187,8 @@ func (s *Server) fetchChartHistoryRange(ctx context.Context, symbol, provider st
 			filtered = append(filtered, bar)
 		}
 	}
-	if err := s.recorder.UpsertMinuteBars(ctx, symbol, provider, filtered); err != nil {
+	if err := s.recorder.UpsertMinuteBars(ctx, symbol, "ibkr", filtered); err != nil {
 		return err
 	}
-	return s.recorder.MarkCoverage(ctx, storage.Coverage{Symbol: symbol, Provider: provider, Kind: "minute_bars", StartUS: start.UnixMicro(), EndUS: end.UnixMicro() - 1, RowCount: int64(len(filtered))})
+	return s.recorder.MarkCoverage(ctx, storage.Coverage{Symbol: symbol, Provider: "ibkr", Kind: "minute_bars", StartUS: start.UnixMicro(), EndUS: end.UnixMicro() - 1, RowCount: int64(len(filtered))})
 }

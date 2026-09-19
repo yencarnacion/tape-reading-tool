@@ -364,8 +364,9 @@ stops the worker. Tick, daily, and Live Rewind charts are unchanged.
 
 After the chart opens, background history loading targets 5,000 completed
 one-minute candles without blocking the initial chart or tape. It reuses cached
-history and downloads missing ranges from IBKR live or Massive live/historical
-replay. Replay history is capped at the replay clock. A recording database and
+history and downloads missing ranges from IBKR live/replay or Massive live/historical
+replay. IBKR replay uses a history-only TWS/IB Gateway connection with the configured
+client ID plus 2 (default 99); keep that ID free. Replay history is capped at the replay clock. A recording database and
 provider access are required; sparse/new tickers may have fewer candles.
 
 See [Auto Trendlines](docs/AUTO_TRENDLINES.md) for the algorithm, confirmation delay,

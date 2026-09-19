@@ -10,6 +10,7 @@ import (
 
 	"github.com/scmhub/ibapi"
 
+	"tape-reading-tool/internal/config"
 	"tape-reading-tool/internal/storage"
 	"tape-reading-tool/internal/tape"
 )
@@ -22,6 +23,37 @@ type ibkrBarRequest struct {
 type ibkrBarResult struct {
 	bars []storage.MinuteBar
 	err  error
+}
+
+type MinuteBarReader func(context.Context, string, time.Time, int) ([]storage.MinuteBar, error)
+
+// OpenIBKRMinuteHistory creates a history-only session for replay backfill.
+// Its private store isolates connection callbacks from the actual replay.
+// ClientID+1 is reserved by the detailed tick downloader; +2 is used here.
+// No Run/SetSymbol/market-data subscription or order request is made.
+func OpenIBKRMinuteHistory(ctx context.Context, cfg config.IBKRConfig) (MinuteBarReader, func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	cfg.ClientID += 2
+	f := NewIBKR(cfg, tape.NewStore("AAPL", 1, 1), nil)
+	wrapper := newIBWrapper(f)
+	client := ibapi.NewEClient(wrapper)
+	if err := client.Connect(cfg.Host, cfg.Port, cfg.ClientID); err != nil {
+		_ = client.Disconnect()
+		return nil, nil, err
+	}
+	closeSession := func() { f.setClient(nil); _ = client.Disconnect() }
+	timeout, err := time.ParseDuration(cfg.ConnectTimeout)
+	if err != nil || timeout <= 0 {
+		timeout = 3 * time.Second
+	}
+	if !waitForIBKRReady(ctx, wrapper, timeout) {
+		closeSession()
+		return nil, nil, fmt.Errorf("IBKR background history session not ready")
+	}
+	f.setClient(client)
+	return f.RVOLMinuteBars, closeSession, nil
 }
 
 // RVOLMinuteBars requests a small, one-off IBKR TRADES bar history through the
