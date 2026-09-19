@@ -1,0 +1,42 @@
+name: Auto trendlines branch integration
+on:
+  push:
+    branches: [feature/auto-trendlines]
+    paths:
+      - 'scripts/integrate-auto-trendlines.py'
+      - 'internal/server/web/auto-trendlines*'
+      - 'scripts/*auto-trendlines*'
+      - '.github/workflows/auto-trendlines-integration.yml'
+permissions:
+  contents: write
+jobs:
+  integrate-and-test:
+    if: github.ref == 'refs/heads/feature/auto-trendlines'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Apply checksum-guarded integration
+        run: python3 scripts/integrate-auto-trendlines.py
+      - name: JavaScript tests and syntax
+        run: |
+          node --test scripts/auto-trendlines.test.mjs
+          for file in internal/server/web/auto-trendlines*.js internal/server/web/app.js; do node --check "$file"; done
+      - name: Existing Go suite
+        run: go test ./...
+      - name: Record benchmark
+        run: node --expose-gc scripts/bench-auto-trendlines.mjs | tee docs/auto-trendlines-benchmark.json
+      - name: Commit verified integration to feature branch only
+        run: |
+          test "$GITHUB_REF" = refs/heads/feature/auto-trendlines
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add internal/server/web/app.js internal/server/web/index.html README.md docs/auto-trendlines-benchmark.json
+          git commit -m 'Integrate default-on auto trendlines with the minute chart and verify tests'
+          git push origin HEAD:refs/heads/feature/auto-trendlines

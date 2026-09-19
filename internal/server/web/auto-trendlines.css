@@ -1,0 +1,11 @@
+/* Keep the toggle beside the timeframe buttons, outside the candle plot. */
+.market-chart-tabs #trendlinesButton {
+  margin-left: 5px;
+  padding: 0 6px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.market-chart-tabs #trendlinesButton[hidden] { display: none; }
+@media (max-width: 520px) {
+  .market-chart-tabs #trendlinesButton { margin-left: 3px; padding: 0 4px; font-size: 10px; }
+}
