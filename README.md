@@ -352,3 +352,15 @@ Started as `./go.sh demo -rewind`, the same check also drives Live Rewind: it co
 - Price scales expand immediately for genuine eligible highs/lows. Contraction waits 1.5 seconds and then eases by elapsed time, avoiding redraw-rate-dependent breathing while never clipping a new market move.
 - Massive live mode also stamps each event when the Go server receives it; neither provider's browser WebSocket batching time is used for rolling metrics.
 - The referenced `ticksonic-original` repository returned GitHub 404 during implementation. The mixer and synthesis path here were implemented directly from the requested behavior.
+
+
+## Automatic trendlines
+
+The one-minute market chart includes a **TRENDLINES ON / OFF** button beside the
+1 MIN and 90 DAY controls. It defaults to ON and remembers the browser's choice.
+Reset Controls restores ON. Small/large support and resistance lines are computed
+locally in a bounded worker using already-loaded candles; turning them off also
+stops the worker. Tick, daily, and Live Rewind charts are unchanged.
+
+See [Auto Trendlines](docs/AUTO_TRENDLINES.md) for the algorithm, confirmation delay,
+performance limits, tests, and deliberate differences from TradingView.

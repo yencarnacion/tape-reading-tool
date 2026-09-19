@@ -9,6 +9,7 @@ import { mergePanelSettings } from './panel-api.js';
 import { tapePressureManifest, createTapePressureInstance } from './tape-pressure-panel.js';
 import { blankPanelManifest } from './blank-panel.js';
 import { adrRTHManifest } from './adr-rth-extension-panel.js';
+import { AutoTrendlinesController } from './auto-trendlines-controller.js';
 
 (() => {
   'use strict';
@@ -83,6 +84,11 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
   // The live and replay panes read every panel through this source. Live Rewind
   // adds a second source over the same aggregation code, never a second copy.
   const liveSource = createStreamSource(state);
+  const autoTrendlines = new AutoTrendlinesController({
+    button: $('trendlinesButton'),
+    redraw: () => { state.dirtyReplayChart = true; }
+  });
+  window.__tapeReadingAutoTrendlines = () => autoTrendlines.debug();
   const DAY_MAP_CORNERS = ['', 'day-map-lower-left', 'day-map-lower-right', 'day-map-upper-right'];
   const DAY_MAP_CORNER_NAMES = ['upper-left', 'lower-left', 'lower-right', 'upper-right'];
 
@@ -615,7 +621,8 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
   }
 
   function addTradeToMinuteBars(trade) {
-    appendMinuteBar(state.minuteBars, trade);
+    const updated = appendMinuteBar(state.minuteBars, trade);
+    if (updated && updated !== state.minuteBars[state.minuteBars.length - 1]) autoTrendlines.invalidate();
   }
 
   function replaceReplayMinuteBars(rawBars, chartEndUS) {
@@ -741,6 +748,7 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
   function selectMarketChart(view) {
     state.marketChartView = view === 'daily' ? 'daily' : 'minute';
     const daily = state.marketChartView === 'daily';
+    $('trendlinesButton').hidden = daily;
     elements.replayChart.hidden = daily;
     elements.dailyChart.hidden = !daily;
     elements.dayContext.hidden = daily;
@@ -1195,7 +1203,14 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
     state.dirtyDayContext = false;
   }
 
+  function syncTrendlineVisibility() {
+    autoTrendlines.setActive(Boolean(state.settings?.showChart && state.marketChartView === 'minute' &&
+      !state.rewind.active && (state.status?.mode === 'replay' || state.marketChartEnabled)));
+  }
+
   function drawReplayChart() {
+    syncTrendlineVisibility();
+    autoTrendlines.update(state.minuteBars, state.symbol, state.status?.mode || '');
     resizeReplayCanvas();
     const rect = elements.replayChart.getBoundingClientRect();
     const width = rect.width;
@@ -1271,6 +1286,10 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
       replayContext.textAlign = 'left';
       replayContext.fillText(formatAxisPrice(price), right + 5, y);
     }
+
+    autoTrendlines.draw(replayContext, {
+      bars: state.minuteBars, start, xAt, priceY, left, right, top, bottom: priceBottom
+    });
 
     const bodyWidth = Math.max(1, Math.min(8, step * 0.62));
     visible.forEach((bar, index) => {
@@ -1959,6 +1978,7 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
     });
     elements.resetControls.addEventListener('click', () => {
       state.settings = structuredClone(state.defaults);
+      autoTrendlines.setEnabled(true);
       audio.enabled = state.settings.audio.enabled;
       syncControlValues();
       commitSettings(true);
@@ -2583,6 +2603,7 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
           now - state.rewind.lastInteractionMS > autoReturnMS) returnToLive('inactivity');
       else if (state.rewind.dirty) drawRewindPane();
     }
+    syncTrendlineVisibility();
     if (state.dirtyReplayChart && (state.status?.mode === 'replay' || state.marketChartEnabled) && state.settings?.showChart) drawReplayChart();
     if (state.dirtyChart && state.settings?.showChart) drawChart();
     if (state.dirtyDayContext && state.settings?.showChart) drawDayContext();

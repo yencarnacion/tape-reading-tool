@@ -7,6 +7,7 @@
   <title>Tape Reading Tool</title>
   <link rel="icon" type="image/png" sizes="256x256" href="/favicon.png">
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/auto-trendlines.css">
 </head>
 <body>
   <main class="app" id="app">
@@ -70,9 +71,10 @@
         <section id="replayMarketPanel" class="replay-market-panel" aria-label="Replay one-minute price and volume chart" hidden>
           <canvas id="replayChartCanvas"></canvas>
           <canvas id="dailyChartCanvas" hidden></canvas>
-          <nav class="market-chart-tabs" aria-label="Market chart timeframe">
+          <nav class="market-chart-tabs" aria-label="Market chart controls">
             <button id="minuteChartTab" class="active" type="button" aria-pressed="true">1 MIN</button>
             <button id="dailyChartTab" type="button" aria-pressed="false">90 DAY</button>
+            <button id="trendlinesButton" class="active" type="button" aria-label="Automatic trendlines" aria-pressed="true">TRENDLINES ON</button>
           </nav>
           <div class="replay-chart-legend" aria-hidden="true">
             <span class="legend-vwap">VWAP 09:30</span>

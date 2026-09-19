@@ -1,0 +1,43 @@
+{
+  "node": "v22.23.2",
+  "cpu": "AMD EPYC 9V45 96-Core Processor",
+  "note": "Synthetic Node benchmark, not a MacBook/browser timing or total worker-memory measurement. Heap deltas are post-GC retained changes, not peak allocation.",
+  "results": [
+    {
+      "bars": 500,
+      "runs": 200,
+      "medianMS": 0.158,
+      "p95MS": 0.332,
+      "maxMS": 678.598,
+      "payloadBytes": 16000,
+      "candidateCount": 553,
+      "displayedLines": 7,
+      "retainedHeapDeltaBytes": 37536,
+      "retainedArrayBufferDeltaBytes": 0
+    },
+    {
+      "bars": 2000,
+      "runs": 200,
+      "medianMS": 0.251,
+      "p95MS": 0.307,
+      "maxMS": 0.354,
+      "payloadBytes": 64000,
+      "candidateCount": 588,
+      "displayedLines": 10,
+      "retainedHeapDeltaBytes": 1112,
+      "retainedArrayBufferDeltaBytes": 0
+    },
+    {
+      "bars": 5000,
+      "runs": 200,
+      "medianMS": 0.637,
+      "p95MS": 0.741,
+      "maxMS": 0.805,
+      "payloadBytes": 160000,
+      "candidateCount": 808,
+      "displayedLines": 10,
+      "retainedHeapDeltaBytes": 328,
+      "retainedArrayBufferDeltaBytes": -64000
+    }
+  ]
+}
