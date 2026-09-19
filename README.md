@@ -364,3 +364,14 @@ stops the worker. Tick, daily, and Live Rewind charts are unchanged.
 
 See [Auto Trendlines](docs/AUTO_TRENDLINES.md) for the algorithm, confirmation delay,
 performance limits, tests, and deliberate differences from TradingView.
+
+### Experimental automatic Kronos panel
+
+The lower chart section is a plugin slot with **KRONOS FORECAST** (default),
+**TICK CHART** (original price chart), or **BLANK**. The ADR slot is independent.
+Kronos refreshes automatically for completed one-minute bars on the IBKR live
+feed. It displays large, uncalibrated model frequencies, not buy/sell signals.
+Default service: `http://10.17.17.99:8787`; connection and private bearer key are
+configured only on the tape backend. See [setup, interpretation, tests and
+limitations](docs/KRONOS_FORECAST.md). Demo/replay/Massive modes do not generate
+forecasts in this first adapter.

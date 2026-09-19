@@ -6,7 +6,9 @@ const CAPABILITY_METHODS = Object.freeze({
   clock: ['currentSnapshot'],
   trades: ['currentSnapshot'],
   'completed-daily-rth-bars': ['getCompletedDailyBars'],
-  'rth-session-context': ['getRTHSessionContext']
+  'rth-session-context': ['getRTHSessionContext'],
+  forecast: ['requestForecast'],
+  'tick-chart': ['setTickChartVisible']
 });
 
 function grantedCapabilities(requested, available) {
@@ -20,7 +22,8 @@ function grantedCapabilities(requested, available) {
 }
 
 export class PanelHost {
-  constructor({ root, picker, registry, capabilities, settings, saveSettings }) {
+  constructor({ root, picker, registry, capabilities, settings, saveSettings, slotId = 'primaryAnalytics', fallbackId = 'adr-rth-extension' }) {
+    this.slotId = slotId; this.fallbackId = fallbackId;
     this.root = root; this.picker = picker; this.capabilities = capabilities;
     this.settings = settings; this.saveSettings = saveSettings; this.generation = 0; this.active = null;
     this.registry = new Map(registry.map((definition) => { const manifest = validatePanelManifest(definition); return [manifest.id, manifest]; }));
@@ -30,7 +33,7 @@ export class PanelHost {
     picker.addEventListener('change', () => this.swap(picker.value));
   }
 
-  validId(id) { return this.registry.has(id) ? id : 'adr-rth-extension'; }
+  validId(id) { return this.registry.has(id) ? id : this.fallbackId; }
 
   swap(requestedId, persist = true) {
     const id = this.validId(requestedId); const manifest = this.registry.get(id); const generation = ++this.generation;
@@ -58,13 +61,15 @@ export class PanelHost {
       const instance = manifest.factory({ root: this.root, host, manifest, settings });
       this.active = { id, manifest, instance: instance || {}, controller, generation };
       instance?.onEvent?.({ type: 'snapshot', snapshot: this.capabilities.currentSnapshot() });
-    } catch (error) { this.fail(manifest, error, generation); }
+    } catch (error) { controller.abort(); this.fail(manifest, error, generation); }
     if (persist) {
-      this.settings.slots.primaryAnalytics.activePanelId = id;
+      this.settings.slots[this.slotId] = { activePanelId: id };
       this.saveSettings();
     }
     this.mountCount = (this.mountCount || 0) + 1;
-    window.__tapePanelDebug = { activePanelId: id, generation, mountCount: this.mountCount, unmountCount: this.unmountCount || 0 };
+    const debug = { activePanelId: id, generation, mountCount: this.mountCount, unmountCount: this.unmountCount || 0 };
+    window.__tapePanelSlotsDebug ||= {}; window.__tapePanelSlotsDebug[this.slotId] = debug;
+    if (this.slotId === 'primaryAnalytics') window.__tapePanelDebug = debug;
   }
 
   event(event) {
@@ -79,7 +84,9 @@ export class PanelHost {
 
   fail(manifest, error, generation) {
     if (generation !== this.generation) return;
-    console.error(`panel ${manifest.id} stopped`, error); this.active?.controller.abort(); this.active = null;
+    console.error(`panel ${manifest.id} stopped`, error); this.active?.controller.abort();
+    try { this.active?.instance?.unmount?.(); } catch (cleanupError) { console.error('panel cleanup failed', cleanupError); }
+    this.active = null;
     this.root.className = 'analytics-panel-root panel-error'; this.root.replaceChildren();
     const title = document.createElement('strong'); title.textContent = `${manifest.name} STOPPED`;
     const details = document.createElement('details'); const summary = document.createElement('summary'); summary.textContent = 'View error';

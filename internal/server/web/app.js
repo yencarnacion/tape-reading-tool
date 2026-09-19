@@ -10,6 +10,7 @@ import { tapePressureManifest, createTapePressureInstance } from './tape-pressur
 import { blankPanelManifest } from './blank-panel.js';
 import { adrRTHManifest } from './adr-rth-extension-panel.js';
 import { AutoTrendlinesController } from './auto-trendlines-controller.js';
+import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js';
 
 (() => {
   'use strict';
@@ -98,7 +99,8 @@ import { AutoTrendlinesController } from './auto-trendlines-controller.js';
   rewindRollingPanel.id = 'rewindRollingPanel';
   rewindRollingPanel.setAttribute('aria-label', 'Rewound tape pressure by horizon');
   elements.rewindPanel.append(rewindRollingPanel);
-  let panelHost = null;
+  let panelHost = null, lowerPanelHost = null, lowerTickVisible = false;
+  function panelEvent(event) { panelHost?.event(event); lowerPanelHost?.event(event); }
 
   class TapeAudio {
     constructor() {
@@ -213,7 +215,7 @@ import { AutoTrendlinesController } from './auto-trendlines-controller.js';
         largeBoost: Number(audioConfig.large_boost) || 1.8,
         maxVoices: Number(audioConfig.max_voices) || 192
       },
-      panels: { slots: { primaryAnalytics: { activePanelId: 'adr-rth-extension' } }, settings: { 'adr-rth-extension': { lookbackSessions: 20, directionMode: 'low' } } }
+      panels: { slots: { primaryAnalytics: { activePanelId: 'adr-rth-extension' }, lowerAnalytics: { activePanelId: 'kronos-forecast' } }, settings: { 'adr-rth-extension': { lookbackSessions: 20, directionMode: 'low' } } }
     };
   }
 
@@ -226,6 +228,7 @@ import { AutoTrendlinesController } from './auto-trendlines-controller.js';
         settings: { ...defaults.panels.settings, ...(saved.panels?.settings || {}) }
       }
     };
+    lowerPanelSettings(result.panels, saved.panels);
     if ((Number(result.audio.profileVersion) || 1) < SOUND_PROFILE_VERSION) {
       for (const [key, legacyValue] of Object.entries(LEGACY_SOUND_DEFAULTS)) {
         if (Number(result.audio[key]) === legacyValue) result.audio[key] = defaults.audio[key];
@@ -312,7 +315,7 @@ import { AutoTrendlinesController } from './auto-trendlines-controller.js';
           capabilities: {
             streamSource: () => liveSource,
             formatters: () => ({ size: formatSize, signedPercent: formatSignedPercent, signed: formatSigned, rate: formatRate, tickChange: formatTickChange, relativePace: formatRelativePace, price: formatPrice }),
-            currentSnapshot: () => ({ symbol: state.symbol, mode: state.status?.mode || '', status: { ...state.status }, clockUS: serverNowUS(performance.now()), quote: { ...state.quote }, trades: state.trades.slice() }),
+            currentSnapshot: () => ({ generation: state.streamGeneration || 0, symbol: state.symbol, mode: state.status?.mode || '', status: { ...state.status }, clockUS: serverNowUS(performance.now()), quote: { ...state.quote }, trades: state.trades.slice() }),
             getCompletedDailyBars: async ({ symbol, beforeSessionDateET, limit, signal }) => {
               const query = new URLSearchParams({ symbol, before: beforeSessionDateET, limit: String(limit) });
               const response = await fetch(`/api/panel-data/daily-bars?${query}`, { signal });
@@ -331,6 +334,7 @@ import { AutoTrendlinesController } from './auto-trendlines-controller.js';
             // widen its own limits or write another panel's settings.
             savePanelSettings: (panelId, next, defaults) => {
               const merged = mergePanelSettings(defaults, next);
+              if (panelId === 'kronos-forecast') merged.horizon = [1, 3, 5, 10].includes(merged.horizon) ? merged.horizon : 5;
               if (panelId === 'adr-rth-extension') {
                 merged.lookbackSessions = clampInt(merged.lookbackSessions, 5, 60, 20);
                 merged.directionMode = ['auto', 'low', 'high'].includes(String(merged.directionMode || '').toLowerCase()) ? String(merged.directionMode).toLowerCase() : 'low';
@@ -341,6 +345,11 @@ import { AutoTrendlinesController } from './auto-trendlines-controller.js';
           }
         });
         panelHost.swap(state.settings.panels.slots.primaryAnalytics.activePanelId, false);
+        lowerPanelHost = createLowerPanelHost({
+          root: $('lowerPanelRoot'), picker: $('lowerPanelPicker'), settings: state.settings.panels,
+          capabilities: { ...panelHost.capabilities, currentSnapshot: () => ({ symbol: state.symbol, generation: state.streamGeneration || 0, mode: state.status?.mode || '', clockUS: serverNowUS(performance.now()) }) }, saveSettings,
+          tickVisible: (visible) => { lowerTickVisible = visible; $('lowerPanelSlot').classList.toggle('show-tick-chart', visible); state.dirtyChart = true; }
+        });
         window.__tapeReadingPanels = {
           active: () => panelHost?.active?.id || null,
           socket: () => state.ws,
@@ -352,6 +361,7 @@ import { AutoTrendlinesController } from './auto-trendlines-controller.js';
         };
       }
       const snapshot = message.snapshot;
+      state.streamGeneration = snapshot.generation || 0;
       const nextSymbol = snapshot.symbol || message.symbol;
       const symbolChanged = nextSymbol !== state.symbol;
       state.symbol = nextSymbol;
@@ -435,7 +445,7 @@ import { AutoTrendlinesController } from './auto-trendlines-controller.js';
         queueMicrotask(() => refreshReplayRange(false));
       }
       updateQuoteText();
-      panelHost?.event({ type: 'snapshot', snapshot: { symbol: state.symbol, mode: state.status?.mode || '', generation: snapshot.generation, clockUS: serverNowUS(performance.now()), quote: { ...state.quote }, trades: state.trades.slice() } });
+      panelEvent({ type: 'snapshot', snapshot: { symbol: state.symbol, mode: state.status?.mode || '', generation: snapshot.generation, clockUS: serverNowUS(performance.now()), quote: { ...state.quote }, trades: state.trades.slice() } });
       return;
     }
     if (message.type === 'trades' && message.symbol === state.symbol) {
@@ -456,7 +466,7 @@ import { AutoTrendlinesController } from './auto-trendlines-controller.js';
         ingestTrades(trades);
       }
       updateQuoteText();
-      panelHost?.event({ type: 'tradeBatch', symbol: state.symbol, trades, quote: message.quote || null, clockUS: serverNowUS(performance.now()) });
+      panelEvent({ type: 'tradeBatch', symbol: state.symbol, trades, quote: message.quote || null, clockUS: serverNowUS(performance.now()) });
       return;
     }
     if (message.type === 'status') {
@@ -486,7 +496,7 @@ import { AutoTrendlinesController } from './auto-trendlines-controller.js';
         // the animation frame, which knows to freeze a paused replay, so a
         // heartbeat must not be reported to panels as a mode change.
         if (message.status.mode !== previousMode || message.status.state !== previousState) {
-          panelHost?.event({ type: 'modeChanged', mode: message.status.mode, status: { ...message.status }, clockUS: serverNowUS(performance.now()) });
+          panelEvent({ type: 'modeChanged', mode: message.status.mode, status: { ...message.status }, clockUS: serverNowUS(performance.now()) });
         }
       }
       if (message.history) {
@@ -871,10 +881,14 @@ import { AutoTrendlinesController } from './auto-trendlines-controller.js';
     const plotBottom = height - clockHeight;
     const usable = height - top - bottom;
     const paneGap = 8;
-    const minimumRollingHeight = width <= 350 ? 224 : 184;
+    const minimumRollingHeight = width <= 430 ? 224 : 184;
     const rollingPaneHeight = Math.min(Math.max(minimumRollingHeight, usable * 0.25), usable * 0.5);
     const remaining = Math.max(0, usable - rollingPaneHeight - paneGap * 2);
-    const deltaPaneHeight = remaining * 0.30;
+    // Reserve a legible lower-plugin rectangle on a laptop; keep the rewind
+    // target on its original allocation. Delta keeps at least 32px.
+    const deltaPaneHeight = target.layoutLower
+      ? Math.max(32, Math.min(remaining * 0.30, plotBottom - top - paneGap * 2 - rollingPaneHeight - 240))
+      : remaining * 0.30;
     const deltaTop = top;
     const deltaBottom = deltaTop + deltaPaneHeight;
     const rollingTop = deltaBottom + paneGap;
@@ -882,6 +896,7 @@ import { AutoTrendlinesController } from './auto-trendlines-controller.js';
     const priceTop = rollingBottom + paneGap;
     const priceBottom = plotBottom - bottom;
     target.layoutRolling(rollingTop, rollingBottom);
+    target.layoutLower?.(priceTop, plotBottom - 2);
     if (width < 80 || height < 120 || !bars.length) {
       target.empty?.classList.toggle('hidden', bars.length > 0);
       target.setDirty(false);
@@ -923,6 +938,7 @@ import { AutoTrendlinesController } from './auto-trendlines-controller.js';
     context.font = '11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     context.textBaseline = 'middle';
     context.lineWidth = 1;
+    if (target.priceVisible?.() !== false) {
     for (let i = 0; i <= 4; i++) {
       const y = priceTop + (priceBottom - priceTop) * i / 4;
       const price = maximum - (maximum - minimum) * i / 4;
@@ -962,6 +978,7 @@ import { AutoTrendlinesController } from './auto-trendlines-controller.js';
 
     if (target.showTradingPosition) drawTradingPositionLevels(context, priceY, minimum, maximum, left, right, priceTop, priceBottom, target.background);
 
+    }
     drawPaneBorder(deltaTop, deltaBottom, 'VOLUME DELTA', formatSigned(visible[visible.length - 1].delta));
     const zero = deltaTop + (deltaBottom - deltaTop) / 2;
     context.setLineDash([4, 4]);
@@ -979,6 +996,7 @@ import { AutoTrendlinesController } from './auto-trendlines-controller.js';
     context.textAlign = 'left';
     context.fillText('0', right + 5, zero);
 
+    if (target.priceVisible?.() !== false) {
     const labelIndexes = visible.length < 3 ? [0] : [0, Math.floor((visible.length - 1) / 2), visible.length - 1];
     context.fillStyle = '#78818c';
     context.textBaseline = 'bottom';
@@ -1003,6 +1021,7 @@ import { AutoTrendlinesController } from './auto-trendlines-controller.js';
     context.font = '700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     context.fillText(formatPrice(last.close), right + 4, currentY);
 
+    }
     target.setDeltaMetrics(maxDelta, minDelta, maxDeltaDollars, minDeltaDollars);
     target.onDrawn?.(visible[visible.length - 1]);
     target.setDirty(Boolean(scale.contracting));
@@ -1025,6 +1044,8 @@ import { AutoTrendlinesController } from './auto-trendlines-controller.js';
   const liveChartTarget = {
     canvas: elements.chart, context, empty: elements.chartEmpty, background: '#0c0f13',
     bars: () => state.bars, showTradingPosition: true,
+    priceVisible: () => lowerTickVisible,
+    layoutLower: (top, bottom) => positionRollingPanel($('lowerPanelSlot'), top, bottom),
     visibleBars: () => state.settings.visibleBars,
     getScale: () => state.tickScale,
     setScale: (value) => { state.tickScale = value; },
@@ -1985,6 +2006,8 @@ import { AutoTrendlinesController } from './auto-trendlines-controller.js';
       if (panelHost) {
         panelHost.settings = state.settings.panels;
         panelHost.swap('tape-pressure');
+      lowerPanelHost.settings = state.settings.panels;
+      lowerPanelHost.swap('kronos-forecast');
       }
     });
 
@@ -2290,6 +2313,7 @@ import { AutoTrendlinesController } from './auto-trendlines-controller.js';
     elements.tapeRate.textContent = `${tapeRate >= 1000 ? formatSize(tapeRate) : tapeRate}/s`;
     audio.setTapeRate(tapeRate);
     panelHost?.render(receiptNowUS);
+    lowerPanelHost?.render(receiptNowUS);
     const last = state.trades[state.trades.length - 1];
     elements.lastPrice.textContent = last ? formatPrice(last.p) : '--';
     updatePriceChange(last?.p, state.quote.previous_close);

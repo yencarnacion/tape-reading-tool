@@ -65,3 +65,20 @@ Every lifecycle callback is wrapped. An exception replaces only the assigned roo
 Panels process delivered batches, not feed callbacks. They must not perform per-trade history requests, full-session rescans, unbounded retention, or hidden inactive work. Core history calls are cached and bounded: a complete answer for a past as-of session is cached for the process lifetime, while an unavailable or insufficient answer is held only briefly, so a provider outage or a history download that has not run yet cannot strand a panel until restart. `modeChanged` reports an actual mode or replay-state transition, not every status heartbeat; the authoritative clock reaches panels through the animation frame. Content Security Policy remains unchanged: no inline script, `eval`, `new Function`, remote script, credential access, order entry, or direct DOM access outside the assigned root is added.
 
 The next architecture step should be another first-party indicator exercising this contract. Only after the API has remained stable should installation packages, permissions UI, workers, signatures, and sandboxed iframe execution be added.
+
+## Lower slot and forecasting extension
+
+`lowerAnalytics` is a second independent slot. Its default/fallback is
+`kronos-forecast`; its registry also offers `tick-chart` and `blank`.
+`PanelHost` now accepts `slotId` and `fallbackId`; its original defaults and
+primary-slot debug hook remain compatible. Per-slot diagnostics are under
+`window.__tapePanelSlotsDebug`. Saved primary selection is not changed by lower
+selection. Error cleanup calls the panel's unmount hook as well as aborting it.
+
+Two narrow first-party capabilities are added: `forecast` grants only
+`requestForecast({symbol,signal})`, a same-origin, server-owned numerical request;
+`tick-chart` grants only `setTickChartVisible(boolean)` for the legacy lower
+canvas region. Neither grants arbitrary URL fetches, credentials or order
+functions. Kronos receives a lightweight clock/symbol/generation snapshot, not a
+copied trade ring on every animation frame. See `KRONOS_FORECAST.md` for the
+current live-only adapter and statistical/operational limits.

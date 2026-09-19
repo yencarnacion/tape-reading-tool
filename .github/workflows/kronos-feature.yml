@@ -1,0 +1,92 @@
+name: Kronos feature verification
+on:
+  push:
+    branches: [feature/kronos-live-panel]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: kronos-feature-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  forecast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Server and data contract race tests
+        run: |
+          set -o pipefail
+          go test -race ./internal/server ./internal/config ./internal/storage ./internal/tape 2>&1 | tee /tmp/kronos-go-tests.txt
+      - name: Go vet
+        if: success() || failure()
+        run: go vet ./...
+      - name: JavaScript contract and regression checks
+        if: success() || failure()
+        run: |
+          node scripts/kronos-model-check.mjs
+          node scripts/panel-host-check.mjs
+          node scripts/adr-panel-check.mjs
+          node scripts/daily-pivots-check.mjs
+          node scripts/audio-worklet-check.mjs
+      - name: Full-page laptop mock integration
+        if: success() || failure()
+        env:
+          CHROME: google-chrome
+          KRONOS_SCREENSHOT_DIR: /tmp/kronos-ui
+        run: |
+          set -o pipefail
+          node scripts/kronos-browser-check.mjs 2>&1 | tee /tmp/kronos-browser-tests.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kronos-verification
+          path: |
+            /tmp/kronos-go-tests.txt
+            /tmp/kronos-browser-tests.txt
+            /tmp/kronos-ui/
+          retention-days: 7
+  full-suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Full repository race suite (failure remains visible)
+        id: suite
+        run: |
+          set -o pipefail
+          go test -race ./... 2>&1 | tee /tmp/full-suite.txt
+      - name: Read unchanged base for replay failure comparison
+        if: failure() && steps.suite.outcome == 'failure'
+        uses: actions/checkout@v4
+        with:
+          ref: 760c835660e330e9e04547721aceb57991c4bf46
+          path: _baseline
+          persist-credentials: false
+      - name: Replay regression on original base (diagnostic only)
+        if: failure() && steps.suite.outcome == 'failure'
+        run: |
+          set -o pipefail
+          cd _baseline
+          go test -race -count=3 ./internal/feed 2>&1 | tee /tmp/original-base-replay.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-suite-verification
+          path: |
+            /tmp/full-suite.txt
+            /tmp/original-base-replay.txt
+          retention-days: 7
