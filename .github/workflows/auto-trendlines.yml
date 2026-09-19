@@ -1,0 +1,31 @@
+name: Auto trendlines tests
+on:
+  push:
+    branches: [feature/auto-trendlines]
+  pull_request:
+    paths:
+      - 'internal/server/web/**'
+      - 'scripts/*auto-trendlines*'
+      - '.github/workflows/auto-trendlines.yml'
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: JavaScript tests and syntax
+        run: |
+          node --test scripts/auto-trendlines.test.mjs
+          for file in internal/server/web/auto-trendlines*.js internal/server/web/app.js; do node --check "$file"; done
+      - name: Go tests
+        run: go test ./...
+      - name: Synthetic performance benchmark
+        run: node --expose-gc scripts/bench-auto-trendlines.mjs
