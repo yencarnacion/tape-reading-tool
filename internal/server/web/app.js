@@ -1380,9 +1380,9 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     const label = `${priceLabel} ${formatPrice(price)}`;
     const labelY = Math.max(top, Math.min(bottom - 10, priceY - 12));
     const labelWidth = dayContext.measureText(label).width;
-    dayContext.fillStyle = 'rgba(9,13,18,.9)'; dayContext.fillRect(right - labelWidth - 5, labelY - 1, labelWidth + 5, 11);
-    dayContext.fillStyle = '#d8dde2'; dayContext.textAlign = 'right'; dayContext.textBaseline = 'top';
-    dayContext.fillText(label, right - 2, labelY);
+    dayContext.fillStyle = 'rgba(9,13,18,.9)'; dayContext.fillRect(left, labelY - 1, labelWidth + 5, 11);
+    dayContext.fillStyle = '#d8dde2'; dayContext.textAlign = 'left'; dayContext.textBaseline = 'top';
+    dayContext.fillText(label, left + 2, labelY);
     dayContext.textBaseline = 'bottom'; dayContext.fillStyle = '#78818c';
     const dateLabel = (bar) => `${bar.sessionDateET.slice(5, 7)}/${bar.sessionDateET.slice(8, 10)}`;
     dayContext.textAlign = 'left'; dayContext.fillText(dateLabel(bars[0]), left, height - 1);
