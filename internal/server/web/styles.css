@@ -249,9 +249,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   top: 62px;
   left: 8px;
   width: clamp(238px, 28cqw, 320px);
-  height: 170px;
+  height: 198px;
   display: grid;
-  grid-template-rows: 25px minmax(0, 1fr) 23px;
+  grid-template-rows: 25px minmax(0, 1fr) 23px 28px;
   overflow: hidden;
   border: 1px solid #46505d;
   border-top: 2px solid var(--day-direction);
@@ -266,7 +266,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .day-context.day-map-lower-left { top: auto; right: auto; bottom: var(--day-map-bottom); left: 8px; }
 .day-context.day-map-lower-right { top: auto; right: var(--day-map-right); bottom: var(--day-map-bottom); left: auto; }
 .day-context.day-map-upper-right { top: 62px; right: var(--day-map-right); bottom: auto; left: auto; }
-.day-context:focus-visible { outline: 2px solid var(--yellow); outline-offset: 2px; }
+.day-context:focus-within { outline: 2px solid var(--yellow); outline-offset: 2px; }
 .day-context.above { --day-direction: var(--price-up); }
 .day-context.below { --day-direction: var(--price-down); }
 .day-context[hidden], .replay-chart-empty[hidden] { display: none; }
@@ -279,8 +279,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .day-context > footer { justify-content: space-between; gap: 4px; border-top: 1px solid #2a3038; color: var(--muted); font-size: 9px; font-weight: 800; }
 .day-context > footer b { color: #dce2e7; font-weight: 800; }
 #dayContextPosition { color: var(--day-direction); }
+.day-context-modes { display: flex; gap: 3px; padding: 3px 7px; border-top: 1px solid #2a3038; background: #10161d; cursor: default; }
+.day-context-modes button { flex: 1; min-width: 0; min-height: 0; padding: 0 6px; border: 1px solid transparent; border-radius: 2px; background: transparent; color: var(--muted); font: 800 9px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.day-context-modes button.active { border-color: #465766; background: #25323e; color: #f2f5f7; }
+.day-context-modes button:hover { color: #f2f5f7; }
+.day-context-modes button:focus-visible { outline: 2px solid var(--yellow); outline-offset: -1px; }
 @container (max-width: 520px) {
-  .day-context { width: 224px; height: 145px; }
+  .day-context { width: 224px; height: 173px; }
 }
 @container (max-width: 270px) {
   .day-context { display: none; }

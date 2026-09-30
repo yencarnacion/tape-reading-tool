@@ -12,6 +12,7 @@ import { adrRTHManifest } from './adr-rth-extension-panel.js';
 import { AutoTrendlinesController } from './auto-trendlines-controller.js';
 import { ChartHistoryLoader, mergeChartHistory } from './chart-history.js';
 import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js';
+import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js';
 
 (() => {
   'use strict';
@@ -30,6 +31,7 @@ import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js'
     app: $('app'), workspace: $('workspace'), visualStack: $('visualStack'), chartPanel: $('chartPanel'), chart: $('chartCanvas'), chartEmpty: $('chartEmpty'),
     analyticsSlot: $('rollingPanel'), analyticsPanelRoot: $('analyticsPanelRoot'), analyticsPanelPicker: $('analyticsPanelPicker'),
     dayContext: $('dayContext'), dayContextCanvas: $('dayContextCanvas'), dayContextSession: $('dayContextSession'), dayContextChange: $('dayContextChange'), dayContextHigh: $('dayContextHigh'), dayContextLow: $('dayContextLow'), dayContextPosition: $('dayContextPosition'),
+    dayContextTitle: $('dayContextTitle'), dayContextDaily: $('dayContextDaily'), dayContextIntraday: $('dayContextIntraday'),
     replayMarketPanel: $('replayMarketPanel'), replayChart: $('replayChartCanvas'), replayChartEmpty: $('replayChartEmpty'),
     dailyChart: $('dailyChartCanvas'), dailyChartEmpty: $('dailyChartEmpty'), minuteChartTab: $('minuteChartTab'), dailyChartTab: $('dailyChartTab'),
     tapePanel: $('tapePanel'), tapeRows: $('tapeRows'), sizeHeading: $('sizeHeading'),
@@ -67,6 +69,7 @@ import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js'
     symbol: 'AAPL', trades: [], bars: [], quote: {}, history: [], status: {},
     defaults: null, settings: null, ws: null, reconnectTimer: null, reconnectDelay: 500,
     tapePool: [], dropped: 0, dirtyChart: true, dirtyDayContext: true, dirtyTape: true, dayMapCorner: 0,
+    dayMapView: 'daily', dailyMap: { status: 'loading', bars: [], message: '' },
     navSymbols: [], navIndex: -1, lastMetricUpdate: 0,
     prefixBase: { volume: 0, buyer: 0, seller: 0, prints: 0 }, midpoints: [],
     serverClockUS: 0, serverClockAt: 0, replay: null, replayConfig: null, pendingReplayReset: false,
@@ -99,6 +102,11 @@ import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js'
     state.dirtyDayContext = true;
   } });
   window.addEventListener('pagehide', () => chartHistory.reset());
+  const dailyMapHistory = new DailyMapHistory({ apply: (result) => {
+    state.dailyMap = result;
+    state.dirtyDayContext = true;
+  } });
+  window.addEventListener('pagehide', () => dailyMapHistory.reset());
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) chartHistory.reset();
     else state.dirtyReplayChart = true;
@@ -384,6 +392,9 @@ import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js'
       if (symbolChanged) {
         state.tickScale = null;
         state.minuteScale = null;
+        dailyMapHistory.reset();
+        state.dailyMap = { status: 'loading', bars: [], message: '' };
+        state.dayMapView = 'daily';
       }
       if (state.dailyHistorySymbol !== state.symbol) {
         state.dailyBars = [];
@@ -452,6 +463,8 @@ import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js'
       state.dirtyTape = true;
       setConnection(state.status);
       resetRVOLWarmup();
+      if (symbolChanged) selectDayMap('daily');
+      ensureDailyMapHistory();
       chartHistory.reset();
       const chartKey = `${state.symbol}|${state.replayConfig?.source || 'live'}|${state.replayConfig?.provider || 'all'}`;
       if (state.status.mode === 'replay' && state.replayChartKey !== chartKey) {
@@ -473,7 +486,10 @@ import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js'
         state.dirtyChart = true;
         state.dirtyTape = true;
       }
-      if (message.quote) state.quote = message.quote;
+      if (message.quote) {
+        state.quote = message.quote;
+        state.dirtyDayContext = true;
+      }
       if (message.dropped) state.dropped += message.dropped;
       if (trades.length) {
         observeReceiptClock(trades);
@@ -1113,6 +1129,7 @@ import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js'
   }
 
   function drawDayContext() {
+    ensureDailyMapHistory();
     const canvas = elements.dayContextCanvas;
     const rect = canvas.getBoundingClientRect();
     const width = rect.width;
@@ -1127,6 +1144,16 @@ import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js'
     dayContext.setTransform(ratio, 0, 0, ratio, 0, 0);
     dayContext.fillStyle = '#090d12';
     dayContext.fillRect(0, 0, width, height);
+
+    if (state.dayMapView === 'daily') {
+      drawDailyMap(width, height);
+      state.dirtyDayContext = false;
+      return;
+    }
+    elements.dayContextTitle.textContent = 'DAY MAP';
+    elements.dayContextSession.textContent = '09:30–16:00 ET';
+    elements.dayContextPosition.title = '';
+    elements.dayContextChange.title = '';
 
     const latestBar = state.minuteBars[state.minuteBars.length - 1];
     if (!latestBar || width < 80 || height < 40) {
@@ -1242,6 +1269,125 @@ import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js'
     dayContext.textAlign = 'center'; dayContext.fillText('12', left + (720 - startMinute) / (endMinute - startMinute) * (right - left), height - 1);
     dayContext.textAlign = 'right'; dayContext.fillText(hasExtended ? '20' : '16', right, height - 1);
     state.dirtyDayContext = false;
+  }
+
+  function selectDayMap(view) {
+    state.dayMapView = view === 'intraday' ? 'intraday' : 'daily';
+    const daily = state.dayMapView === 'daily';
+    elements.dayContextDaily.classList.toggle('active', daily);
+    elements.dayContextIntraday.classList.toggle('active', !daily);
+    elements.dayContextDaily.setAttribute('aria-pressed', String(daily));
+    elements.dayContextIntraday.setAttribute('aria-pressed', String(!daily));
+    state.dirtyDayContext = true;
+    if (daily) ensureDailyMapHistory();
+  }
+
+  function dailyMapSessionDate() {
+    return easternMinuteParts(serverNowUS(performance.now()))?.day || '';
+  }
+
+  function ensureDailyMapHistory() {
+    if (state.dayMapView !== 'daily' || state.marketChartView !== 'minute' ||
+        !state.marketChartEnabled || !state.settings?.showChart || document.hidden) return;
+    const sessionDateET = dailyMapSessionDate();
+    if (!sessionDateET) return;
+    const key = `${state.symbol}|${state.status.mode}|${state.replayConfig?.source || 'live'}|${state.replayConfig?.provider || 'all'}|${sessionDateET}`;
+    dailyMapHistory.ensure(key, state.symbol, sessionDateET);
+  }
+
+  function drawDailyMap(width, height) {
+    elements.dayContextTitle.textContent = 'DAILY MAP';
+    const latestMinute = state.minuteBars.at(-1);
+    const clockParts = easternMinuteParts(serverNowUS(performance.now()));
+    const latestParts = latestMinute ? easternMinuteParts(latestMinute.timeUS) : null;
+    let currentPrice = latestParts?.day === clockParts?.day ? Number(latestMinute.close) : NaN;
+    const phaseLabel = (minute) => minute >= 240 && minute < 570 ? 'PRE' : minute >= 960 ? 'POST' : 'LAST';
+    let priceLabel = Number.isFinite(currentPrice) ? phaseLabel(latestParts.minute) : 'CLOSE';
+    // On opening a quiet ticker there may be a quote before the first print.
+    // Identify that estimate explicitly; a prior close is never labelled PRE.
+    if (!(currentPrice > 0) && ['live', 'massive', 'demo'].includes(state.status.mode) &&
+        state.quote.bid > 0 && state.quote.ask >= state.quote.bid) {
+      currentPrice = (Number(state.quote.bid) + Number(state.quote.ask)) / 2;
+      priceLabel = `${phaseLabel(clockParts.minute)} MID`;
+    }
+    const model = dailyMapModel(state.dailyMap.bars, currentPrice);
+    elements.dayContextSession.textContent = model
+      ? `${model.bars.length} SESSIONS` : `${DAILY_MAP_SESSIONS} SESSIONS`;
+    if (!model) {
+      elements.dayContext.classList.remove('above', 'below');
+      elements.dayContextChange.textContent = '--';
+      elements.dayContextHigh.textContent = '--';
+      elements.dayContextLow.textContent = '--';
+      elements.dayContextPosition.textContent = '20D SMA --';
+      elements.dayContextPosition.title = '';
+      const label = state.dailyMap.status === 'loading' ? 'LOADING DAILY HISTORY…'
+        : state.dailyMap.status === 'unavailable' ? 'DAILY HISTORY UNAVAILABLE' : 'NO DAILY HISTORY';
+      elements.dayContext.setAttribute('aria-label', `Daily map: ${label.toLowerCase()}`);
+      dayContext.fillStyle = '#8d96a2'; dayContext.textAlign = 'center'; dayContext.textBaseline = 'middle';
+      dayContext.font = '9px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+      dayContext.fillText(label, width / 2, height / 2);
+      return;
+    }
+    const { bars, price, high, low, change, direction, sma20 } = model;
+    const priceDescription = priceLabel === 'PRE' ? 'Premarket price' : priceLabel === 'POST' ? 'After-hours price'
+      : priceLabel.endsWith('MID') ? `${priceLabel.startsWith('PRE') ? 'Premarket' : priceLabel.startsWith('POST') ? 'After-hours' : 'Current'} bid/ask midpoint`
+      : model.live ? 'Current price' : 'Last daily close';
+    elements.dayContext.classList.toggle('above', direction === 'above');
+    elements.dayContext.classList.toggle('below', direction === 'below');
+    elements.dayContextChange.textContent = `${change > 0 ? '+' : ''}${change.toFixed(1)}%`;
+    elements.dayContextChange.title = 'Price change from the first visible daily close';
+    elements.dayContextHigh.textContent = formatPrice(high);
+    elements.dayContextLow.textContent = formatPrice(low);
+    const relation = direction === 'above' ? 'ABOVE 20D' : direction === 'below' ? 'BELOW 20D' : 'AT 20D';
+    elements.dayContextPosition.textContent = Number.isFinite(sma20) ? relation : '20D SMA --';
+    elements.dayContextPosition.title = Number.isFinite(sma20)
+      ? `${priceDescription} ${formatPrice(price)}; 20-day average ${formatPrice(sma20)} (blue line), using completed sessions` : '20 completed sessions are needed for the average';
+    elements.dayContext.setAttribute('aria-label', `Daily map: ${bars.length} completed sessions; ${priceDescription.toLowerCase()} ${formatPrice(price)}; ${Number.isFinite(sma20) ? `${relation.toLowerCase()} average ${formatPrice(sma20)}` : '20-day average unavailable'}; change ${change.toFixed(1)} percent.`);
+    if (width < 80 || height < 40) return;
+    const left = 5, right = width - 6, top = 9, bottom = height - 15;
+    const scaleValues = bars.map((bar) => bar.sma20).filter(Number.isFinite);
+    const scaleLow = Math.min(low, ...scaleValues), scaleHigh = Math.max(high, ...scaleValues);
+    const padding = Math.max((scaleHigh - scaleLow) * .1, scaleHigh * .0001, .005);
+    const minimum = scaleLow - padding, maximum = scaleHigh + padding;
+    const step = (right - left) / (bars.length + 2);
+    const xAt = (index) => left + (index + .5) * step;
+    const yAt = (value) => bottom - (value - minimum) / (maximum - minimum) * (bottom - top);
+    dayContext.strokeStyle = '#202832'; dayContext.lineWidth = 1;
+    for (let index = 0; index < 3; index++) {
+      const y = top + (bottom - top) * index / 2;
+      dayContext.beginPath(); dayContext.moveTo(left, y); dayContext.lineTo(right, y); dayContext.stroke();
+    }
+    const bodyWidth = Math.max(1, Math.min(4, step * .65));
+    bars.forEach((bar, index) => {
+      const x = xAt(index);
+      dayContext.fillStyle = dayContext.strokeStyle = bar.close >= bar.open ? '#34c7d9' : '#ff4d5e';
+      dayContext.beginPath(); dayContext.moveTo(x, yAt(bar.high)); dayContext.lineTo(x, yAt(bar.low)); dayContext.stroke();
+      dayContext.fillRect(x - bodyWidth / 2, Math.min(yAt(bar.open), yAt(bar.close)), bodyWidth, Math.max(1, Math.abs(yAt(bar.open) - yAt(bar.close))));
+    });
+    dayContext.beginPath(); let drawing = false;
+    bars.forEach((bar, index) => {
+      if (!Number.isFinite(bar.sma20)) { drawing = false; return; }
+      if (drawing) dayContext.lineTo(xAt(index), yAt(bar.sma20)); else dayContext.moveTo(xAt(index), yAt(bar.sma20));
+      drawing = true;
+    });
+    dayContext.strokeStyle = '#56c7ff'; dayContext.lineWidth = 1.5; dayContext.stroke();
+    const priceY = yAt(price);
+    dayContext.setLineDash([2, 3]); dayContext.strokeStyle = '#d8dde2'; dayContext.lineWidth = 1;
+    dayContext.beginPath(); dayContext.moveTo(left, priceY); dayContext.lineTo(right, priceY); dayContext.stroke();
+    dayContext.setLineDash([]);
+    dayContext.fillStyle = '#d8dde2'; dayContext.beginPath(); dayContext.arc(right - 1, priceY, 2, 0, Math.PI * 2); dayContext.fill();
+    dayContext.font = '8px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    const label = `${priceLabel} ${formatPrice(price)}`;
+    const labelY = Math.max(top, Math.min(bottom - 10, priceY - 12));
+    const labelWidth = dayContext.measureText(label).width;
+    dayContext.fillStyle = 'rgba(9,13,18,.9)'; dayContext.fillRect(right - labelWidth - 5, labelY - 1, labelWidth + 5, 11);
+    dayContext.fillStyle = '#d8dde2'; dayContext.textAlign = 'right'; dayContext.textBaseline = 'top';
+    dayContext.fillText(label, right - 2, labelY);
+    dayContext.textBaseline = 'bottom'; dayContext.fillStyle = '#78818c';
+    const dateLabel = (bar) => `${bar.sessionDateET.slice(5, 7)}/${bar.sessionDateET.slice(8, 10)}`;
+    dayContext.textAlign = 'left'; dayContext.fillText(dateLabel(bars[0]), left, height - 1);
+    dayContext.textAlign = 'center'; dayContext.fillStyle = '#56c7ff'; dayContext.fillText('20D SMA', (left + right) / 2, height - 1);
+    dayContext.textAlign = 'right'; dayContext.fillStyle = '#78818c'; dayContext.fillText(dateLabel(bars.at(-1)), right, height - 1);
   }
 
   function syncTrendlineVisibility() {
@@ -1932,7 +2078,8 @@ import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js'
   }
 
   function bindControls() {
-    const moveDayMap = () => {
+    const moveDayMap = (event) => {
+      if (event.target.closest('.day-context-modes')) return;
       elements.dayContext.classList.remove(...DAY_MAP_CORNERS.filter(Boolean));
       state.dayMapCorner = (state.dayMapCorner + 1) % DAY_MAP_CORNERS.length;
       const cornerClass = DAY_MAP_CORNERS[state.dayMapCorner];
@@ -1940,11 +2087,13 @@ import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js'
       elements.dayContext.dataset.corner = DAY_MAP_CORNER_NAMES[state.dayMapCorner];
     };
     elements.dayContext.addEventListener('click', moveDayMap);
-    elements.dayContext.addEventListener('keydown', (event) => {
+    elements.dayContextCanvas.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter' && event.key !== ' ') return;
       event.preventDefault();
-      moveDayMap();
+      moveDayMap(event);
     });
+    elements.dayContextDaily.addEventListener('click', () => selectDayMap('daily'));
+    elements.dayContextIntraday.addEventListener('click', () => selectDayMap('intraday'));
     elements.minuteChartTab.addEventListener('click', () => selectMarketChart('minute'));
     elements.dailyChartTab.addEventListener('click', () => selectMarketChart('daily'));
     elements.tickerForm.addEventListener('submit', (event) => {
@@ -2334,6 +2483,7 @@ import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js'
   }
 
   function updateLiveMetrics(now) {
+    ensureDailyMapHistory();
     const receiptNowUS = serverNowUS(now);
     const tapeRate = computeTapeRate(liveSource, receiptNowUS);
     elements.tapeRate.textContent = `${tapeRate >= 1000 ? formatSize(tapeRate) : tapeRate}/s`;

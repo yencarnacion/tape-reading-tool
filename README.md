@@ -117,6 +117,10 @@ Add the replay-style one-minute price, indicator, and volume chart to IBKR live 
 
 Without `-chart`, live mode keeps the existing compact layout.
 
+The small picture-in-picture context chart opens in **Daily** for each ticker. It shows up to 60 completed trading sessions (about three months), a blue 20-day simple moving average, and an **ABOVE 20D / BELOW 20D** readout comparing the current price with that average. The dotted price marker is labelled **PRE** for a premarket print, **POST** for an after-hours print, or **LAST** during regular hours. Before the first print, an available bid/ask midpoint is explicitly labelled **MID**; without a current price, the marker shows the last daily **CLOSE**. Historical replay uses only sessions completed before its own trading date; shorter histories show the actual available session count.
+
+Use the **Daily / Intraday** toggle below the preview to return to the full-day map. That choice lasts until another ticker opens, including ticker history navigation or an externally controlled replay. Click the preview to move it between corners; its timeframe buttons keep it in place.
+
 Add viewport-aware prior-day, pre-market, regular-session, and opening-price reference levels with:
 
 ```bash

@@ -83,18 +83,22 @@
             <span class="legend-bollinger">BOLLINGER 20,2</span>
             <span class="legend-volume" hidden>DAILY VOLUME</span>
           </div>
-          <section id="dayContext" class="day-context" role="button" tabindex="0" data-corner="upper-left" aria-label="Intraday price context" title="Click to move the day map counter-clockwise">
+          <section id="dayContext" class="day-context" data-corner="upper-left" aria-label="Daily price context">
             <header>
-              <strong>DAY MAP</strong>
-              <span id="dayContextSession">09:30–16:00 ET</span>
+              <strong id="dayContextTitle">DAILY MAP</strong>
+              <span id="dayContextSession">60 SESSIONS</span>
               <output id="dayContextChange">--</output>
             </header>
-            <canvas id="dayContextCanvas"></canvas>
+            <canvas id="dayContextCanvas" role="button" tabindex="0" aria-label="Move context chart counter-clockwise" title="Click to move the context chart counter-clockwise"></canvas>
             <footer>
               <span>H <b id="dayContextHigh">--</b></span>
               <span id="dayContextPosition">RANGE --</span>
               <span>L <b id="dayContextLow">--</b></span>
             </footer>
+            <nav class="day-context-modes" aria-label="Context chart timeframe">
+              <button id="dayContextDaily" class="active" type="button" aria-pressed="true">DAILY</button>
+              <button id="dayContextIntraday" type="button" aria-pressed="false">INTRADAY</button>
+            </nav>
           </section>
           <div id="dailyChartEmpty" class="replay-chart-empty" hidden>SELECT 90 DAY TO LOAD DAILY BARS</div>
           <div id="replayChartEmpty" class="replay-chart-empty">START REPLAY TO BUILD THE CHART</div>
