@@ -23,6 +23,7 @@ function createADRPanel({ root, host, settings }) {
   let lookback = Math.max(5, Math.min(60, Math.round(Number(settings.lookbackSessions) || 20)));
   let directionMode = ['auto', 'high'].includes(String(settings.directionMode || '').toLowerCase()) ? String(settings.directionMode).toLowerCase() : 'low';
   let snapshot = host.currentSnapshot(); let adr = null; let context = null; let loadGeneration = 0; let mounted = true; let loadedSessionDateET = '';
+  let loadedPhase = ''; let lastLoadClockUS = 0; let loading = false;
   let pendingTrades = []; let pendingOverflow = false; let requestController = null;
   root.innerHTML = markup(lookback, directionMode); const $ = (selector) => root.querySelector(selector);
   const stateNode = $('.adr-state'), readyNode = $('.adr-ready'), input = $('.adr-lookback'), modeInput = $('.adr-mode');
@@ -50,6 +51,7 @@ function createADRPanel({ root, host, settings }) {
     // on an earlier date, would keep presenting the previous session's frozen
     // low and last as if they were current.
     if (phase.sessionDateET && loadedSessionDateET && phase.sessionDateET !== loadedSessionDateET) { void load(); return; }
+    if (!loading && phase.phase === 'open' && (loadedPhase === 'before-open' || (context?.status === 'building' && snapshot.clockUS - lastLoadClockUS >= 5e6))) { void load(); return; }
     if (phase.phase === 'before-open') { showState('WAITING FOR RTH OPEN'); return; }
     if (adr?.status === 'insufficient') { showState('INSUFFICIENT ADR HISTORY', `${adr.completeSessions} / ${lookback} COMPLETED SESSIONS`); return; }
     if (adr?.status !== 'ready') { showState(adr?.status === 'unavailable' ? 'ADR HISTORY UNAVAILABLE' : 'LOADING ADR HISTORY'); return; }
@@ -73,8 +75,8 @@ function createADRPanel({ root, host, settings }) {
     requestController?.abort(); requestController = new AbortController();
     const requestSignal = AbortSignal.any([host.signal, requestController.signal]);
     const token = ++loadGeneration; const phase = classifyRTH(snapshot.clockUS); adr = null; context = null; pendingTrades = []; pendingOverflow = false; showState('LOADING ADR HISTORY');
-    loadedSessionDateET = phase.sessionDateET || '';
-    if (!phase.sessionDateET || !snapshot.symbol) return;
+    loadedSessionDateET = phase.sessionDateET || ''; loadedPhase = phase.phase; lastLoadClockUS = snapshot.clockUS; loading = true;
+    if (!phase.sessionDateET || !snapshot.symbol) { loading = false; return; }
     try {
       const [history, seed] = await Promise.all([
         host.getCompletedDailyBars({ symbol: snapshot.symbol, beforeSessionDateET: phase.sessionDateET, limit: lookback, signal: requestSignal }),
@@ -86,8 +88,8 @@ function createADRPanel({ root, host, settings }) {
       context = applyEligibleTrades(context, pendingTrades, { symbol: snapshot.symbol, sessionDateET: phase.sessionDateET });
       pendingTrades = [];
       if (pendingOverflow) { snapshot.clockUS = host.currentSnapshot().clockUS; void load(); return; }
-      render();
-    } catch (error) { if (mounted && token === loadGeneration && host.isCurrent()) { console.error('ADR panel data load failed', error); adr = { status: 'unavailable' }; context = { status: 'unavailable' }; render(); } }
+      loading = false; render();
+    } catch (error) { if (mounted && token === loadGeneration && host.isCurrent()) { loading = false; console.error('ADR panel data load failed', error); adr = { status: 'unavailable' }; context = { status: 'unavailable' }; render(); } }
   }
 
   input.addEventListener('change', () => { lookback = Math.max(5, Math.min(60, Math.round(Number(input.value) || 20))); input.value = String(lookback); host.savePanelSettings({ lookbackSessions: lookback, directionMode }); void load(); });

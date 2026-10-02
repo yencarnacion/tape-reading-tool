@@ -45,7 +45,7 @@ export function seedRTHContext(payload, { symbol, sessionDateET } = {}) {
   if (payload.status === 'before-open') return { status: 'before-open', symbol, sessionDateET };
   if (!payload.completeFromRTHOpen) return { status: payload.status === 'unavailable' ? 'unavailable' : 'incomplete', symbol, sessionDateET };
   const open = Number(payload.open), high = Number(payload.high), low = Number(payload.low), last = Number(payload.last);
-  if (![open, high, low, last].every((value) => Number.isFinite(value) && value > 0)) return { status: 'building', symbol, sessionDateET };
+  if (![open, high, low, last].every((value) => Number.isFinite(value) && value > 0)) return { status: 'building', symbol, sessionDateET, completeFromRTHOpen: true, eligibleTradeCount: 0 };
   return {
     status: payload.status === 'closed' ? 'closed' : 'ready', symbol, sessionDateET,
     open, high, highTimeUS: Number(payload.highTimeUS) || 0, low, lowTimeUS: Number(payload.lowTimeUS) || 0,
@@ -61,7 +61,9 @@ export function applyEligibleTrades(context, trades, { symbol, sessionDateET } =
     const price = Number(trade?.p), marketUS = Number(trade?.t) * 1000;
     const parts = marketParts(marketUS);
     if (!parts || parts.sessionDateET !== sessionDateET || parts.seconds < 34200 || parts.seconds >= 57600 || !Number.isFinite(price) || price <= 0) continue;
-    next.last = price; next.lastTimeUS = marketUS; next.eligibleTradeCount++;
+    if (!(Number(next.open) > 0)) next.open = price;
+    next.status = 'ready';
+    next.last = price; next.lastTimeUS = marketUS; next.eligibleTradeCount = (next.eligibleTradeCount || 0) + 1;
     if (!Number.isFinite(next.high) || price > next.high) { next.high = price; next.highTimeUS = marketUS; }
     if (!Number.isFinite(next.low) || price < next.low) { next.low = price; next.lowTimeUS = marketUS; }
   }
