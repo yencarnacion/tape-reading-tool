@@ -13,14 +13,14 @@ feature. It neither changes risk settings nor issues buy/sell instructions.
 
 Kronos is assumed to be installed already. `/health` means the process is alive;
 this integration checks `/ready` before requesting real inference. The initial
-base URL is `http://10.17.17.99:8787`.
+base URL is `http://127.0.0.1:8787`.
 
 On the machine **running the tape-reading-tool Go backend**, securely copy the
-private key made by the Spark launcher. For the user's current host/user:
+key supplied by your forecast service. Replace the example source path below:
 
 ```sh
 install -d -m 700 "$HOME/.config/tape-reading-tool"
-scp yamir@10.17.17.99:.local/share/kronos-api-dgx-spark/config/api-key \
+cp /path/to/your/service-api-key \
   "$HOME/.config/tape-reading-tool/kronos-api-key"
 chmod 600 "$HOME/.config/tape-reading-tool/kronos-api-key"
 ```
@@ -41,7 +41,7 @@ Set these in the tape backend's ignored `.env` file or process environment, then
 restart **the tape backend**, not necessarily Kronos:
 
 ```dotenv
-KRONOS_URL=http://10.17.17.99:8787
+KRONOS_URL=http://127.0.0.1:8787
 KRONOS_API_KEY_FILE=~/.config/tape-reading-tool/kronos-api-key
 KRONOS_PATHS=32
 KRONOS_SESSION=extended
@@ -120,8 +120,9 @@ cancellation does not prematurely free GPU capacity. A transport failure after
 POST imposes an extra 135-second cooldown because failure is not proof that
 remote GPU work stopped. The upstream also retains its bounded worker queue.
 
-Live forecasts use **IBKR completed-minute TRADES history**, sharing the core
-RVOL cache and connection. Replay forecasts use the selected replay source and
+Live forecasts use **completed-minute history from the selected provider**:
+IBKR TRADES history by default, or Massive history through the optional gateway.
+They share the core RVOL cache and connection. Replay forecasts use the selected replay source and
 provider from the local database, with `mode=replay` and the authoritative replay
 position as `as_of`. Only candles completed by that position enter the model;
 the forming candle and later database rows are excluded. Paused replay can
@@ -129,6 +130,22 @@ calculate without advancing playback. Results are scoped to symbol, source,
 provider, replay generation and minute; seeks discard in-flight old results.
 Readiness is checked before inference, with bounded retries if the service is
 unavailable. Playback itself never waits on the GPU.
+
+If recorded replay lacks a valid contiguous model window, the backend may use
+already prepared historical minutes from the **same provider**. They must pass
+the same completeness, session, and completed-candle checks. The chart and tape
+retain recorded arrivals. The UI marks this input `CACHED 1m`, its tooltip
+explains the source, and the model request carries historical provenance. No
+history is downloaded, no gaps are padded, and another provider is never used
+for this fallback. Prepared aggregates may contain later vendor corrections.
+
+The expanded ADR/options panel borrows height from this lower slot. Compact
+Kronos uses a 128px slot, sharing its header row with the horizon buttons.
+It retains reference price and target time, 32px direction
+frequencies, usable-path/uncalibrated labels, sampling uncertainty, and the
+replay origin. Secondary model detail moves out of the small layout. Height
+recovered from Kronos goes to volume delta; the expanded ADR/options allocation
+is preserved. Selecting the lower tick chart retains at least 164px for it.
 
 Both modes use up to 240 same-date, same-session bars and require at least 32
 contiguous completed minutes. If an earlier gap exists, only the contiguous
@@ -149,8 +166,8 @@ minute grid subject to that validation; it cannot promise absence of future
 halts. No rejected session is retried with relaxed validation. Inspect the
 Kronos logs for detailed 422 diagnostics.
 
-Demo, Massive live, deterministic video render, and the independent live rewind
-pane are not forecast adapters. Recorded replay requires one specific source
+Demo, direct Massive streaming without the gateway, deterministic video render,
+and the independent live rewind pane are not forecast adapters. Recorded replay requires one specific source
 and provider; combined-provider replay is rejected.
 
 The Spark service's existing request/response JSONL and raw-path artifacts are
@@ -183,7 +200,7 @@ viewports, clipping, font sizes, the independent ADR slot, automatic polling,
 original tick fallback, offline states, response races and replay isolation.
 Screenshots from this test are **mock UI illustrations**, not model results.
 CPU/mock tests do not qualify live latency, a physical 13-inch Mac display,
-Safari behavior, the user's LAN connection, or forecasting accuracy.
+Safari behavior, a particular LAN connection, or forecasting accuracy.
 
 Scientific background: the project handoff's Sections 6–9 and 11 distinguish
 bar-anchored events, invalid outputs and model frequency from calibration.

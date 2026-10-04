@@ -1,5 +1,24 @@
+# Credentials and machine-specific configuration
 .env
-/tape-reading-tool
-data/
+.env.*
+!.env.example
+*.pem
+*.key
+*api-key
+
+# Personal notes, downloaded market data, recordings, and exports
+/local/
+/data/
+/data-*/
 /exports/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+
+# Build/runtime artifacts
+/tape-reading-tool
 *.log
+__pycache__/
+*.pyc
+.DS_Store

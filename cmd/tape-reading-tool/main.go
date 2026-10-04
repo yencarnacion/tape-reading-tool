@@ -163,7 +163,7 @@ func run() error {
 			if mode == "download-bars" {
 				provider = "massive"
 			} else {
-				provider = "ibkr"
+				provider = cfg.MarketDataProvider
 			}
 		}
 		if mode == "download-bars" {
@@ -186,11 +186,21 @@ func run() error {
 	var source feed.Feed
 	switch mode {
 	case "live":
-		source = feed.NewIBKR(cfg.IBKR, store, database)
+		if cfg.MarketDataProvider == "massive" {
+			source = feed.NewGateway(cfg.Massive, store, database)
+		} else {
+			source = feed.NewIBKR(cfg.IBKR, store, database)
+		}
 	case "demo":
 		source = feed.NewDemo(store)
 	case "massive":
-		source = feed.NewMassive(cfg.Massive, store, database)
+		if cfg.Massive.GatewayURL != "" {
+			source = feed.NewGateway(cfg.Massive, store, database)
+			mode = "live"
+			cfg.MarketDataProvider = "massive"
+		} else {
+			source = feed.NewMassive(cfg.Massive, store, database)
+		}
 	case "replay":
 		source = feed.NewReplay(database, store, cfg.Replay.Source, cfg.Replay.Provider, cfg.Replay.Speed)
 	case "render":
@@ -199,7 +209,7 @@ func run() error {
 		return fmt.Errorf("unknown mode %q; use live, massive, demo, replay, render, download, download-bars, or coverage", mode)
 	}
 	log.Printf("starting mode=%s http_addr=%s default_symbol=%s", mode, cfg.App.Addr, cfg.Tape.DefaultSymbol)
-	if mode == "live" {
+	if mode == "live" && cfg.MarketDataProvider == "ibkr" {
 		log.Printf(
 			"IBKR config host=%s port=%d client_id=%d contract=%s/%s/%s primary_exchange=%q market_data_type=%d",
 			cfg.IBKR.Host, cfg.IBKR.Port, cfg.IBKR.ClientID, cfg.IBKR.SecurityType,

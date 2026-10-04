@@ -8,6 +8,7 @@
   <link rel="icon" type="image/png" sizes="256x256" href="/favicon.png">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/auto-trendlines.css">
+  <link rel="stylesheet" href="/options-volatility.css">
 </head>
 <body>
   <main class="app" id="app">
@@ -42,7 +43,7 @@
     <section class="metrics" aria-label="Tape metrics">
       <div id="nbbo" class="nbbo" aria-label="National best bid and offer">
         <div class="nbbo-side bid">
-          <span>IBKR BEST BID</span>
+          <span>BEST BID</span>
           <div><strong id="bestBid">--</strong><output id="bestBidSize" title="Best bid size">× --</output></div>
         </div>
         <div class="nbbo-spread">
@@ -51,7 +52,7 @@
           <output id="nbboSpreadDollars">--</output>
         </div>
         <div class="nbbo-side ask">
-          <span>IBKR BEST ASK</span>
+          <span>BEST ASK</span>
           <div><strong id="bestAsk">--</strong><output id="bestAskSize" title="Best ask size">× --</output></div>
         </div>
       </div>

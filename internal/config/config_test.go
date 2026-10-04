@@ -143,7 +143,7 @@ func TestValidateAudioGainRanges(t *testing.T) {
 func TestExternalReplayDefaultsAreOnAndLoopbackOnly(t *testing.T) {
 	defaults := Defaults()
 	if !defaults.ExternalReplay.Enabled {
-		t.Fatal("external replay control must default on for the local DaiDai integration")
+		t.Fatal("external replay control must default on for local replay controllers")
 	}
 	if !defaults.ExternalReplay.LoopbackOnly {
 		t.Fatal("external replay control must default to loopback-only")
@@ -191,5 +191,18 @@ func TestExternalReplayValidationBounds(t *testing.T) {
 		if err := cfg.Validate(); err == nil {
 			t.Fatalf("%s: expected a validation error", name)
 		}
+	}
+}
+
+func TestPublicProviderDefaultAndPrivateGatewaySelection(t *testing.T) {
+	if c := Defaults(); c.MarketDataProvider != "ibkr" || c.Replay.Provider != "ibkr" || c.Massive.GatewayURL != "" {
+		t.Fatal("public defaults changed")
+	}
+	t.Setenv("MARKET_DATA_PROVIDER", "massive")
+	t.Setenv("MARKET_DATA_GATEWAY_URL", "http://127.0.0.1:1234/adapter")
+	t.Setenv("MARKET_DATA_GATEWAY_TOKEN", "local-test-token")
+	c, e := Load("")
+	if e != nil || c.MarketDataProvider != "massive" || c.Massive.GatewayToken != "local-test-token" {
+		t.Fatal(c.MarketDataProvider, e)
 	}
 }

@@ -31,9 +31,11 @@ The program is read-only. It does not place or manage orders.
 
 ## Analytics panels
 
-The fixed analytics rectangle inside the tick chart has a keyboard-accessible `PANEL` picker. It switches instantly between **Tape Pressure**, **ADR from RTH Low**, and **Blank** without reloading the page, reconnecting the WebSocket or market-data feed, clearing the chart/tape, or interrupting replay and audio. The stable panel slot does not resize the surrounding panes, and the selected panel and its settings are stored with the existing browser display settings.
+The expanded ADR section includes options-volatility context through an optional local options gateway: ATM IV/change, observed IV peak, frozen implied-move usage, RV/IV, skew, classified flow changes, and visible divergence checks. It borrows space from the lower panel while preserving a compact Kronos view. No additional Massive key is used by this feature. See [Options volatility](docs/OPTIONS_VOLATILITY.md) for setup, calculation definitions, data-quality gates, and the local preview.
 
-Tape Pressure remains the default. The ADR panel compares the current chart-eligible price with the running regular-session low and normalizes that move by the arithmetic mean of `High / Low - 1` for 20 prior completed RTH sessions. Its lookback can be changed from 5 through 60 sessions. It works through the same core-owned clock and data capabilities in IBKR live, Massive live, demo, historical replay, and deterministic render modes. When complete history from 09:30 ET or enough prior sessions cannot be proven, the panel shows an explicit incomplete, insufficient, or unavailable state instead of a number.
+The analytics section inside the tick chart has a keyboard-accessible `PANEL` picker. It switches instantly between **Tape Pressure**, **ADR + Options Vol**, and **Blank** without reloading the page, reconnecting the WebSocket or market-data feed, clearing the chart/tape, or interrupting replay and audio. The selected panel and its settings are stored with the existing browser display settings.
+
+ADR + Options Vol is the default. The ADR panel compares the current chart-eligible price with the running regular-session low and normalizes that move by the arithmetic mean of `High / Low - 1` for 20 prior completed RTH sessions. Its lookback can be changed from 5 through 60 sessions. It works through the same core-owned clock and data capabilities in IBKR live, Massive live, demo, historical replay, and deterministic render modes. When complete history from 09:30 ET or enough prior sessions cannot be proven, the panel shows an explicit incomplete, insufficient, or unavailable state instead of a number.
 
 Live Rewind deliberately retains its own fixed Tape Pressure instance regardless of the live analytics selection. ADR continues to follow live time while the rewind pane reads earlier tape.
 
@@ -73,7 +75,7 @@ MASSIVE_API_KEY=replace_with_your_massive_api_key
 TAPE_EXTERNAL_REPLAY_TOKEN=replace_with_your_private_random_token
 ```
 
-Keep the real Massive key and control token only in `.env`; `.env` and the `data/` recording directory are ignored by Git. The app loads `.env` automatically. `config.yaml` deliberately leaves `massive.api_key` blank. Generate the token with `openssl rand -hex 32` and use the same value for DaiDai's `DAIDAI_TAPE_CONTROL_TOKEN`.
+Keep the real Massive key and control token only in `.env`; `.env` and the `data/` recording directory are ignored by Git. The app loads `.env` automatically. `config.yaml` deliberately leaves `massive.api_key` blank. Generate the token with `openssl rand -hex 32` and configure your external replay controller to send the same value.
 
 Common socket ports are `7497` for TWS paper, `7496` for TWS live, `4002` for Gateway paper, and `4001` for Gateway live. Confirm the port in the API settings of the running TWS/Gateway instance.
 
@@ -381,8 +383,15 @@ performance limits, tests, and deliberate differences from TradingView.
 The lower chart section is a plugin slot with **KRONOS FORECAST** (default),
 **TICK CHART** (original price chart), or **BLANK**. The ADR slot is independent.
 Kronos refreshes automatically for completed one-minute bars on the IBKR live
-feed. It displays large, uncalibrated model frequencies, not buy/sell signals.
-Default service: `http://10.17.17.99:8787`; connection and private bearer key are
+feed or the optional Massive gateway. It displays large, uncalibrated model frequencies, not buy/sell signals.
+Default service: `http://127.0.0.1:8787`; connection and private bearer key are
 configured only on the tape backend. See [setup, interpretation, tests and
 limitations](docs/KRONOS_FORECAST.md). Recorded replay uses its own clock and
-completed local candles; demo and Massive live do not generate forecasts.
+completed local candles; demo and direct Massive streaming without the gateway
+do not generate forecasts.
+
+Optional services and publication hygiene: [Local integrations](docs/LOCAL_INTEGRATIONS.md).
+
+## Optional Massive market-data gateway
+
+IBKR remains the default. To select a Massive-compatible shared gateway, put `MARKET_DATA_PROVIDER=massive`, `MARKET_DATA_GATEWAY_URL` and the optional `MARKET_DATA_GATEWAY_TOKEN` in ignored `.env`. The URL points to your own adapter implementing the [gateway contract](docs/MARKET_DATA_GATEWAY.md). No private repository or provider API key is required in this client. Gateway errors stay visible; there is no automatic fallback to another provider.

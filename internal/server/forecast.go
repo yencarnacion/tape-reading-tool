@@ -39,7 +39,7 @@ type forecastConfig struct {
 // Configuration is operator-owned, loaded once after .env, never accepted from
 // a browser. In particular, this endpoint is NOT an arbitrary URL proxy.
 func loadForecastConfig() forecastConfig {
-	c := forecastConfig{URL: "http://10.17.17.99:8787", Paths: 32, Session: "extended", Enabled: true}
+	c := forecastConfig{URL: "http://127.0.0.1:8787", Paths: 32, Session: "extended", Enabled: true}
 	if v := os.Getenv("KRONOS_ENABLED"); v != "" {
 		b, e := strconv.ParseBool(v)
 		if e != nil {
@@ -105,14 +105,16 @@ func loadForecastConfig() forecastConfig {
 }
 
 type forecastReply struct {
-	State      string          `json:"state"`
-	Message    string          `json:"message"`
-	Symbol     string          `json:"symbol"`
-	Generation uint64          `json:"generation"`
-	OriginUS   int64           `json:"origin_us"`
-	ClockUS    int64           `json:"clock_us"`
-	Result     json.RawMessage `json:"result,omitempty"`
-	RetryAfter time.Time       `json:"-"`
+	HistorySource   string          `json:"history_source,omitempty"`
+	PreparedHistory bool            `json:"prepared_history,omitempty"`
+	State           string          `json:"state"`
+	Message         string          `json:"message"`
+	Symbol          string          `json:"symbol"`
+	Generation      uint64          `json:"generation"`
+	OriginUS        int64           `json:"origin_us"`
+	ClockUS         int64           `json:"clock_us"`
+	Result          json.RawMessage `json:"result,omitempty"`
+	RetryAfter      time.Time       `json:"-"`
 }
 
 type forecastContext struct {
@@ -122,7 +124,7 @@ type forecastContext struct {
 }
 
 func (s *Server) currentForecastContext(symbol string) (forecastContext, error) {
-	c := forecastContext{Mode: "live", Source: "live", Provider: "ibkr", Clock: s.now().UTC()}
+	c := forecastContext{Mode: "live", Source: "live", Provider: s.liveProvider(), Clock: s.now().UTC()}
 	if s.store.Status().Mode == "replay" {
 		r, ok := s.feed.(*feed.Replay)
 		if !ok {
@@ -138,7 +140,7 @@ func (s *Server) currentForecastContext(symbol string) (forecastContext, error) 
 		return forecastContext{Mode: "replay", Source: state.Source, Provider: state.Provider, Clock: time.UnixMicro(state.PositionUS).UTC(), ReplayGeneration: state.Generation}, nil
 	}
 	if s.store.Status().Mode != "live" || s.rvolMinuteBars == nil {
-		return c, errors.New("Forecasts require IBKR live history or a recorded replay")
+		return c, errors.New("Forecasts require live minute history or a recorded replay")
 	}
 	return c, nil
 }
@@ -513,6 +515,23 @@ func (s *Server) runForecast(key string, reply forecastReply, origin time.Time, 
 		return
 	}
 	window, err := forecastWindow(bars, origin, f.config.Session)
+	historySource := inputContext.Source
+	if err != nil && inputContext.Mode == "replay" && inputContext.Source == "live" {
+		// A recorded ticker may begin too late for a complete model window.
+		// Use already prepared minutes from the SAME provider only if their
+		// completed, contiguous window passes the same validation. Tape replay
+		// remains recorded; no history is downloaded or padded here.
+		preparedCtx, preparedCancel := context.WithTimeout(ctx, 6*time.Second)
+		prepared, preparedErr := s.feed.(*feed.Replay).MinuteBars(preparedCtx, reply.Symbol, "historical", inputContext.Provider, origin.Add(-24*time.Hour).UnixMicro(), origin.UnixMicro(), inputContext.Clock.UnixMicro())
+		preparedCancel()
+		if preparedErr == nil {
+			if preparedWindow, windowErr := forecastWindow(prepared, origin, f.config.Session); windowErr == nil {
+				window, err = preparedWindow, nil
+				historySource = "historical"
+				reply.PreparedHistory = true
+			}
+		}
+	}
 	if err != nil {
 		// An early poll may precede IBKR finalization. Fetch history again on
 		// the next retry rather than retaining an incomplete minute in cache.
@@ -538,8 +557,12 @@ func (s *Server) runForecast(key string, reply forecastReply, origin time.Time, 
 	requestID := "tape-v1." + hex.EncodeToString(hash[:])
 	payload := forecastPayload(reply.Symbol, requestID, origin, now, window, f.config)
 	payload["mode"] = inputContext.Mode
+	if inputContext.Mode == "live" && inputContext.Provider == "massive" {
+		payload["source"].(map[string]any)["provider"] = "massive_completed_gateway_minutes"
+	}
 	if inputContext.Mode == "replay" {
-		payload["source"].(map[string]any)["provider"] = inputContext.Provider + "_" + inputContext.Source + "_replay_minutes"
+		reply.HistorySource = inputContext.Provider + "_" + historySource + "_replay_minutes"
+		payload["source"].(map[string]any)["provider"] = reply.HistorySource
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

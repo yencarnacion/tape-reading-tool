@@ -285,6 +285,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
   function saveSettings() {
     if (!state.settings) return;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state.settings));
+    state.dirtyChart = true;
   }
 
   function clampInt(value, minimum, maximum, fallback) {
@@ -337,6 +338,13 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
             streamSource: () => liveSource,
             formatters: () => ({ size: formatSize, signedPercent: formatSignedPercent, signed: formatSigned, rate: formatRate, tickChange: formatTickChange, relativePace: formatRelativePace, price: formatPrice }),
             currentSnapshot: () => ({ generation: state.streamGeneration || 0, symbol: state.symbol, mode: state.status?.mode || '', status: { ...state.status }, clockUS: serverNowUS(performance.now()), quote: { ...state.quote }, trades: state.trades.slice() }),
+            getOptionsSnapshot: async ({ symbol, signal, afterMS }) => {
+              const query = new URLSearchParams({symbol});
+              if (Number.isSafeInteger(afterMS) && afterMS >= 0) query.set('afterMS', String(afterMS));
+              const response = await fetch(`/api/panel-data/options?${query}`, {signal});
+              if (!response.ok) throw new Error('Options gateway unavailable');
+              return response.json();
+            },
             getCompletedDailyBars: async ({ symbol, beforeSessionDateET, limit, signal }) => {
               const query = new URLSearchParams({ symbol, before: beforeSessionDateET, limit: String(limit) });
               const response = await fetch(`/api/panel-data/daily-bars?${query}`, { signal });
@@ -382,6 +390,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
         };
       }
       const snapshot = message.snapshot;
+      const generationChanged = state.streamGeneration !== (snapshot.generation || 0);
       state.streamGeneration = snapshot.generation || 0;
       const nextSymbol = snapshot.symbol || message.symbol;
       const symbolChanged = nextSymbol !== state.symbol;
@@ -422,13 +431,19 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
       // afterward and erase the loaded history.
       const preserveReplayChart = String(snapshot.status?.mode || '').toLowerCase() === 'replay'
         && !symbolChanged && state.minuteBars.length > 0;
-      if (!preserveReplayChart) rebuildMinuteBars(state.trades);
+      if (String(snapshot.status?.mode || '').toLowerCase() === 'replay' && generationChanged) {
+        // A cue can replace a populated tape while paused. Discard the previous
+        // chart immediately; its candles may belong to a later replay instant.
+        rebuildMinuteBars(deferReplayReset ? [] : state.trades);
+        state.replayChartEndUS = Number(message.server_time_ms) * 1000 || 0;
+      } else if (!preserveReplayChart) rebuildMinuteBars(state.trades);
       if (!deferReplayReset) {
         observeReceiptClock(state.trades);
         state.quote = snapshot.quote || {};
       }
       state.history = snapshot.history || [];
       state.status = snapshot.status || {};
+      if (state.status.mode === 'replay') syncServerClock(message.server_time_ms);
       state.marketChartEnabled = state.status.mode === 'replay' || message.market_chart === true;
       state.xtraEnabled = message.xtra === true;
       state.rewindConfig = message.rewind || state.rewindConfig;
@@ -467,7 +482,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
       ensureDailyMapHistory();
       chartHistory.reset();
       const chartKey = `${state.symbol}|${state.replayConfig?.source || 'live'}|${state.replayConfig?.provider || 'all'}`;
-      if (state.status.mode === 'replay' && state.replayChartKey !== chartKey) {
+      if (state.status.mode === 'replay' && (generationChanged || state.replayChartKey !== chartKey)) {
         state.replayChartKey = chartKey;
         queueMicrotask(() => refreshReplayRange(false));
       }
@@ -503,13 +518,10 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
       if (message.status) {
         const previousMode = state.status?.mode;
         const previousState = state.status?.state;
-        const pausing = message.status.mode === 'replay' && message.status.state === 'paused';
-        if (pausing && state.status?.state !== 'paused') {
-          state.serverClockUS = serverNowUS(performance.now());
-          state.serverClockAt = performance.now();
-        } else if (!pausing) {
-          syncServerClock(message.server_time_ms);
-        }
+        // Paused replay heartbeats carry the exact position, which may lie
+        // between prints. Freezing an extrapolated/last-print clock here would
+        // leave options one sample behind after an exact cue.
+        syncServerClock(message.server_time_ms);
         state.status = message.status;
         if (message.status.mode === 'replay' && state.replay) {
           state.replay = {
@@ -918,13 +930,25 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     const usable = height - top - bottom;
     const paneGap = 8;
     const minimumRollingHeight = width <= 430 ? 224 : 184;
-    const rollingPaneHeight = Math.min(Math.max(minimumRollingHeight, usable * 0.25), usable * 0.5);
-    const remaining = Math.max(0, usable - rollingPaneHeight - paneGap * 2);
-    // Reserve a legible lower-plugin rectangle on a laptop; keep the rewind
-    // target on its original allocation. Delta keeps at least 32px.
-    const deltaPaneHeight = target.layoutLower
-      ? Math.max(32, Math.min(remaining * 0.30, plotBottom - top - paneGap * 2 - rollingPaneHeight - 240))
-      : remaining * 0.30;
+    const originalRollingHeight = Math.min(Math.max(minimumRollingHeight, usable * 0.25), usable * 0.5);
+    const expanded = target.layoutLower && panelHost?.active?.id === 'adr-rth-extension';
+    let rollingPaneHeight = originalRollingHeight;
+    let deltaPaneHeight;
+    if (expanded) {
+      const total = Math.max(0, plotBottom - top - paneGap * 2 - 2);
+      const previousDelta = Math.max(32, Math.min(64, usable - 620));
+      const available = Math.max(0, total - previousDelta);
+      // Preserve the expanded ADR/options allocation. Give space recovered
+      // from the compact forecast to delta so its bars have a usable scale.
+      rollingPaneHeight = Math.min(originalRollingHeight * 3, Math.max(300, available * .64), Math.max(0, available - 164));
+      const lowerHeight = lowerTickVisible ? 164 : 128;
+      deltaPaneHeight = Math.max(32, total - rollingPaneHeight - lowerHeight);
+    } else {
+      const remaining = Math.max(0, usable - rollingPaneHeight - paneGap * 2);
+      deltaPaneHeight = target.layoutLower
+        ? Math.max(32, Math.min(remaining * .30, plotBottom - top - paneGap * 2 - rollingPaneHeight - 240))
+        : remaining * .30;
+    }
     const deltaTop = top;
     const deltaBottom = deltaTop + deltaPaneHeight;
     const rollingTop = deltaBottom + paneGap;
@@ -1031,6 +1055,10 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     context.fillStyle = '#8d96a2';
     context.textAlign = 'left';
     context.fillText('0', right + 5, zero);
+    if (deltaPaneHeight >= 64 && maxAbsDelta > 0) {
+      context.fillText(formatSigned(maxAbsDelta), right + 5, zero - deltaHeight);
+      context.fillText(formatSigned(-maxAbsDelta), right + 5, zero + deltaHeight);
+    }
 
     if (target.priceVisible?.() !== false) {
     const labelIndexes = visible.length < 3 ? [0] : [0, Math.floor((visible.length - 1) / 2), visible.length - 1];
@@ -2362,7 +2390,9 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     }).catch(() => {});
   }
 
+  let replayRangeEpoch = 0;
   async function refreshReplayRange(updateRangeInputs = true) {
+    const ticket = ++replayRangeEpoch, generation = state.streamGeneration, symbol = state.symbol;
     if (typeof updateRangeInputs !== 'boolean') updateRangeInputs = true;
     elements.replayStatus.textContent = 'LOADING RECORDINGS…';
     try {
@@ -2372,6 +2402,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
       const response = await fetch(`/api/replay?${query}`);
       if (!response.ok) throw new Error(await response.text());
       const payload = await response.json();
+      if (ticket !== replayRangeEpoch || generation !== state.streamGeneration || symbol !== state.symbol) return;
       state.replay = payload.replay || state.replay;
       replaceReplayMinuteBars(payload.chart_bars, payload.chart_end_us);
       const range = payload.range || {};
@@ -2393,6 +2424,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
       elements.replayStatus.textContent = `${formatSize(range.trades)} TRADES · ${formatSize(range.quotes)} QUOTES · ${formatReplayTime(range.start_us)}–${formatReplayTime(range.end_us)}`;
       updateReplayControls(state.replay);
     } catch (error) {
+      if (ticket !== replayRangeEpoch || generation !== state.streamGeneration || symbol !== state.symbol) return;
       elements.replayStatus.textContent = String(error.message || error).trim();
     }
   }
@@ -2456,8 +2488,8 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     const spreadCents = spread * 100;
     elements.nbboSpread.textContent = hasSpread ? `${spreadCents.toFixed(1).replace(/\.0$/, '')}¢` : '--';
     elements.nbboSpreadDollars.textContent = hasSpread ? `$${formatPrice(spread)}` : '--';
-    elements.nbbo.title = hasSpread ? `IBKR SMART NBBO spread ${formatPrice(spread)}` : 'IBKR SMART national best bid and offer';
-    elements.nbbo.setAttribute('aria-label', `IBKR best bid ${bid}, size ${bidSize}; best ask ${ask}, size ${askSize}${hasSpread ? `; spread ${formatPrice(spread)}` : ''}`);
+    elements.nbbo.title = hasSpread ? `NBBO spread ${formatPrice(spread)}` : 'National best bid and offer';
+    elements.nbbo.setAttribute('aria-label', `Best bid ${bid}, size ${bidSize}; best ask ${ask}, size ${askSize}${hasSpread ? `; spread ${formatPrice(spread)}` : ''}`);
     elements.quoteText.textContent = `BID ${bid} / ASK ${ask}`;
   }
 

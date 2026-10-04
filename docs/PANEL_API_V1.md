@@ -45,6 +45,11 @@ Capabilities expose read-only current symbol/mode/status/clock/quote/trades, the
 
 Daily history is bounded to 1–90 sessions. ADR settings are bounded to 5–60. Responses are schema-versioned and include symbol, as-of session, source/provider, adjustment, status, and completeness metadata.
 
+The `options-snapshot` capability grants only `getOptionsSnapshot({symbol, signal})`.
+It calls the core `/api/panel-data/options` endpoint, which is live-only, selected-symbol-only,
+and reads the explicitly configured loopback options gateway. It grants no provider credentials,
+arbitrary URL access, or options trading. See [Options volatility](OPTIONS_VOLATILITY.md).
+
 ## Settings and errors
 
 The existing versioned local settings object owns:

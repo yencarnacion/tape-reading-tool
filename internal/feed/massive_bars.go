@@ -18,6 +18,9 @@ import (
 // DownloadMassiveMinuteBars is used by the CLI and paced background chart
 // hydration. Unadjusted aggregates keep cached context consistent with raw prints.
 func DownloadMassiveMinuteBars(ctx context.Context, cfg config.MassiveConfig, database *storage.Database, options HistoricalOptions) error {
+	if cfg.GatewayURL != "" {
+		return DownloadGatewayBars(ctx, cfg, database, options)
+	}
 	if cfg.APIKey == "" {
 		return fmt.Errorf("MASSIVE_API_KEY is required in .env")
 	}

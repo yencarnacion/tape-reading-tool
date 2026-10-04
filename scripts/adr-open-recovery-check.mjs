@@ -6,11 +6,11 @@ function node() {
  const children = new Map();
  return { textContent:'', hidden:false, value:'', className:'', dataset:{}, style:{setProperty(){}}, classList:{toggle(){},remove(){}}, addEventListener(){}, replaceChildren(){}, querySelector(key){if(!children.has(key))children.set(key,node());return children.get(key);} };
 }
-for (const [symbol, sessionDateET] of [['LQDA','2026-10-01'],['STX','2026-10-02']]) {
+for (const [symbol, sessionDateET] of [['SAMPLE','2026-07-23'],['TEST','2026-07-24']]) {
  const root=node(); let calls=0;
  let snapshot={symbol,mode:'live',clockUS:Date.parse(`${sessionDateET}T13:29:59Z`)*1000};
  const host={signal:new AbortController().signal,isCurrent:()=>true,currentSnapshot:()=>snapshot,savePanelSettings(){},
-  getCompletedDailyBars:async()=>({bars:Array.from({length:20},(_,i)=>({sessionDateET:`2026-09-${String(i+1).padStart(2,'0')}`,open:100,high:105,low:100,close:101,complete:true}))}),
+  getCompletedDailyBars:async()=>({bars:Array.from({length:20},(_,i)=>({sessionDateET:`2026-06-${String(i+1).padStart(2,'0')}`,open:100,high:105,low:100,close:101,complete:true}))}),
   getRTHSessionContext:async()=>{calls++;return {schemaVersion:1,symbol,sessionDateET,status:calls===1?'before-open':'building',completeFromRTHOpen:calls!==1};}
  };
  const panel=adrRTHManifest.factory({root,host,settings:{}});
@@ -24,4 +24,4 @@ for (const [symbol, sessionDateET] of [['LQDA','2026-10-01'],['STX','2026-10-02'
  assert.equal(root.querySelector('.adr-value').textContent,'0.00 ADR');
  panel.unmount();
 }
-console.log('ADR panel lifecycle: LQDA/STX premarket → RTH reload → first-trade ready passed');
+console.log('ADR panel lifecycle: SAMPLE/TEST premarket → RTH reload → first-trade ready passed');

@@ -9,19 +9,21 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+	"tape-reading-tool/internal/marketgateway"
 )
 
 type Config struct {
-	App            AppConfig            `yaml:"app" json:"app"`
-	IBKR           IBKRConfig           `yaml:"ibkr" json:"ibkr"`
-	Tape           TapeConfig           `yaml:"tape" json:"tape"`
-	Display        DisplayConfig        `yaml:"display" json:"display"`
-	Audio          AudioConfig          `yaml:"audio" json:"audio"`
-	Storage        StorageConfig        `yaml:"storage" json:"storage"`
-	Replay         ReplayConfig         `yaml:"replay" json:"replay"`
-	Rewind         RewindConfig         `yaml:"rewind" json:"rewind"`
-	Massive        MassiveConfig        `yaml:"massive" json:"massive"`
-	ExternalReplay ExternalReplayConfig `yaml:"external_replay" json:"external_replay"`
+	MarketDataProvider string               `yaml:"market_data_provider" json:"market_data_provider"`
+	App                AppConfig            `yaml:"app" json:"app"`
+	IBKR               IBKRConfig           `yaml:"ibkr" json:"ibkr"`
+	Tape               TapeConfig           `yaml:"tape" json:"tape"`
+	Display            DisplayConfig        `yaml:"display" json:"display"`
+	Audio              AudioConfig          `yaml:"audio" json:"audio"`
+	Storage            StorageConfig        `yaml:"storage" json:"storage"`
+	Replay             ReplayConfig         `yaml:"replay" json:"replay"`
+	Rewind             RewindConfig         `yaml:"rewind" json:"rewind"`
+	Massive            MassiveConfig        `yaml:"massive" json:"massive"`
+	ExternalReplay     ExternalReplayConfig `yaml:"external_replay" json:"external_replay"`
 }
 
 type AppConfig struct {
@@ -118,13 +120,16 @@ type RewindConfig struct {
 const rewindBytesPerEvent = 82
 
 type MassiveConfig struct {
-	APIKey string `yaml:"api_key" json:"-"`
-	Feed   string `yaml:"feed" json:"feed"`
+	GatewayURL   string `yaml:"-" json:"-"`
+	GatewayToken string `yaml:"-" json:"-"`
+	APIKey       string `yaml:"api_key" json:"-"`
+	Feed         string `yaml:"feed" json:"feed"`
 }
 
 func Defaults() Config {
 	return Config{
-		App: AppConfig{Name: "tape-reading-tool", Addr: ":8097", Timezone: "America/New_York"},
+		MarketDataProvider: "ibkr",
+		App:                AppConfig{Name: "tape-reading-tool", Addr: ":8097", Timezone: "America/New_York"},
 		IBKR: IBKRConfig{
 			Host: "127.0.0.1", Port: 7497, ClientID: 97, Exchange: "SMART",
 			Currency: "USD", SecurityType: "STK", MarketDataType: 1,
@@ -147,7 +152,7 @@ func Defaults() Config {
 			Enabled: true, Path: "data/tape.db", QueueSize: 262144,
 			BatchSize: 2048, FlushInterval: "50ms", HistoricalRequestInterval: "11s",
 		},
-		Replay:         ReplayConfig{Source: "live", Provider: "all", Speed: 1, ChartRightGapBars: 5},
+		Replay:         ReplayConfig{Source: "live", Provider: "ibkr", Speed: 1, ChartRightGapBars: 5},
 		ExternalReplay: ExternalReplayConfig{Enabled: true, LoopbackOnly: true, DefaultWarmup: "180s", MaxDetailedSpeed: 4, SyncTolerance: "750ms"},
 		// 180 seconds keeps every rolling horizon valid at the deepest 30-second
 		// rewind: the 60-second window plus its own 60-second pace baseline.
@@ -179,6 +184,14 @@ func Load(path string) (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if c.MarketDataProvider != "ibkr" && c.MarketDataProvider != "massive" {
+		return errors.New("market_data_provider must be ibkr or massive")
+	}
+	if c.MarketDataProvider == "massive" || c.Massive.GatewayURL != "" {
+		if e := marketgateway.Validate(c.Massive.GatewayURL); e != nil {
+			return e
+		}
+	}
 	if c.App.Name == "" || c.App.Addr == "" {
 		return errors.New("app.name and app.addr are required")
 	}
@@ -308,6 +321,11 @@ func LoadDotEnv(path string) error {
 }
 
 func applyEnv(c *Config) error {
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("MARKET_DATA_PROVIDER"))); v != "" {
+		c.MarketDataProvider = v
+	}
+	c.Massive.GatewayURL = strings.TrimSpace(os.Getenv("MARKET_DATA_GATEWAY_URL"))
+	c.Massive.GatewayToken = os.Getenv("MARKET_DATA_GATEWAY_TOKEN")
 	if value := strings.TrimSpace(os.Getenv("IBKR_HOST")); value != "" {
 		c.IBKR.Host = value
 	}
@@ -332,6 +350,12 @@ func applyEnv(c *Config) error {
 	}
 	if value := strings.TrimSpace(os.Getenv("MASSIVE_API_KEY")); value != "" {
 		c.Massive.APIKey = value
+	}
+	if v := os.Getenv("TAPE_REPLAY_PROVIDER"); v != "" {
+		c.Replay.Provider = v
+	}
+	if v := os.Getenv("TAPE_REPLAY_SOURCE"); v != "" {
+		c.Replay.Source = v
 	}
 	c.ExternalReplay.Token = strings.TrimSpace(os.Getenv("TAPE_EXTERNAL_REPLAY_TOKEN"))
 	if value := strings.TrimSpace(os.Getenv("PORT")); value != "" {

@@ -55,8 +55,8 @@ func (r *Replay) Cue(ctx context.Context, request ReplayRequest, warmupUS, targe
 	if request.Symbol == "" || warmupUS <= 0 || targetUS < warmupUS || request.EndUS < targetUS {
 		return CueReport{}, fmt.Errorf("invalid cue range")
 	}
-	if request.Source != "historical" || request.Provider == "all" || request.Provider == "" {
-		return CueReport{}, fmt.Errorf("external cue requires a specific historical provider")
+	if (request.Source != "historical" && request.Source != "live") || (request.Provider != "ibkr" && request.Provider != "massive") {
+		return CueReport{}, fmt.Errorf("cue requires a recorded source and a specific provider")
 	}
 	if request.Speed <= 0 {
 		request.Speed = 1

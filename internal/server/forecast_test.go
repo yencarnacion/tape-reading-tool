@@ -74,7 +74,7 @@ func TestForecastConfigURLAndKeyBoundaries(t *testing.T) {
 	t.Setenv("KRONOS_ENABLED", "")
 	t.Setenv("KRONOS_PATHS", "")
 	t.Setenv("KRONOS_SESSION", "")
-	for _, v := range []string{"http://10.17.17.99:8787", "http://127.0.0.1:8787", "http://localhost:8787", "http://[::1]:8787", "https://forecast.example.org/kronos"} {
+	for _, v := range []string{"http://10.0.0.1:8787", "http://127.0.0.1:8787", "http://localhost:8787", "http://[::1]:8787", "https://forecast.example.org/kronos"} {
 		t.Setenv("KRONOS_URL", v)
 		c := loadForecastConfig()
 		if c.Error != "" {
@@ -494,4 +494,57 @@ func TestForecastReplaySeekDiscardsInflightResult(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("worker did not finish")
+}
+
+func TestRecordedReplayForecastUsesPreparedSameProviderWithoutFuture(t *testing.T) {
+	seen := make(chan map[string]any, 1)
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ready" {
+			_, _ = io.WriteString(w, `{"ready":true}`)
+			return
+		}
+		var input map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&input)
+		seen <- input
+		_, _ = w.Write(mockForecastWire(input))
+	}))
+	defer remote.Close()
+	origin := time.Date(2026, 9, 18, 14, 17, 0, 0, time.UTC)
+	s, replay := replayForecastServer(t, remote.URL, origin)
+	_, err := replay.Cue(context.Background(), feed.ReplayRequest{Symbol: "QQQ", Source: "live", Provider: "massive", EndUS: origin.Add(time.Hour).UnixMicro(), Speed: 1}, origin.Add(-time.Minute).UnixMicro(), origin.Add(20*time.Second).UnixMicro(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	postForecast(s, "QQQ")
+	got := waitForecast(t, s)
+	if got.State != "forecast" || !got.PreparedHistory || got.HistorySource != "massive_historical_replay_minutes" {
+		t.Fatalf("fallback not explicit: %+v", got)
+	}
+	if replay.Status().Source != "live" {
+		t.Fatal("forecast changed the tape source")
+	}
+	input := <-seen
+	if input["source"].(map[string]any)["provider"] != got.HistorySource {
+		t.Fatal("incorrect upstream provenance")
+	}
+	bars := input["bars"].([]any)
+	if len(bars) != 240 {
+		t.Fatal("incomplete fallback window")
+	}
+	for _, raw := range bars {
+		b := raw.(map[string]any)
+		at, _ := time.Parse(time.RFC3339, b["timestamp"].(string))
+		if !at.Before(origin) || b["close"] != float64(100) {
+			t.Fatal("forming/future bar leaked into fallback")
+		}
+	}
+	// A different provider's prepared history must never fill the recording.
+	_, err = replay.Cue(context.Background(), feed.ReplayRequest{Symbol: "QQQ", Source: "live", Provider: "ibkr", EndUS: origin.Add(time.Hour).UnixMicro(), Speed: 1}, origin.Add(-time.Minute).UnixMicro(), origin.Add(20*time.Second).UnixMicro(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	postForecast(s, "QQQ")
+	if got = waitForecast(t, s); got.State != "input_unavailable" {
+		t.Fatalf("foreign-provider fallback: %+v", got)
+	}
 }

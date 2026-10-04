@@ -58,11 +58,11 @@ assert.equal(extensionTone('low', .01), 'neutral', 'the threshold is strictly ab
 
 console.log('ADR panel check: formula, completeness, RTH boundaries, no-look-ahead, and formatting passed');
 
-for (const symbol of ['LQDA', 'STX']) {
-  const sessionDateET = symbol === 'LQDA' ? '2026-10-01' : '2026-10-02';
+for (const symbol of ['SAMPLE', 'TEST']) {
+  const sessionDateET = symbol === 'SAMPLE' ? '2026-07-23' : '2026-07-24';
   const seed = seedRTHContext({schemaVersion: 1, symbol, sessionDateET, status: 'building', completeFromRTHOpen: true}, {symbol, sessionDateET});
   const updated = applyEligibleTrades(seed, [{p: 840, t: Date.parse(`${sessionDateET}T13:30:00Z`)}, {p: 845, t: Date.parse(`${sessionDateET}T13:31:00Z`)}], {symbol, sessionDateET});
   assert.equal(updated.status, 'ready'); assert.equal(updated.open, 840); assert.equal(updated.low, 840); assert.equal(updated.high, 845);
   assert.equal(calculateExtension({status: 'ready', adr: .05}, updated).status, 'ready');
 }
-console.log('LQDA/STX empty-at-open recovery passed');
+console.log('SAMPLE/TEST empty-at-open recovery passed');

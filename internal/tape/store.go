@@ -38,6 +38,7 @@ type Quote struct {
 }
 
 type FeedStatus struct {
+	Provider  string `json:"provider,omitempty"`
 	Mode      string `json:"mode"`
 	State     string `json:"state"`
 	Message   string `json:"message,omitempty"`
@@ -169,6 +170,18 @@ func (s *Store) UpdateQuote(symbol string, bid, ask, bidSize, askSize float64) Q
 	quote := tape.quote
 	tape.mu.Unlock()
 	return quote
+}
+
+// ClearTopOfBook removes a quote across gateway gaps without erasing the
+// separately sourced previous-session reference close.
+func (s *Store) ClearTopOfBook(symbol string) {
+	t := s.getOrCreate(symbol)
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.quote = Quote{PreviousClose: t.quote.PreviousClose}
 }
 
 // UpdatePreviousClose records the reference close supplied by the market-data feed.

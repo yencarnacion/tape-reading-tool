@@ -606,3 +606,27 @@ input[type="range"] { width: 100%; height: 5px; padding: 0; accent-color: var(--
 .kronos-state[hidden], .kronos-values[hidden] { display: none; }
 @container (max-height: 285px) { .kronos-panel { gap: 3px; } .kronos-move { display: none; } .kronos-numbers output { font-size: clamp(38px, 14cqw, 60px); } }
 @container (max-height: 235px) { .kronos-details { display: none; } .kronos-numbers output { font-size: clamp(36px, 12cqw, 48px); } .kronos-question { font-size: 13px; } .kronos-sampling { font-size: 11px; } }
+
+.analytics-slot { container-type: size; }
+/* A shared header row and compact forecast return vertical space to delta.
+   Keep reference, usable-path caveats, uncertainty and age visible. */
+@container (max-height:270px) {
+ .lower-panel-slot .analytics-panel-root.kronos-root { top:0; }
+ .kronos-panel { padding:40px 8px 3px; gap:1px; }
+ .kronos-controls { position:absolute; top:3px; left:8px; gap:3px; }
+ .kronos-controls button { min-width:30px; min-height:22px; padding:1px 4px; font-size:11px; }
+ .kronos-basis { position:absolute; top:27px; left:8px; right:8px; font-size:10px; line-height:12px; white-space:nowrap; }
+ .kronos-values { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(0,1fr); grid-template-rows:14px minmax(42px,1fr) auto; align-content:center; gap:1px 7px; }
+ .kronos-values[hidden] { display:none; }
+ .kronos-question { grid-column:1/-1; font-size:11px; line-height:14px; }
+ .kronos-numbers { grid-row:2; align-self:center; gap:6px; }
+ .kronos-numbers output { font-size:32px; }
+ .kronos-numbers span { font-size:9px; letter-spacing:0; }
+ .kronos-sampling { grid-column:2; grid-row:2; font-size:10px; line-height:1.2; align-self:center; }
+ .kronos-bounds { grid-column:1/-1; font-size:10px; line-height:12px; }
+ .kronos-move,.kronos-details { display:none; }
+ .kronos-clock { font-size:10px; line-height:11px; }
+ .kronos-state { gap:4px; }
+ .kronos-state strong { font-size:20px; }
+ .kronos-state span { font-size:12px; }
+}

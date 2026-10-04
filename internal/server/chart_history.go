@@ -38,7 +38,7 @@ func (s *Server) handleChartHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	through := s.now().UTC().Truncate(time.Minute)
-	provider := "ibkr"
+	provider := s.liveProvider()
 	switch s.store.Status().Mode {
 	case "live":
 		if s.rvolMinuteBars == nil {

@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -29,6 +31,7 @@ type Server struct {
 	chartHistoryFetch    func(context.Context, string, string, time.Time, time.Time) error
 	chartHistoryOpenIBKR func(context.Context) (feed.MinuteBarReader, func(), error)
 	forecast             *forecastService
+	options              *optionsService
 	cfg                  config.Config
 	store                *tape.Store
 	feed                 feed.Feed
@@ -106,7 +109,7 @@ func New(cfg config.Config, store *tape.Store, source feed.Feed, liveChart ...bo
 	started := time.Now()
 	server := &Server{
 		chartHistorySlot: make(chan struct{}, 1),
-		cfg:              cfg, store: store, feed: source, forecast: newForecastService(loadForecastConfig()),
+		cfg:              cfg, store: store, feed: source, forecast: newForecastService(loadForecastConfig()), options: newOptionsService(),
 		rvolCache: make(map[string]rvolHistoryCache), dailyCache: make(map[string]dailyHistoryCache), panelDataCache: make(map[string]panelDataCacheEntry), now: time.Now,
 		uiEventAt: make(map[string]time.Time), processStartUS: started.UnixMicro(),
 		symbolActiveUS: map[string]int64{store.Active(): started.UnixMicro()},
@@ -148,6 +151,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/forecast", s.handleForecast)
+	mux.HandleFunc("/api/panel-data/options", s.handleOptions)
 	mux.HandleFunc("/api/ticker", s.handleTicker)
 	mux.HandleFunc("/api/tape/range", s.handleTapeRange)
 	mux.HandleFunc("/api/ui-event", s.handleUIEvent)
@@ -197,24 +201,45 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 }
 
-// handleTradingPosition is a read-only, loopback bridge to the private trading
-// controller. The public tape tool exposes only the chart data it needs and
-// remains useful when the private service is absent.
+// handleTradingPosition is an optional local position adapter. Only chart
+// levels are exposed, and only to a browser on the backend's own machine.
 func (s *Server) handleTradingPosition(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	target := strings.TrimSpace(os.Getenv("TRADING_TOOLS_STATUS_URL"))
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
+		http.Error(w, "local access required", http.StatusForbidden)
+		return
+	}
+	if origin := r.Header.Get("Origin"); origin != "" {
+		u, err := url.Parse(origin)
+		if err != nil || u.Host != r.Host || (u.Scheme != "http" && u.Scheme != "https") {
+			http.Error(w, "same origin required", http.StatusForbidden)
+			return
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	target := strings.TrimSpace(os.Getenv("TAPE_POSITION_STATUS_URL"))
+	// Existing explicit configurations remain valid. There is no implicit service.
 	if target == "" {
-		target = "http://127.0.0.1:8176/api/status"
+		target = strings.TrimSpace(os.Getenv("TRADING_TOOLS_STATUS_URL"))
+	}
+	if target == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"available": false})
+		return
+	}
+	if _, valid := optionsLocalURL(target); !valid {
+		writeJSON(w, http.StatusOK, map[string]any{"available": false})
+		return
 	}
 	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
 	if err != nil {
 		http.Error(w, "position unavailable", http.StatusBadGateway)
 		return
 	}
-	client := &http.Client{Timeout: 400 * time.Millisecond}
+	client := &http.Client{Timeout: 400 * time.Millisecond, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, err := client.Do(request)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"available": false})
@@ -350,11 +375,11 @@ func (s *Server) handleRVOLHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	mode := strings.ToLower(s.store.Status().Mode)
 	if mode != "live" {
-		http.Error(w, "RVOL history warmup is available only for the IBKR live feed", http.StatusConflict)
+		http.Error(w, "RVOL history warmup is available only for a live feed", http.StatusConflict)
 		return
 	}
 	if s.rvolMinuteBars == nil {
-		http.Error(w, "IBKR live history is unavailable", http.StatusServiceUnavailable)
+		http.Error(w, "Live history is unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	symbol := tape.NormalizeSymbol(r.URL.Query().Get("symbol"))
@@ -390,7 +415,7 @@ func (s *Server) handleRVOLHistory(w http.ResponseWriter, r *http.Request) {
 		s.rvolCache[symbol] = entry
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"symbol": symbol, "provider": "ibkr", "through_us": entry.throughUS, "bars": entry.bars,
+		"symbol": symbol, "provider": s.liveProvider(), "through_us": entry.throughUS, "bars": entry.bars,
 	})
 }
 
@@ -423,7 +448,7 @@ func (s *Server) handleDailyHistory(w http.ResponseWriter, r *http.Request) {
 		entry = dailyHistoryCache{through: cacheKey, bars: append([]storage.MinuteBar(nil), bars...)}
 		s.dailyCache[symbol] = entry
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"symbol": symbol, "provider": "ibkr", "bars": entry.bars})
+	writeJSON(w, http.StatusOK, map[string]any{"symbol": symbol, "provider": s.liveProvider(), "bars": entry.bars})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -487,7 +512,7 @@ func (s *Server) handleTapeRange(w http.ResponseWriter, r *http.Request) {
 	}
 	mode := strings.ToLower(s.store.Status().Mode)
 	if mode != "live" && mode != "demo" {
-		http.Error(w, "live rewind is available only for the IBKR live feed", http.StatusConflict)
+		http.Error(w, "live rewind is available only for a live feed", http.StatusConflict)
 		return
 	}
 	query := r.URL.Query()
@@ -631,7 +656,7 @@ func (s *Server) recordUIEvent(record storage.UIEventRecord) {
 	record.EventUS = receivedUS
 	record.ReceivedUS = receivedUS
 	record.Source = "live"
-	record.Provider = "ibkr"
+	record.Provider = s.liveProvider()
 	s.recorder.RecordUIEvent(record)
 }
 
@@ -712,6 +737,8 @@ func (s *Server) handleReplay(w http.ResponseWriter, r *http.Request) {
 	s.detachExternalForManualAction()
 	var err error
 	switch strings.ToLower(request.Action) {
+	case "cue":
+		_, err = replay.Cue(r.Context(), feed.ReplayRequest{Symbol: request.Symbol, Source: request.Source, Provider: request.Provider, EndUS: request.EndUS, Speed: request.Speed}, request.StartUS, request.TargetUS, false)
 	case "start":
 		err = replay.Start(feed.ReplayRequest{Symbol: request.Symbol, Source: request.Source, Provider: request.Provider, StartUS: request.StartUS, EndUS: request.EndUS, Speed: request.Speed})
 	case "pause":
@@ -936,4 +963,11 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Content-Security-Policy", fmt.Sprintf("default-src 'self'; connect-src 'self' ws://%s wss://%s; script-src 'self'; style-src 'self'; worker-src 'self' blob:", r.Host, r.Host))
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) liveProvider() string {
+	if s.cfg.MarketDataProvider == "massive" || s.store.Status().Mode == "massive" {
+		return "massive"
+	}
+	return "ibkr"
 }

@@ -80,7 +80,7 @@ type panelRTHResponse struct {
 }
 
 func (s *Server) panelClock() (time.Time, string, string, string) {
-	mode, source, provider := s.mode, "live", "ibkr"
+	mode, source, provider := s.mode, "live", s.liveProvider()
 	clock := s.now()
 	if replay, ok := s.feed.(*feed.Replay); ok {
 		state := replay.Status()
@@ -152,6 +152,10 @@ func (s *Server) handlePanelDailyBars(w http.ResponseWriter, r *http.Request) {
 	} else if mode == "live" && s.dailyBars != nil {
 		response.Adjustment = "ibkr-provider"
 		response.Message = "IBKR adjustment semantics are provider-defined; no cross-provider normalization is applied"
+		if provider == "massive" {
+			response.Adjustment = "unadjusted"
+			response.Message = "RTH daily ranges from unadjusted Massive minute aggregates"
+		}
 		bars, requestErr := s.dailyBars(ctx, symbol, before, limit)
 		if requestErr != nil {
 			response.Status, response.Message = "unavailable", requestErr.Error()
@@ -172,6 +176,17 @@ func (s *Server) handlePanelDailyBars(w http.ResponseWriter, r *http.Request) {
 		response.Bars, err = s.localCompletedDailyBars(ctx, symbol, historySource, provider, before, limit, location)
 		if err != nil {
 			response.Status, response.Message = "unavailable", err.Error()
+		}
+		// A recorded IBKR tape often has only a few days of warmed minute bars.
+		// Use a separately prepared, complete Massive baseline if available. Keep
+		// provenance explicit and never blend providers inside one ADR baseline.
+		if err == nil && len(response.Bars) < limit && provider == "ibkr" && (mode == "replay" || mode == "render") {
+			fallback, fallbackErr := s.localCompletedDailyBars(ctx, symbol, "historical", "massive", before, limit, location)
+			if fallbackErr == nil && len(fallback) == limit {
+				response.Bars = fallback
+				response.Source, response.Provider, response.Adjustment = "historical", "massive", "unadjusted"
+				response.Message = "Prior RTH baseline from prepared Massive bars; current tape and RTH extremes retain the recorded provider"
+			}
 		}
 	} else {
 		response.Status, response.Message = "unavailable", "completed RTH history is unavailable"
@@ -350,7 +365,7 @@ func (s *Server) handlePanelRTHContext(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, response)
 		return
 	}
-	if mode == "live" && provider == "ibkr" && s.rvolMinuteBars != nil {
+	if mode == "live" && s.rvolMinuteBars != nil {
 		bars, err = s.rvolMinuteBars(ctx, symbol, time.UnixMicro(endUS+1), 960)
 		bars = barsInside(bars, start.UnixMicro(), endUS)
 		complete = err == nil
@@ -388,6 +403,20 @@ func (s *Server) handlePanelRTHContext(w http.ResponseWriter, r *http.Request) {
 			if err == nil && !complete && mode == "massive" && source == "live" {
 				complete = s.symbolActiveAt(symbol) > 0 && s.symbolActiveAt(symbol) <= start.UnixMicro()
 				tradeComplete = complete
+			}
+			if err == nil && !complete && provider == "ibkr" && (mode == "replay" || mode == "render") {
+				// A local live recording has no provider completeness certificate.
+				// Only a completed historical tick download can fill that proof;
+				// completed minute bars cannot supply a forming minute's high/low.
+				covered, coverageErr := s.recorder.HasCoverage(ctx, symbol, "massive", "trades", start.UnixMicro(), endUS)
+				if coverageErr == nil && covered {
+					fallback, statsErr := s.recorder.EligibleSessionTradeStats(ctx, symbol, "historical", "massive", start.UnixMicro(), endUS, throughUS)
+					if statsErr == nil && fallback.Count > 0 {
+						stats, complete, tradeComplete = fallback, true, true
+						response.Source, response.Provider = "historical", "massive"
+						response.Message = "RTH extremes from prepared Massive ticks; the tape retains original recorded IBKR arrivals"
+					}
+				}
 			}
 		}
 		if err == nil && tradeComplete && stats.Count > 0 {

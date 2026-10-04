@@ -67,6 +67,9 @@ func (r *massiveResumePoint) accept(timestamp int64, key string) bool {
 }
 
 func DownloadMassiveHistorical(ctx context.Context, cfg config.MassiveConfig, database *storage.Database, options HistoricalOptions) error {
+	if cfg.GatewayURL != "" {
+		return DownloadGatewayHistorical(ctx, cfg, database, options)
+	}
 	if cfg.APIKey == "" {
 		return fmt.Errorf("MASSIVE_API_KEY is required in .env")
 	}

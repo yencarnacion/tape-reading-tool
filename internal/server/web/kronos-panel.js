@@ -65,7 +65,8 @@ export function createKronosPanel({ root, host, settings }) {
       }
       const valid = view.n - view.above.unknown, partial = view.above.unknown > 0;
       ui.state.hidden = true; ui.values.hidden = false;
-      ui.basis.textContent = `KRONOS${snapshot.mode === 'replay' ? ' · REPLAY' : ''} · ${valid}/${view.n} USABLE · UNCALIBRATED${view.shortContext ? " · SHORT HISTORY" : ""}`;
+      ui.basis.textContent = `${snapshot.mode === 'replay' ? 'REPLAY · ' : ''}${valid}/${view.n} USABLE · UNCALIBRATED${view.shortContext ? ' · SHORT HISTORY' : ''}`;
+      ui.basis.title = stateMessage.prepared_history ? 'Model input: prepared historical minutes from the recorded provider; stock tape still uses recorded arrivals.' : (stateMessage.history_source || 'Completed market-minute history');
       ui.question.textContent = `Close vs $${view.reference.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 })} at ${etTime(view.close)} ET`;
       ui.above.textContent = percent(view.above.validValue); ui.below.textContent = percent(view.below.validValue);
       const leader = view.above.yes > view.below.yes ? 'above' : view.below.yes > view.above.yes ? 'below' : 'tie';
@@ -86,7 +87,7 @@ export function createKronosPanel({ root, host, settings }) {
       ui.bounds.title = ui.sampling.title;
       ui.details.textContent = `${view.context} bars${view.shortContext ? ' · SHORT CONTEXT' : ''} · equal ${view.equal.yes}/${view.n}`;
       ui.details.title = `Amount is estimated by Kronos from volume × mean OHLC. No tape, news, execution or calibration model.${view.qualityWarning ? ` ${view.qualityWarning}.` : ''}`;
-      ui.clock.textContent = `${snapshot.symbol} · ${etTime(view.origin)} → ${etTime(view.close)} ET · ${Math.floor(view.age)}s old${view.late ? ' · BAR-ANCHORED' : ''}`;
+      ui.clock.textContent = `${snapshot.symbol} · ${etTime(view.origin)} → ${etTime(view.close)} ET · ${Math.floor(view.age)}s old${stateMessage.prepared_history ? ' · CACHED 1m' : view.late ? ' · BAR-ANCHORED' : ''}`;
     } catch (error) {
       ui.state.querySelector('strong').textContent = 'WITHHELD';
       ui.state.querySelector('span').textContent = String(error?.message || error);
@@ -97,7 +98,7 @@ export function createKronosPanel({ root, host, settings }) {
     if (!current() || inFlight || !visible() || performance.now() < nextPoll) return;
     snapshot = host.currentSnapshot();
     if (!['live', 'replay'].includes(snapshot.mode)) {
-      result = null; stateMessage = { state: 'unsupported_mode', message: 'Forecasts require IBKR live history or recorded replay data.' };
+      result = null; stateMessage = { state: 'unsupported_mode', message: 'Forecasts require live minute history or recorded replay data.' };
       nextPoll = performance.now()+1000; paint(nowUS); return;
     }
     if (!snapshot.symbol) return;
