@@ -225,6 +225,9 @@ func (s *optionsService) get(ctx context.Context, seed optionsReply, now time.Ti
 			s.mu.Lock()
 			p.reply = result
 			p.expires = time.Now().Add(5 * time.Second)
+			if result.Status == "gateway-offline" || result.Status == "unavailable" {
+				p.expires = time.Now().Add(time.Second)
+			}
 			close(p.done)
 			s.mu.Unlock()
 		}(pending, seed)
@@ -257,6 +260,7 @@ func (s *optionsService) fetch(ctx context.Context, reply optionsReply, now time
 	contracts := []optionContract{}
 	for page := 0; page < 8; page++ {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
+		req.Header.Set("X-DaiDai-Priority", "interactive")
 		if s.token != "" {
 			req.Header.Set("Authorization", "Bearer "+s.token)
 		}

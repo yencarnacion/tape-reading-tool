@@ -412,12 +412,12 @@ function fill(buffer, trades) {
 
 // -------------------------------------------------------- documented size
 {
-  assert.equal(rewindBufferBytes(180, 2000), 180 * 2000 * 82, 'the documented worst case must hold');
+  assert.equal(rewindBufferBytes(180, 2000), 180 * 2000 * 83, 'the documented worst case must hold');
   const buffer = new RewindBuffer({ bufferSeconds: 180, maxPrintsPerSecond: 2000 });
   assert.equal(buffer.capacity, 360000);
-  assert.equal(buffer.bytes, 29520000);
+  assert.equal(buffer.bytes, 29880000);
   const measured = [buffer.seq, buffer.receivedUS, buffer.exchangeMS, buffer.price, buffer.size, buffer.bid,
-    buffer.ask, buffer.prefixVolume, buffer.prefixBuyer, buffer.prefixSeller, buffer.side, buffer.klass]
+    buffer.ask, buffer.prefixVolume, buffer.prefixBuyer, buffer.prefixSeller, buffer.side, buffer.klass, buffer.flags]
     .reduce((total, column) => total + column.byteLength, 0);
   assert.equal(measured, buffer.bytes, `columns measure ${measured}B, documented ${buffer.bytes}B`);
 }

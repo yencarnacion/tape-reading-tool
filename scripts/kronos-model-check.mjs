@@ -74,8 +74,10 @@ for (let usable = 0; usable <= 32; usable++) {
   if (usable) assert.equal(v.above.validValue + v.below.validValue, 1);
 }
 const panels = { slots: { primaryAnalytics: { activePanelId: 'adr-rth-extension' } }, settings: {} };
-assert.equal(lowerPanelSettings(panels, {}).slots.lowerAnalytics.activePanelId, 'kronos-forecast');
+assert.equal(lowerPanelSettings(panels, {}).slots.lowerAnalytics.activePanelId, 'options-flow');
 assert.equal(lowerPanelSettings(panels, { slots: { lowerAnalytics: { activePanelId: 'tick-chart' } } }).slots.lowerAnalytics.activePanelId, 'tick-chart');
-assert.equal(lowerPanelSettings(panels, { slots: { lowerAnalytics: { activePanelId: 'remote-url' } } }).slots.lowerAnalytics.activePanelId, 'kronos-forecast');
+assert.equal(lowerPanelSettings(panels, { slots: { lowerAnalytics: { activePanelId: 'remote-url' } } }).slots.lowerAnalytics.activePanelId, 'options-flow');
+assert.equal(lowerPanelSettings(panels, { slots: { lowerAnalytics: { activePanelId: 'kronos-forecast' } } }).slots.lowerAnalytics.activePanelId, 'options-flow');
+assert.equal(lowerPanelSettings(panels, { lowerDefaultId: 'options-flow', slots: { lowerAnalytics: { activePanelId: 'kronos-forecast' } } }).slots.lowerAnalytics.activePanelId, 'kronos-forecast');
 assert.equal(panels.slots.primaryAnalytics.activePanelId, 'adr-rth-extension');
 console.log('kronos model check: counts, definitions, Wilson intervals, unknowns, clocks, nulls, and settings migration passed');

@@ -25,13 +25,13 @@ export function validCompletedDailyBar(bar, beforeSessionDateET) {
   return Boolean(bar?.complete) && /^\d{4}-\d{2}-\d{2}$/.test(String(bar?.sessionDateET || ''))
     && (!beforeSessionDateET || bar.sessionDateET < beforeSessionDateET)
     && numbers.every((value) => Number.isFinite(value) && value > 0)
-    && Number(bar.high) >= Number(bar.low);
+    && Number(bar.high) >= Math.max(Number(bar.open), Number(bar.close)) && Number(bar.low) <= Math.min(Number(bar.open), Number(bar.close));
 }
 
 export function calculateADR(bars, lookbackSessions, beforeSessionDateET) {
   const lookback = Math.max(5, Math.min(60, Math.round(Number(lookbackSessions) || 20)));
-  const valid = (Array.isArray(bars) ? bars : [])
-    .filter((bar) => validCompletedDailyBar(bar, beforeSessionDateET))
+  const unique = new Map((Array.isArray(bars) ? bars : []).filter((bar) => validCompletedDailyBar(bar, beforeSessionDateET)).map(bar => [bar.sessionDateET, bar]));
+  const valid = [...unique.values()]
     .sort((left, right) => String(left.sessionDateET).localeCompare(String(right.sessionDateET)))
     .slice(-lookback);
   if (valid.length !== lookback) return { status: 'insufficient', lookback, completeSessions: valid.length, adr: null, bars: valid };
@@ -61,11 +61,14 @@ export function applyEligibleTrades(context, trades, { symbol, sessionDateET } =
     const price = Number(trade?.p), marketUS = Number(trade?.t) * 1000;
     const parts = marketParts(marketUS);
     if (!parts || parts.sessionDateET !== sessionDateET || parts.seconds < 34200 || parts.seconds >= 57600 || !Number.isFinite(price) || price <= 0) continue;
-    if (!(Number(next.open) > 0)) next.open = price;
+    const oc = !trade.f || (trade.f & 1) !== 0, hl = !trade.f || (trade.f & 2) !== 0;
+    if (!oc && !hl) continue;
+    if (!(Number(next.open) > 0) && oc) next.open = price;
     next.status = 'ready';
-    next.last = price; next.lastTimeUS = marketUS; next.eligibleTradeCount = (next.eligibleTradeCount || 0) + 1;
-    if (!Number.isFinite(next.high) || price > next.high) { next.high = price; next.highTimeUS = marketUS; }
-    if (!Number.isFinite(next.low) || price < next.low) { next.low = price; next.lowTimeUS = marketUS; }
+    if (oc && marketUS >= (next.lastTimeUS || 0)) { next.last = price; next.lastTimeUS = marketUS; }
+    next.eligibleTradeCount = (next.eligibleTradeCount || 0) + 1;
+    if (hl && (!Number.isFinite(next.high) || price > next.high)) { next.high = price; next.highTimeUS = marketUS; }
+    if (hl && (!Number.isFinite(next.low) || price < next.low)) { next.low = price; next.lowTimeUS = marketUS; }
   }
   return next;
 }

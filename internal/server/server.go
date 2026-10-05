@@ -27,6 +27,7 @@ import (
 var webFS embed.FS
 
 type Server struct {
+	historyRequests      sync.Map // one cancellable request gate per history key
 	chartHistorySlot     chan struct{}
 	chartHistoryFetch    func(context.Context, string, string, time.Time, time.Time) error
 	chartHistoryOpenIBKR func(context.Context) (feed.MinuteBarReader, func(), error)
@@ -152,6 +153,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/forecast", s.handleForecast)
 	mux.HandleFunc("/api/panel-data/options", s.handleOptions)
+	mux.HandleFunc("/api/panel-data/options-flow", s.handleOptionsFlow)
 	mux.HandleFunc("/api/ticker", s.handleTicker)
 	mux.HandleFunc("/api/tape/range", s.handleTapeRange)
 	mux.HandleFunc("/api/ui-event", s.handleUIEvent)
@@ -389,12 +391,14 @@ func (s *Server) handleRVOLHistory(w http.ResponseWriter, r *http.Request) {
 	through := s.now().UTC().Truncate(time.Minute)
 	throughUS := through.UnixMicro()
 
-	// Serialize cache misses so several browser tabs opened at the bell still
-	// produce only one small aggregate request. This mutex is never used by the
-	// feed or WebSocket path, so the tape remains independent of REST latency.
+	unlock, err := s.lockHistory(r.Context(), "rvol|"+symbol)
+	if err != nil {
+		return
+	}
+	defer unlock()
 	s.rvolMu.Lock()
-	defer s.rvolMu.Unlock()
 	entry, cached := s.rvolCache[symbol]
+	s.rvolMu.Unlock()
 	if !cached || entry.throughUS != throughUS {
 		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 		defer cancel()
@@ -412,7 +416,9 @@ func (s *Server) handleRVOLHistory(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		entry = rvolHistoryCache{throughUS: throughUS, bars: append([]storage.MinuteBar(nil), bars...)}
+		s.rvolMu.Lock()
 		s.rvolCache[symbol] = entry
+		s.rvolMu.Unlock()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"symbol": symbol, "provider": s.liveProvider(), "through_us": entry.throughUS, "bars": entry.bars,
@@ -434,9 +440,14 @@ func (s *Server) handleDailyHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	through := s.now().UTC()
 	cacheKey := through.Format("2006-01-02")
+	unlock, err := s.lockHistory(r.Context(), "daily-chart|"+symbol)
+	if err != nil {
+		return
+	}
+	defer unlock()
 	s.dailyMu.Lock()
-	defer s.dailyMu.Unlock()
 	entry, cached := s.dailyCache[symbol]
+	s.dailyMu.Unlock()
 	if !cached || entry.through != cacheKey {
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
@@ -446,7 +457,11 @@ func (s *Server) handleDailyHistory(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		entry = dailyHistoryCache{through: cacheKey, bars: append([]storage.MinuteBar(nil), bars...)}
-		s.dailyCache[symbol] = entry
+		if len(bars) > 0 {
+			s.dailyMu.Lock()
+			s.dailyCache[symbol] = entry
+			s.dailyMu.Unlock()
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"symbol": symbol, "provider": s.liveProvider(), "bars": entry.bars})
 }
@@ -550,7 +565,7 @@ func (s *Server) handleTapeRange(w http.ResponseWriter, r *http.Request) {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		defer cancel()
-		stored, err := s.recorder.TradesByRingSeq(ctx, symbol, seqFrom, storedTo, s.processStartUS, limit)
+		stored, err := s.recorder.TradesByRingSeq(ctx, symbol, seqFrom, storedTo, s.processStartUS, limit, s.liveProvider())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
@@ -970,4 +985,17 @@ func (s *Server) liveProvider() string {
 		return "massive"
 	}
 	return "ibkr"
+}
+
+// Coalesce only identical work. A slow previous ticker must never hold the
+// cache mutex or prevent the newly selected ticker from starting its history.
+func (s *Server) lockHistory(ctx context.Context, key string) (func(), error) {
+	value, _ := s.historyRequests.LoadOrStore(key, make(chan struct{}, 1))
+	gate := value.(chan struct{})
+	select {
+	case gate <- struct{}{}:
+		return func() { <-gate }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }

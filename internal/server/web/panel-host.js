@@ -8,6 +8,7 @@ const CAPABILITY_METHODS = Object.freeze({
   'completed-daily-rth-bars': ['getCompletedDailyBars'],
   'rth-session-context': ['getRTHSessionContext'],
   'options-snapshot': ['getOptionsSnapshot'],
+  'options-flow': ['getOptionsFlow'],
   forecast: ['requestForecast'],
   'tick-chart': ['setTickChartVisible']
 });

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"tape-reading-tool/internal/config"
 	"tape-reading-tool/internal/marketgateway"
 	"tape-reading-tool/internal/storage"
@@ -18,13 +19,16 @@ import (
 // Gateway uses only the configured local adapter, including all chart history.
 // It never creates a provider WebSocket or reads a provider credential.
 type Gateway struct {
-	cfg      config.MassiveConfig
-	store    *tape.Store
-	recorder *storage.Database
-	changed  chan string
-	client   *marketgateway.Client
-	mu       sync.Mutex
-	quoteMS  int64
+	epoch      atomic.Uint64
+	cfg        config.MassiveConfig
+	store      *tape.Store
+	recorder   *storage.Database
+	changed    chan string
+	client     *marketgateway.Client
+	mu         sync.Mutex
+	quoteMS    int64
+	dailyMu    sync.Mutex
+	dailyCache map[string]gatewayDailyCache
 }
 
 func NewGateway(cfg config.MassiveConfig, s *tape.Store, r *storage.Database) *Gateway {
@@ -48,7 +52,7 @@ func (f *Gateway) SetSymbol(s string) {
 	}
 }
 func (f *Gateway) status(state, msg string, connected bool) {
-	f.store.SetStatus(tape.FeedStatus{Mode: "live", Provider: "massive", State: state, Message: msg, Connected: connected})
+	f.store.SetStatus(tape.FeedStatus{Epoch: f.epoch.Load(), Mode: "live", Provider: "massive", State: state, Message: msg, Connected: connected})
 }
 func (f *Gateway) Run(ctx context.Context) {
 	if f.client == nil {
@@ -56,14 +60,23 @@ func (f *Gateway) Run(ctx context.Context) {
 		return
 	}
 	defer f.client.Close()
+	go func() {
+		var table tape.ConditionTable
+		if f.client.Get(ctx, "/rest/v3/reference/conditions?asset_class=stocks&data_type=trade&limit=1000", &table) == nil {
+			tape.SetMassiveConditions(table)
+		}
+	}()
 	defer f.status("stopped", "", false)
 	symbol := f.store.Active()
+	retry := 250 * time.Millisecond
 	for ctx.Err() == nil {
+		f.epoch.Add(1)
 		f.status("connecting", "Massive via gateway; resynchronizing", false)
 		f.mu.Lock()
 		f.quoteMS = 0
 		f.store.ClearTopOfBook(symbol)
 		f.mu.Unlock()
+		started := time.Now()
 		cycle, cancel := context.WithCancel(ctx)
 		done := make(chan error, 1)
 		go func(s string) { done <- f.cycle(cycle, s) }(symbol)
@@ -73,6 +86,7 @@ func (f *Gateway) Run(ctx context.Context) {
 			<-done
 			return
 		case symbol = <-f.changed:
+			retry = 250 * time.Millisecond
 			cancel()
 			<-done
 			continue
@@ -80,11 +94,16 @@ func (f *Gateway) Run(ctx context.Context) {
 			cancel()
 			f.status("reconnecting", e.Error(), false)
 		}
+		if time.Since(started) > 5*time.Second {
+			retry = 250 * time.Millisecond
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case symbol = <-f.changed:
-		case <-time.After(2 * time.Second):
+			retry = 250 * time.Millisecond
+		case <-time.After(retry):
+			retry = min(2*time.Second, retry*2)
 		}
 	}
 }
@@ -132,18 +151,18 @@ func (f *Gateway) event(symbol string, e marketgateway.Event) {
 	if e.Channel != "T" {
 		return
 	}
-	var t struct {
-		P float64 `json:"p"`
-		S float64 `json:"s"`
-		X int     `json:"x"`
-		C []int32 `json:"c"`
-	}
-	if json.Unmarshal(e.Data, &t) != nil || t.P <= 0 || t.S < 0 {
+	var t massiveStreamTrade
+	if json.Unmarshal(e.Data, &t) != nil || t.Price <= 0 {
 		return
 	}
-	tr := f.store.AddTrade(symbol, time.UnixMilli(e.EventMS), received, t.P, t.S)
+	conditions := formatConditionCodes(t.Conditions)
+	flags := tape.MassiveTradeFlags(conditions)
+	if t.Size <= 0 {
+		flags = tape.RulesPresent
+	}
+	tr := f.store.AddTradeWithRules(symbol, time.UnixMilli(e.EventMS), received, t.Price, t.Size, flags, conditions)
 	if f.recorder != nil {
-		f.recorder.RecordTrade(storage.TradeRecord{Symbol: symbol, EventUS: tr.ReceivedUS, ReceivedUS: tr.ReceivedUS, ExchangeTimeMS: e.EventMS, Price: t.P, Size: t.S, Class: tr.Class, Side: tr.Side, Bid: tr.Bid, Ask: tr.Ask, Exchange: strconv.Itoa(t.X), Conditions: formatConditionCodes(t.C), Source: "live", Provider: "massive"})
+		f.recorder.RecordTrade(storage.TradeRecord{Symbol: symbol, EventUS: tr.ReceivedUS, ReceivedUS: tr.ReceivedUS, MarketTimeUS: e.EventMS * 1000, RingSeq: tr.Seq, ExchangeTimeMS: e.EventMS, Price: t.Price, Size: t.Size, Class: tr.Class, Side: tr.Side, Bid: tr.Bid, Ask: tr.Ask, Exchange: strconv.Itoa(int(t.Exchange)), Conditions: conditions, Source: "live", Provider: "massive"})
 	}
 }
 func (f *Gateway) quote(symbol string, at int64, bid, ask, bs, as float64, received time.Time) {
@@ -218,6 +237,13 @@ func (f *Gateway) DailyBars(ctx context.Context, s string, end time.Time, limit 
 	loc, _ := time.LoadLocation("America/New_York")
 	et := end.In(loc)
 	end = time.Date(et.Year(), et.Month(), et.Day(), 0, 0, 0, 0, loc)
+	key := s + "|" + end.Format("2006-01-02")
+	f.dailyMu.Lock()
+	cached, found := f.dailyCache[key]
+	f.dailyMu.Unlock()
+	if found && time.Since(cached.at) < time.Hour && len(cached.bars) >= limit {
+		return append([]storage.MinuteBar(nil), cached.bars[len(cached.bars)-limit:]...), nil
+	}
 	bs, e := f.client.Bars(ctx, s, "minute", end.AddDate(0, 0, -limit*2-14), end)
 	if e != nil {
 		return nil, e
@@ -225,6 +251,9 @@ func (f *Gateway) DailyBars(ctx context.Context, s string, end time.Time, limit 
 	days := map[string]storage.MinuteBar{}
 	keys := []string{}
 	for _, b := range bs {
+		if b.O <= 0 || b.C <= 0 || b.L <= 0 || b.H < max(b.O, b.C) || b.L > min(b.O, b.C) {
+			continue
+		}
 		at := time.UnixMilli(b.T).In(loc)
 		minute := at.Hour()*60 + at.Minute()
 		if minute < 570 || minute >= 960 {
@@ -250,6 +279,25 @@ func (f *Gateway) DailyBars(ctx context.Context, s string, end time.Time, limit 
 	for _, k := range keys {
 		out = append(out, days[k])
 	}
+	f.dailyMu.Lock()
+	if f.dailyCache == nil {
+		f.dailyCache = make(map[string]gatewayDailyCache)
+	}
+	for k, v := range f.dailyCache {
+		if time.Since(v.at) >= time.Hour {
+			delete(f.dailyCache, k)
+		}
+	}
+	if len(f.dailyCache) >= 64 {
+		for k := range f.dailyCache {
+			delete(f.dailyCache, k)
+			break
+		}
+	}
+	if old := f.dailyCache[key]; len(out) > len(old.bars) {
+		f.dailyCache[key] = gatewayDailyCache{bars: append([]storage.MinuteBar(nil), out...), at: time.Now()}
+	}
+	f.dailyMu.Unlock()
 	return out, nil
 }
 func DownloadGatewayBars(ctx context.Context, cfg config.MassiveConfig, db *storage.Database, o HistoricalOptions) error {
@@ -270,4 +318,9 @@ func DownloadGatewayBars(ctx context.Context, cfg config.MassiveConfig, db *stor
 		return e
 	}
 	return db.MarkCoverage(ctx, storage.Coverage{Symbol: o.Symbol, Provider: "massive", Kind: "minute_bars", StartUS: o.Start.UnixMicro(), EndUS: o.End.UnixMicro(), RowCount: int64(len(bars))})
+}
+
+type gatewayDailyCache struct {
+	bars []storage.MinuteBar
+	at   time.Time
 }

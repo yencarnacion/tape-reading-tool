@@ -2,6 +2,7 @@ package feed
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
@@ -59,7 +60,7 @@ func (f *Massive) Run(ctx context.Context) {
 		feedType = massivews.Delayed
 	}
 	client, err := massivews.New(massivews.Config{
-		APIKey: f.cfg.APIKey, Feed: feedType, Market: massivews.Stocks,
+		APIKey: f.cfg.APIKey, Feed: feedType, Market: massivews.Stocks, RawData: true,
 		ReconnectCallback: func(err error) {
 			if err != nil {
 				f.store.SetStatus(tape.FeedStatus{Mode: "massive", State: "reconnecting", Message: err.Error()})
@@ -131,6 +132,25 @@ func (f *Massive) Run(ctx context.Context) {
 func (f *Massive) handleOutput(output any) {
 	now := time.Now()
 	switch value := output.(type) {
+	case json.RawMessage:
+		var header struct {
+			Event string `json:"ev"`
+		}
+		if json.Unmarshal(value, &header) != nil {
+			return
+		}
+		switch header.Event {
+		case "T":
+			var trade massiveStreamTrade
+			if json.Unmarshal(value, &trade) == nil {
+				f.handleSizedTrade(trade, now)
+			}
+		case "Q":
+			var quote models.EquityQuote
+			if json.Unmarshal(value, &quote) == nil {
+				f.handleQuote(quote, now)
+			}
+		}
 	case models.EquityTrade:
 		f.handleTrade(value, now)
 	case *models.EquityTrade:
@@ -147,6 +167,10 @@ func (f *Massive) handleOutput(output any) {
 }
 
 func (f *Massive) handleTrade(value models.EquityTrade, received time.Time) {
+	f.handleSizedTrade(massiveStreamTrade{Symbol: value.Symbol, Price: value.Price, Size: float64(value.Size), Exchange: value.Exchange, Conditions: value.Conditions, Timestamp: value.Timestamp}, received)
+}
+
+func (f *Massive) handleSizedTrade(value massiveStreamTrade, received time.Time) {
 	if value.Symbol != f.currentSymbol() || value.Price <= 0 || value.Size < 0 {
 		return
 	}

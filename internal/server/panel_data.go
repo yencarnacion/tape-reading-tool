@@ -27,7 +27,7 @@ type panelDataCacheEntry struct {
 // is a statement about this moment: a provider outage, IBKR pacing, or history
 // that has not been downloaded yet. Retrying those forever would hammer the
 // provider, and caching them forever would strand the panel until a restart.
-const panelDataRetryAfter = 30 * time.Second
+const panelDataRetryAfter = 3 * time.Second
 
 type panelDailyBar struct {
 	SessionDateET string  `json:"sessionDateET"`
@@ -136,13 +136,18 @@ func (s *Server) handlePanelDailyBars(w http.ResponseWriter, r *http.Request) {
 		before = clockSession
 	}
 	key := fmt.Sprintf("daily|%s|%s|%s|%s|%s|%d", symbol, mode, source, provider, before.Format("2006-01-02"), limit)
+	unlock, err := s.lockHistory(r.Context(), key)
+	if err != nil {
+		return
+	}
+	defer unlock()
 	s.panelDataMu.Lock()
 	if cached, ok := s.panelDataCache[key]; ok && (cached.ready || s.now().Sub(cached.at) < panelDataRetryAfter) {
 		s.panelDataMu.Unlock()
 		writeJSON(w, http.StatusOK, cached.value)
 		return
 	}
-	defer s.panelDataMu.Unlock()
+	s.panelDataMu.Unlock()
 	response := panelDailyResponse{SchemaVersion: panelDataSchemaVersion, Symbol: symbol, Timezone: s.cfg.App.Timezone, Session: "RTH", ThroughUS: clock.UnixMicro(), BeforeSessionDateET: before.Format("2006-01-02"), RequestedSessions: limit, Source: source, Provider: provider, Adjustment: "provider-consistent", Status: "insufficient", Bars: []panelDailyBar{}}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
@@ -195,21 +200,26 @@ func (s *Server) handlePanelDailyBars(w http.ResponseWriter, r *http.Request) {
 	if response.CompleteSessions == limit {
 		response.Status = "ready"
 	}
+	s.panelDataMu.Lock()
 	s.panelDataCache[key] = panelDataCacheEntry{value: response, at: s.now(), ready: response.Status == "ready"}
+	s.panelDataMu.Unlock()
 	writeJSON(w, http.StatusOK, response)
 }
 
 func convertDailyBars(bars []storage.MinuteBar, before time.Time, location *time.Location) []panelDailyBar {
 	result := make([]panelDailyBar, 0, len(bars))
+	seen := make(map[string]bool, len(bars))
 	for _, bar := range bars {
 		// IBKR encodes one-day bars as YYYYMMDD; the feed adapter stores that
 		// calendar date at UTC midnight. Reinterpret the calendar components in
 		// the application timezone instead of shifting midnight to the prior ET day.
 		raw := time.UnixMicro(bar.TimeUS).UTC()
 		date := time.Date(raw.Year(), raw.Month(), raw.Day(), 0, 0, 0, 0, location)
-		if !date.Before(before) || !validOHLC(bar) {
+		key := date.Format("2006-01-02")
+		if !date.Before(before) || !validOHLC(bar) || seen[key] {
 			continue
 		}
+		seen[key] = true
 		start := time.Date(date.Year(), date.Month(), date.Day(), 9, 30, 0, 0, location)
 		end := time.Date(date.Year(), date.Month(), date.Day(), 16, 0, 0, 0, location)
 		result = append(result, panelDailyBar{SessionDateET: date.Format("2006-01-02"), Open: bar.Open, High: bar.High, Low: bar.Low, Close: bar.Close, Volume: bar.Volume, StartUS: start.UnixMicro(), EndUS: end.UnixMicro(), Complete: true})
@@ -219,7 +229,12 @@ func convertDailyBars(bars []storage.MinuteBar, before time.Time, location *time
 }
 
 func validOHLC(bar storage.MinuteBar) bool {
-	return bar.Open > 0 && bar.High > 0 && bar.Low > 0 && bar.Close > 0 && bar.High >= bar.Low && !math.IsNaN(bar.High) && !math.IsInf(bar.High, 0)
+	for _, value := range []float64{bar.Open, bar.High, bar.Low, bar.Close} {
+		if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+			return false
+		}
+	}
+	return bar.High >= max(bar.Open, bar.Close) && bar.Low <= min(bar.Open, bar.Close)
 }
 
 func demoDailyBars(before time.Time, limit int, location *time.Location) []panelDailyBar {

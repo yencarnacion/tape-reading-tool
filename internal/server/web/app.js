@@ -1,5 +1,6 @@
+import { formatTradeSize, tradeSizeLabel } from './trade-size.js';
 import {
-  aggregateTickBars, appendMinuteBar, appendTickBar,
+  aggregateTickBars, appendMinuteBar, appendTickBar, priceEligible, rangeEligible, volumeEligible,
   calculateCandleRVOL, computeHorizon, computeTapeRate, lowerBound, rewindWindowStart, updatePriceScale
 } from './tape-model.js';
 import { createStreamSource, prefixFromTrade } from './tape-source.js';
@@ -11,7 +12,7 @@ import { blankPanelManifest } from './blank-panel.js';
 import { adrRTHManifest } from './adr-rth-extension-panel.js';
 import { AutoTrendlinesController } from './auto-trendlines-controller.js';
 import { ChartHistoryLoader, mergeChartHistory } from './chart-history.js';
-import { createLowerPanelHost, lowerPanelSettings } from './lower-panel-slot.js';
+import { createLowerPanelHost, lowerPanelSettings, DEFAULT_LOWER_PANEL } from './lower-panel-slot.js';
 import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js';
 
 (() => {
@@ -66,7 +67,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
   };
 
   const state = {
-    symbol: 'AAPL', trades: [], bars: [], quote: {}, history: [], status: {},
+    symbol: 'AAPL', trades: [], bars: [], lastPriceTrade: null, quote: {}, history: [], status: {},
     defaults: null, settings: null, ws: null, reconnectTimer: null, reconnectDelay: 500,
     tapePool: [], dropped: 0, dirtyChart: true, dirtyDayContext: true, dirtyTape: true, dayMapCorner: 0,
     dayMapView: 'daily', dailyMap: { status: 'loading', bars: [], message: '' },
@@ -74,7 +75,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     prefixBase: { volume: 0, buyer: 0, seller: 0, prints: 0 }, midpoints: [],
     serverClockUS: 0, serverClockAt: 0, replay: null, replayConfig: null, pendingReplayReset: false,
     externalTargetUS: 0, reportedAudioReady: null, reportedAudioAt: 0,
-    minuteBars: [], dailyBars: [], marketChartView: 'minute', dailyHistorySymbol: '', dailyHistoryPending: false, dirtyDailyChart: true,
+    minuteBars: [], dailyBars: [], marketChartView: 'minute', dailyHistorySymbol: '', dailyHistoryPending: false, dailyHistoryRequest: null, dailyHistoryRetryAt: 0, dirtyDailyChart: true,
     replayChartEndUS: 0, replayChartKey: '', dirtyReplayChart: true, marketChartEnabled: false, xtraEnabled: false,
     rvolWarmup: { symbol: '', ready: false, pending: false, attempt: 0, token: 0, timer: null, controller: null },
     tickScale: null, minuteScale: null, renderNowMS: null, renderInitialized: false, tradingPosition: null,
@@ -236,7 +237,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
         largeBoost: Number(audioConfig.large_boost) || 1.8,
         maxVoices: Number(audioConfig.max_voices) || 192
       },
-      panels: { slots: { primaryAnalytics: { activePanelId: 'adr-rth-extension' }, lowerAnalytics: { activePanelId: 'kronos-forecast' } }, settings: { 'adr-rth-extension': { lookbackSessions: 20, directionMode: 'low' } } }
+      panels: { lowerDefaultId: DEFAULT_LOWER_PANEL, slots: { primaryAnalytics: { activePanelId: 'adr-rth-extension' }, lowerAnalytics: { activePanelId: DEFAULT_LOWER_PANEL } }, settings: { 'adr-rth-extension': { lookbackSessions: 20, directionMode: 'low' } } }
     };
   }
 
@@ -376,7 +377,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
         panelHost.swap(state.settings.panels.slots.primaryAnalytics.activePanelId, false);
         lowerPanelHost = createLowerPanelHost({
           root: $('lowerPanelRoot'), picker: $('lowerPanelPicker'), settings: state.settings.panels,
-          capabilities: { ...panelHost.capabilities, currentSnapshot: () => ({ symbol: state.symbol, generation: state.streamGeneration || 0, mode: state.status?.mode || '', clockUS: serverNowUS(performance.now()) }) }, saveSettings,
+          capabilities: { ...panelHost.capabilities, currentSnapshot: () => ({ symbol: state.symbol, generation: state.streamGeneration || 0, mode: state.status?.mode || '', status: { ...state.status }, clockUS: serverNowUS(performance.now()) }) }, saveSettings,
           tickVisible: (visible) => { lowerTickVisible = visible; $('lowerPanelSlot').classList.toggle('show-tick-chart', visible); state.dirtyChart = true; }
         });
         window.__tapeReadingPanels = {
@@ -408,6 +409,8 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
       if (state.dailyHistorySymbol !== state.symbol) {
         state.dailyBars = [];
         state.dailyHistorySymbol = '';
+        state.dailyHistoryRetryAt = 0;
+        state.dailyHistoryRequest?.controller.abort(); state.dailyHistoryRequest = null;
         state.dirtyDailyChart = true;
         if (state.marketChartView === 'daily') void loadDailyHistory();
       }
@@ -518,6 +521,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
       if (message.status) {
         const previousMode = state.status?.mode;
         const previousState = state.status?.state;
+        const recovered = message.status.connected && (!state.status?.connected || message.status.epoch !== state.status?.epoch);
         // Paused replay heartbeats carry the exact position, which may lie
         // between prints. Freezing an extrapolated/last-print clock here would
         // leave options one sample behind after an exact cue.
@@ -532,12 +536,13 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
           updateReplayControls(state.replay);
         }
         setConnection(message.status);
+        if (recovered) { resetRVOLWarmup(); state.dailyHistoryRetryAt = 0; dailyMapHistory.reset(); }
         ensureRVOLWarmup();
         // Status heartbeats repeat an unchanged mode several times a minute.
         // The panel lifecycle already receives the authoritative clock through
         // the animation frame, which knows to freeze a paused replay, so a
         // heartbeat must not be reported to panels as a mode change.
-        if (message.status.mode !== previousMode || message.status.state !== previousState) {
+        if (recovered || message.status.mode !== previousMode || message.status.state !== previousState) {
           panelEvent({ type: 'modeChanged', mode: message.status.mode, status: { ...message.status }, clockUS: serverNowUS(performance.now()) });
         }
       }
@@ -550,6 +555,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
 
   function ingestTrades(trades) {
     for (const trade of trades) {
+      observePriceTrade(trade);
       appendTradePrefix(trade);
       state.trades.push(trade);
       addTradeToBars(trade);
@@ -574,7 +580,11 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     state.dirtyTape = true;
   }
 
+  function observePriceTrade(trade) {
+    if (priceEligible(trade) && (!state.lastPriceTrade || Number(trade.t) >= Number(state.lastPriceTrade.t))) state.lastPriceTrade = trade;
+  }
   function prepareTradeHistory() {
+    state.lastPriceTrade = null;
     state.prefixBase = { volume: 0, buyer: 0, seller: 0, prints: 0 };
     state.midpoints = [];
     let volumeTotal = 0;
@@ -582,7 +592,8 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     let sellerTotal = 0;
     let printTotal = 0;
     for (const trade of state.trades) {
-      const volume = Math.max(0, Number(trade.z) || 0);
+      observePriceTrade(trade);
+      const volume = volumeEligible(trade) ? Math.max(0, Number(trade.z) || 0) : 0;
       volumeTotal += volume;
       if (trade.d > 0) buyerTotal += volume;
       if (trade.d < 0) sellerTotal += volume;
@@ -597,7 +608,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
 
   function appendTradePrefix(trade) {
     const previousTrade = state.trades[state.trades.length - 1];
-    const volume = Math.max(0, Number(trade.z) || 0);
+    const volume = volumeEligible(trade) ? Math.max(0, Number(trade.z) || 0) : 0;
     trade._volume = (previousTrade ? Number(previousTrade._volume) || 0 : state.prefixBase.volume) + volume;
     trade._buyer = (previousTrade ? Number(previousTrade._buyer) || 0 : state.prefixBase.buyer) + (trade.d > 0 ? volume : 0);
     trade._seller = (previousTrade ? Number(previousTrade._seller) || 0 : state.prefixBase.seller) + (trade.d < 0 ? volume : 0);
@@ -778,28 +789,36 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
   }
 
   async function loadDailyHistory() {
-    if (state.dailyHistoryPending || state.dailyHistorySymbol === state.symbol) return;
+    const symbol = state.symbol;
+    if (state.dailyHistoryRequest?.symbol === symbol || state.dailyHistorySymbol === symbol || performance.now() < state.dailyHistoryRetryAt) return;
+    state.dailyHistoryRequest?.controller.abort();
+    const request = { symbol, controller: new AbortController() };
+    state.dailyHistoryRequest = request;
     state.dailyHistoryPending = true;
     elements.dailyChartEmpty.hidden = false;
     elements.dailyChartEmpty.textContent = 'LOADING 90 DAILY BARS…';
     try {
-      const response = await fetch(`/api/daily-history?symbol=${encodeURIComponent(state.symbol)}`);
+      const response = await fetch(`/api/daily-history?symbol=${encodeURIComponent(symbol)}`, { signal: request.controller.signal });
       if (!response.ok) throw new Error((await response.text()).trim());
       const payload = await response.json();
-      if (payload.symbol !== state.symbol) return;
+      if (state.dailyHistoryRequest !== request || symbol !== state.symbol) return;
+      if (payload.symbol !== symbol) throw new Error('Daily history symbol mismatch');
       state.dailyBars = (Array.isArray(payload.bars) ? payload.bars : []).map((bar) => ({
         timeUS: Number(bar.time_us), open: Number(bar.open), high: Number(bar.high), low: Number(bar.low),
         close: Number(bar.close), volume: Number(bar.volume) || 0
       })).filter((bar) => bar.timeUS > 0 && bar.close > 0).slice(-90);
-      state.dailyHistorySymbol = state.symbol;
-      elements.dailyChartEmpty.textContent = state.dailyBars.length ? '' : 'NO DAILY HISTORY AVAILABLE';
+      state.dailyHistorySymbol = state.dailyBars.length ? symbol : '';
+      state.dailyHistoryRetryAt = performance.now() + 5000;
+      elements.dailyChartEmpty.textContent = state.dailyBars.length ? '' : 'DAILY HISTORY PENDING · RETRYING';
       elements.dailyChartEmpty.hidden = state.dailyBars.length > 0;
       state.dirtyDailyChart = true;
     } catch (error) {
-      elements.dailyChartEmpty.textContent = String(error.message || error).toUpperCase();
+      if (state.dailyHistoryRequest !== request || symbol !== state.symbol || error.name === 'AbortError') return;
+      state.dailyHistoryRetryAt = performance.now() + 5000;
+      elements.dailyChartEmpty.textContent = 'DAILY HISTORY UNAVAILABLE · RETRYING';
       elements.dailyChartEmpty.hidden = false;
     } finally {
-      state.dailyHistoryPending = false;
+      if (state.dailyHistoryRequest === request) { state.dailyHistoryPending = false; state.dailyHistoryRequest = null; }
     }
   }
 
@@ -858,9 +877,12 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
         continue;
       }
       cell.row.hidden = false;
-      cell.row.className = `tape-row ${trade.c || 'mid'}`;
+      cell.row.className = `tape-row ${trade.c || 'mid'}${priceEligible(trade) ? '' : ' price-excluded'}`;
+      cell.row.title = priceEligible(trade) ? 'Candle price eligible' : `Special report · ${rangeEligible(trade) ? 'range and volume only' : volumeEligible(trade) ? 'volume only' : 'excluded from candles'}${trade.conditions ? ' · conditions ' + trade.conditions : ''}`;
       cell.price.textContent = formatPrice(trade.p);
-      cell.size.textContent = formatSize(trade.z);
+      cell.size.textContent = formatTradeSize(trade.z);
+      cell.size.title = tradeSizeLabel(trade.z);
+      cell.size.setAttribute('aria-label', cell.size.title);
     }
     state.dirtyTape = false;
   }
@@ -1480,12 +1502,8 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
       const values = visibleIndicators[index];
       minimum = Math.min(minimum, bar.low);
       maximum = Math.max(maximum, bar.high);
-      for (const value of [values.vwap, values.sma9, values.sma20, values.upper, values.lower]) {
-        if (Number.isFinite(value)) {
-          minimum = Math.min(minimum, value);
-          maximum = Math.max(maximum, value);
-        }
-      }
+      // Fit the visible candles. A distant session VWAP or moving-average band
+      // must not compress the candles or make the whole pane jump vertically.
       maxVolume = Math.max(maxVolume, bar.volume);
     }
     const pricePadding = Math.max((maximum - minimum) * 0.07, maximum * 0.00008, 0.005);
@@ -1534,11 +1552,20 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
       }
     });
 
+    replayContext.save();
+    replayContext.beginPath(); replayContext.rect(left, top, right-left, priceBottom-top); replayContext.clip();
     drawReplayIndicator('lower', '#f2f5f7', 1, 0.72);
     drawReplayIndicator('upper', '#f2f5f7', 1, 0.72);
     drawReplayIndicator('sma20', '#56c7ff', 1.4, 1);
     drawReplayIndicator('sma9', '#ff4d5e', 2.2, 1);
     drawReplayIndicator('vwap', '#ffd447', 2.6, 1);
+    replayContext.restore();
+    const currentVWAP = visibleIndicators.at(-1)?.vwap;
+    const vwapLegend = document.querySelector('.legend-vwap');
+    if (vwapLegend) {
+      vwapLegend.textContent = Number.isFinite(currentVWAP) ? `VWAP ${formatPrice(currentVWAP)}${currentVWAP < minimum ? ' ↓' : currentVWAP > maximum ? ' ↑' : ''}` : 'VWAP';
+      vwapLegend.title = 'Session VWAP; the axis fits visible candle prices. The arrow means VWAP is outside this price range.';
+    }
 
     let xtraLevels = [];
     if (state.xtraEnabled) {
@@ -2210,7 +2237,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
         panelHost.settings = state.settings.panels;
         panelHost.swap('tape-pressure');
       lowerPanelHost.settings = state.settings.panels;
-      lowerPanelHost.swap('kronos-forecast');
+      lowerPanelHost.swap(DEFAULT_LOWER_PANEL);
       }
     });
 
@@ -2522,7 +2549,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     audio.setTapeRate(tapeRate);
     panelHost?.render(receiptNowUS);
     lowerPanelHost?.render(receiptNowUS);
-    const last = state.trades[state.trades.length - 1];
+    const last = state.lastPriceTrade;
     elements.lastPrice.textContent = last ? formatPrice(last.p) : '--';
     updatePriceChange(last?.p, state.quote.previous_close);
     elements.streamText.textContent = `${formatSize(state.trades.length)} PRINTS${state.dropped ? ` / ${formatSize(state.dropped)} LAGGED` : ''}`;
@@ -2824,7 +2851,13 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     elements.replayChartEmpty.hidden = false;
   }
 
+  let lastPaintMS = 0;
   function animationLoop(now) {
+    // Coalesce paint work under a dense feed; ingestion still processes every
+    // report. Thirty frames per second keeps candles responsive without doing
+    // a full history/indicator/canvas pass for every display refresh.
+    if (!Number.isFinite(state.renderNowMS) && now-lastPaintMS < 1000/30) { requestAnimationFrame(animationLoop); return; }
+    lastPaintMS = now;
     // Rewind is stepped first and drawn on its own dirty flag. It never sets a
     // live dirty flag, so the live canvas keeps its redraw-only-on-change
     // behavior while a rewind is on screen.
@@ -2839,6 +2872,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     if (state.dirtyReplayChart && (state.status?.mode === 'replay' || state.marketChartEnabled) && state.settings?.showChart) drawReplayChart();
     if (state.dirtyChart && state.settings?.showChart) drawChart();
     if (state.dirtyDayContext && state.settings?.showChart) drawDayContext();
+    if (state.marketChartView === 'daily' && !document.hidden) void loadDailyHistory();
     if (state.dirtyDailyChart && state.marketChartView === 'daily' && state.settings?.showChart) drawDailyChart();
     if (state.dirtyTape && state.settings?.showTape) renderTape();
     if (now - state.lastMetricUpdate > 100) {
@@ -2968,6 +3002,11 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     }).format(new Date(timestamp));
   }
 
+  window.__tapeReadingChart = { state: () => ({
+    bars: state.minuteBars.map(({timeUS,open,high,low,close,volume}) => ({timeUS,open,high,low,close,volume})),
+    scale: state.minuteScale ? {...state.minuteScale} : null,
+    last: state.lastPriceTrade?.p, daily: state.dailyBars.length
+  }) };
   window.__tapeReadingCandleVolume = formatCandleVolume;
   window.__tapeReadingSignedDollars = formatSignedDollars;
   window.__tapeReadingVolumeSinceFourAM = volumeSinceFourAM;

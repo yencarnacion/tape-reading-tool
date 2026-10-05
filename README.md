@@ -395,3 +395,10 @@ Optional services and publication hygiene: [Local integrations](docs/LOCAL_INTEG
 ## Optional Massive market-data gateway
 
 IBKR remains the default. To select a Massive-compatible shared gateway, put `MARKET_DATA_PROVIDER=massive`, `MARKET_DATA_GATEWAY_URL` and the optional `MARKET_DATA_GATEWAY_TOKEN` in ignored `.env`. The URL points to your own adapter implementing the [gateway contract](docs/MARKET_DATA_GATEWAY.md). No private repository or provider API key is required in this client. Gateway errors stay visible; there is no automatic fallback to another provider.
+
+### Options Flow in the lower panel
+
+Choose **OPTIONS FLOW** from the lower panel picker to compare 15s, 60s, and 5m
+options premium pressure with the stock tape. It uses actual options trades and
+quotes through the configured local options gateway. Kronos and Tick Chart
+remain selectable. [Setup, interpretation, quality gates, and limitations](docs/OPTIONS_FLOW.md).

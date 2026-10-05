@@ -20,7 +20,7 @@ assert.deepEqual(calculateADR([...bars, { ...bars[0], sessionDateET: '2026-08-01
 assert.equal(validCompletedDailyBar({ ...bars[0], high: 90 }, '2026-08-01'), false);
 assert.equal(validCompletedDailyBar({ ...bars[0], complete: false }, '2026-08-01'), false);
 assert.equal(calculateADR(bars.slice(0, 17), 20, '2026-08-01').status, 'insufficient');
-const flat = Array.from({ length: 20 }, (_, i) => ({ ...bars[0], sessionDateET: date(i), high: 100 }));
+const flat = Array.from({ length: 20 }, (_, i) => ({ ...bars[0], sessionDateET: date(i), high: 100, close: 100 }));
 assert.equal(calculateADR(flat, 20, '2026-08-01').status, 'unavailable', 'zero ADR must not divide');
 
 const context = { status: 'ready', symbol: 'AAPL', sessionDateET: '2026-07-24', open: 102, high: 108, highTimeUS: 1, low: 100, lowTimeUS: 1, last: 100, lastTimeUS: 2, eligibleTradeCount: 2, completeFromRTHOpen: true };

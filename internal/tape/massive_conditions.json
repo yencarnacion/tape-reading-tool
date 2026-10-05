@@ -1,0 +1,730 @@
+{
+  "results": [
+    {
+      "id": 1,
+      "name": "Acquisition",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Average Price Trade",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Automatic Execution",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Bunched Trade",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Bunched Sold Trade",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "CAP Election",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Cash Sale",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Closing Prints",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Cross Trade",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 10,
+      "name": "Derivatively Priced",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 11,
+      "name": "Distribution",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 12,
+      "name": "Form T/Extended Hours",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 13,
+      "name": "Extended Hours (Sold Out Of Sequence)",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 14,
+      "name": "Intermarket Sweep",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 15,
+      "name": "Market Center Official Close",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": false
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": false
+        }
+      }
+    },
+    {
+      "id": 16,
+      "name": "Market Center Official Open",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": false
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": false
+        }
+      }
+    },
+    {
+      "id": 17,
+      "name": "Market Center Opening Trade",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 18,
+      "name": "Market Center Reopening Trade",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 19,
+      "name": "Market Center Closing Trade",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 20,
+      "name": "Next Day",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 21,
+      "name": "Price Variation Trade",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 22,
+      "name": "Prior Reference Price",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 23,
+      "name": "Rule 155 Trade (AMEX)",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 24,
+      "name": "Rule 127 (NYSE Only)",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 25,
+      "name": "Opening Prints",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 27,
+      "name": "Stopped Stock (Regular Trade)",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 28,
+      "name": "Re-Opening Prints",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 29,
+      "name": "Seller",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 30,
+      "name": "Sold Last",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 31,
+      "name": "Sold Last and Stopped Stock",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 32,
+      "name": "Sold (Out Of Sequence)",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 33,
+      "name": "Sold (Out of Sequence) and Stopped Stock",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 34,
+      "name": "Split Trade",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 35,
+      "name": "Stock Option",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 36,
+      "name": "Yellow Flag Regular Trade",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 37,
+      "name": "Odd Lot Trade",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 38,
+      "name": "Corrected Consolidated Close (per listing market)",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": false
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": false
+        }
+      }
+    },
+    {
+      "id": 41,
+      "name": "Trade Thru Exempt",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 52,
+      "name": "Contingent Trade",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 53,
+      "name": "Qualified Contingent Trade",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": false,
+          "updates_open_close": false,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 55,
+      "name": "Opening Reopening Trade Detail",
+      "update_rules": {
+        "consolidated": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        },
+        "market_center": {
+          "updates_high_low": true,
+          "updates_open_close": true,
+          "updates_volume": true
+        }
+      }
+    },
+    {
+      "id": 57,
+      "name": "Short Sale Restriction Activated",
+      "update_rules": {}
+    },
+    {
+      "id": 58,
+      "name": "Short Sale Restriction Continued",
+      "update_rules": {}
+    },
+    {
+      "id": 59,
+      "name": "Short Sale Restriction Deactivated",
+      "update_rules": {}
+    },
+    {
+      "id": 60,
+      "name": "Short Sale Restriction In Effect",
+      "update_rules": {}
+    },
+    {
+      "id": 62,
+      "name": "Financial Status - Bankrupt",
+      "update_rules": {}
+    },
+    {
+      "id": 63,
+      "name": "Financial Status - Deficient",
+      "update_rules": {}
+    },
+    {
+      "id": 64,
+      "name": "Financial Status - Delinquent",
+      "update_rules": {}
+    },
+    {
+      "id": 65,
+      "name": "Financial Status - Bankrupt and Deficient",
+      "update_rules": {}
+    },
+    {
+      "id": 66,
+      "name": "Financial Status - Bankrupt and Delinquent",
+      "update_rules": {}
+    },
+    {
+      "id": 67,
+      "name": "Financial Status - Deficient and Delinquent",
+      "update_rules": {}
+    },
+    {
+      "id": 68,
+      "name": "Financial Status - Deficient, Delinquent, and Bankrupt",
+      "update_rules": {}
+    },
+    {
+      "id": 69,
+      "name": "Financial Status - Liquidation",
+      "update_rules": {}
+    },
+    {
+      "id": 70,
+      "name": "Financial Status - Creations Suspended",
+      "update_rules": {}
+    },
+    {
+      "id": 71,
+      "name": "Financial Status - Redemptions Suspended",
+      "update_rules": {}
+    }
+  ]
+}

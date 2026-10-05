@@ -64,6 +64,8 @@ try{
  for(const [width,height] of [[1440,900],[1280,800],[1470,956],[1280,720]]){
   await command('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
   await command('Page.navigate',{url:target});
+  await waitFor(`document.querySelector('#lowerPanelPicker option[value="kronos-forecast"]')`);
+  await evaluate(`(()=>{const p=document.querySelector('#lowerPanelPicker');p.value='kronos-forecast';p.dispatchEvent(new Event('change'));})()`);
   await waitFor(`document.querySelector('.kronos-above')?.textContent === '63%'`);
   const reading=await evaluate(`(()=>{const slot=document.querySelector('#lowerPanelSlot'),panel=document.querySelector('.kronos-panel'),adr=document.querySelector('#rollingPanel'),clock=document.querySelector('#marketClock');return {width:innerWidth,height:innerHeight,slot:slot.getBoundingClientRect().toJSON(),adr:adr.getBoundingClientRect().toJSON(),clock:clock.getBoundingClientRect().toJSON(),font:parseFloat(getComputedStyle(document.querySelector('.kronos-above')).fontSize),overflow:panel.scrollHeight-panel.clientHeight,primary:window.__tapePanelDebug.activePanelId,bodyOverflow:document.documentElement.scrollWidth-innerWidth,deltaHeight:adr.getBoundingClientRect().top-document.querySelector('#chartPanel').getBoundingClientRect().top-15,shown:[...panel.querySelectorAll('div,output,span')].filter(e=>e.getClientRects().length&&getComputedStyle(e).display!=='none'&&e.textContent.trim()).map(e=>({text:e.textContent,rect:e.getBoundingClientRect().toJSON()}))};})()`);
   console.log(JSON.stringify(reading));

@@ -25,6 +25,7 @@ function createADRPanel({ root, host, settings }) {
   let directionMode = ['auto', 'high'].includes(String(settings.directionMode || '').toLowerCase()) ? String(settings.directionMode).toLowerCase() : 'low';
   let snapshot = host.currentSnapshot(); let adr = null; let context = null; let loadGeneration = 0; let mounted = true; let loadedSessionDateET = '';
   let loadedPhase = ''; let lastLoadClockUS = 0; let loading = false;
+  let loadedSymbol = ''; let nextRetryUS = 0; let wasConnected = false;
   let pendingTrades = []; let pendingOverflow = false; let requestController = null;
   root.innerHTML = markup(lookback, directionMode); const $ = (selector) => root.querySelector(selector);
   const stateNode = $('.adr-state'), readyNode = $('.adr-ready'), input = $('.adr-lookback'), modeInput = $('.adr-mode');
@@ -54,6 +55,7 @@ function createADRPanel({ root, host, settings }) {
     // low and last as if they were current.
     if (phase.sessionDateET && loadedSessionDateET && phase.sessionDateET !== loadedSessionDateET) { void load(); return; }
     if (!loading && phase.phase === 'open' && (loadedPhase === 'before-open' || (context?.status === 'building' && snapshot.clockUS - lastLoadClockUS >= 5e6))) { void load(); return; }
+    if (!loading && !frozen() && snapshot.clockUS >= nextRetryUS && (['unavailable', 'insufficient'].includes(adr?.status) || ['unavailable', 'stale', 'incomplete'].includes(context?.status))) { void load(); return; }
     if (phase.phase === 'before-open') { showState('WAITING FOR RTH OPEN'); return; }
     if (adr?.status === 'insufficient') { showState('INSUFFICIENT ADR HISTORY', `${adr.completeSessions} / ${lookback} COMPLETED SESSIONS`); return; }
     if (adr?.status !== 'ready') { showState(adr?.status === 'unavailable' ? 'ADR HISTORY UNAVAILABLE' : 'LOADING ADR HISTORY'); return; }
@@ -76,23 +78,28 @@ function createADRPanel({ root, host, settings }) {
   async function load() {
     requestController?.abort(); requestController = new AbortController();
     const requestSignal = AbortSignal.any([host.signal, requestController.signal]);
-    const token = ++loadGeneration; const phase = classifyRTH(snapshot.clockUS); adr = null; context = null; pendingTrades = []; pendingOverflow = false; showState('LOADING ADR HISTORY');
-    loadedSessionDateET = phase.sessionDateET || ''; loadedPhase = phase.phase; lastLoadClockUS = snapshot.clockUS; loading = true;
+    const token = ++loadGeneration; const phase = classifyRTH(snapshot.clockUS); const keepADR = loadedSymbol === snapshot.symbol && loadedSessionDateET === phase.sessionDateET && adr?.status === 'ready' && adr.lookback === lookback; if (!keepADR) adr = null; context = null; pendingTrades = []; pendingOverflow = false; showState('LOADING ADR HISTORY');
+    loadedSymbol = snapshot.symbol; loadedSessionDateET = phase.sessionDateET || ''; loadedPhase = phase.phase; lastLoadClockUS = snapshot.clockUS; loading = true; nextRetryUS = snapshot.clockUS + 5e6;
     if (!phase.sessionDateET || !snapshot.symbol) { loading = false; return; }
     try {
-      const [history, seed] = await Promise.all([
-        host.getCompletedDailyBars({ symbol: snapshot.symbol, beforeSessionDateET: phase.sessionDateET, limit: lookback, signal: requestSignal }),
+      const [historyResult, seedResult] = await Promise.allSettled([
+        (keepADR ? Promise.resolve(null) : host.getCompletedDailyBars({ symbol: snapshot.symbol, beforeSessionDateET: phase.sessionDateET, limit: lookback, signal: requestSignal }).then(history => {
+          if (mounted && token === loadGeneration && host.isCurrent()) { adr = history.status === 'unavailable' ? { status: 'unavailable' } : calculateADR(history.bars, lookback, phase.sessionDateET); renderBasis(); }
+          return history;
+        })),
         host.getRTHSessionContext({ symbol: snapshot.symbol, sessionDateET: phase.sessionDateET, throughUS: snapshot.clockUS, signal: requestSignal })
       ]);
       if (!mounted || token !== loadGeneration || !host.isCurrent()) return;
-      adr = calculateADR(history.bars, lookback, phase.sessionDateET);
+      const history = historyResult.status === 'fulfilled' ? historyResult.value || {} : {};
+      const seed = seedResult.status === 'fulfilled' ? seedResult.value : {schemaVersion:1, symbol:snapshot.symbol, sessionDateET:phase.sessionDateET, status:'unavailable'};
+      if (!adr) adr = { status: 'unavailable' };
       readyNode.title = `ADR baseline: ${history.provider || history.source || 'recorded'} · RTH seed: ${seed.provider || seed.source || 'recorded'}${history.message ? ` · ${history.message}` : ''}${seed.message ? ` · ${seed.message}` : ''}`;
       context = seedRTHContext(seed, { symbol: snapshot.symbol, sessionDateET: phase.sessionDateET });
       context = applyEligibleTrades(context, pendingTrades, { symbol: snapshot.symbol, sessionDateET: phase.sessionDateET });
       pendingTrades = [];
       if (pendingOverflow) { snapshot.clockUS = host.currentSnapshot().clockUS; void load(); return; }
-      loading = false; render();
-    } catch (error) { if (mounted && token === loadGeneration && host.isCurrent()) { loading = false; console.error('ADR panel data load failed', error); adr = { status: 'unavailable' }; context = { status: 'unavailable' }; render(); } }
+      loading = false; nextRetryUS = snapshot.clockUS + 5e6; render();
+    } catch (error) { if (mounted && token === loadGeneration && host.isCurrent()) { loading = false; console.error('ADR panel data load failed', error); adr = { status: 'unavailable' }; context = { status: 'unavailable' }; nextRetryUS = snapshot.clockUS + 5e6; render(); } }
   }
 
   input.addEventListener('change', () => { lookback = Math.max(5, Math.min(60, Math.round(Number(input.value) || 20))); input.value = String(lookback); host.savePanelSettings({ lookbackSessions: lookback, directionMode }); void load(); });
@@ -108,10 +115,10 @@ function createADRPanel({ root, host, settings }) {
         } else context = applyEligibleTrades(context, event.trades, { symbol: snapshot.symbol, sessionDateET: phase?.sessionDateET });
         render();
       }
-      else if (event.type === 'modeChanged') { snapshot.mode = event.mode; snapshot.status = { ...(event.status || snapshot.status) }; snapshot.clockUS = event.clockUS || snapshot.clockUS; render(); }
+      else if (event.type === 'modeChanged') { const recovered = event.status?.connected && (!snapshot.status?.connected || event.status.epoch !== snapshot.status?.epoch); snapshot.mode = event.mode; snapshot.status = { ...(event.status || snapshot.status) }; snapshot.clockUS = event.clockUS || snapshot.clockUS; if (recovered) void load(); else render(); }
       options.event(event);
     },
-    render(nowUS) { if (!frozen()) snapshot.clockUS = nowUS || snapshot.clockUS; render(); options.render(snapshot.clockUS); },
+    render(nowUS) { if (!frozen()) snapshot.clockUS = nowUS || snapshot.clockUS; const connected = !!host.currentSnapshot().status?.connected; if (connected && !wasConnected) nextRetryUS = 0; wasConnected = connected; render(); options.render(snapshot.clockUS); },
     unmount() { options.unmount(); mounted = false; loadGeneration++; requestController?.abort(); root.replaceChildren(); root.classList.remove('adr-closed'); }
   };
 }

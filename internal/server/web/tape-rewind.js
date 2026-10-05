@@ -9,10 +9,10 @@
 //
 // Columns instead of objects. One plain object per event costs roughly 200 bytes
 // in a modern engine, so a 180-second worst case would reserve about 65MB; the
-// ten Float64 columns plus two byte columns below cost 82 bytes per event, and
+// ten Float64 columns plus three byte columns below cost 83 bytes per event, and
 // they are allocated once and never grow:
 //
-//   180s x 2000 prints/s x 82B = 29.5MB
+//   180s x 2000 prints/s x 83B = 29.9MB
 //
 // Absolute print counts are not a column: prints advance by exactly one per
 // event, so the count at logical index i is printsAtHead + i.
@@ -47,6 +47,7 @@ export class RewindBuffer {
     this.prefixSeller = new Float64Array(capacity);
     this.side = new Int8Array(capacity);
     this.klass = new Uint8Array(capacity);
+    this.flags = new Uint8Array(capacity);
   }
 
   reset() {
@@ -60,7 +61,7 @@ export class RewindBuffer {
   }
 
   get bytes() {
-    return this.capacity * 82;
+    return this.capacity * 83;
   }
 
   slotAt(index) {
@@ -103,9 +104,11 @@ export class RewindBuffer {
     this.ask[slot] = Number(trade.a) || 0;
     this.side[slot] = side;
     this.klass[slot] = CLASS_INDEX.get(trade.c) ?? 0;
-    this.prefixVolume[slot] = baseVolume + size;
-    this.prefixBuyer[slot] = baseBuyer + (side > 0 ? size : 0);
-    this.prefixSeller[slot] = baseSeller + (side < 0 ? size : 0);
+    this.flags[slot] = Number(trade.f) || 0;
+    const countedSize = !trade.f || (trade.f & 4) ? size : 0;
+    this.prefixVolume[slot] = baseVolume + countedSize;
+    this.prefixBuyer[slot] = baseBuyer + (side > 0 ? countedSize : 0);
+    this.prefixSeller[slot] = baseSeller + (side < 0 ? countedSize : 0);
     this.count++;
     this.evictExpired(receipt);
   }
@@ -204,6 +207,7 @@ export class RewindBuffer {
     cursor.p = this.price[slot];
     cursor.z = this.size[slot];
     cursor.d = this.side[slot];
+    if (this.flags[slot]) cursor.f = this.flags[slot]; else delete cursor.f;
     cursor.c = CLASS_NAMES[this.klass[slot]];
     cursor.b = this.bid[slot];
     cursor.a = this.ask[slot];
@@ -230,7 +234,7 @@ export class RewindBuffer {
     const existing = [];
     for (let index = 0; index < this.count; index++) {
       const event = this.read(index);
-      existing.push({ s: event.s, r: event.r, t: event.t, p: event.p, z: event.z, d: event.d, c: event.c, b: event.b, a: event.a });
+      existing.push({ s: event.s, r: event.r, t: event.t, p: event.p, z: event.z, d: event.d, c: event.c, b: event.b, a: event.a, ...(event.f ? { f: event.f } : {}) });
     }
     const base = this.prefixBase();
     const merged = [];
@@ -436,5 +440,5 @@ export function createRewindSource(buffer, { symbol = () => '', fetchRange = nul
 
 // Exported for the Node check so it can assert the documented footprint.
 export function rewindBufferBytes(bufferSeconds, maxPrintsPerSecond) {
-  return Math.max(1024, Math.round(bufferSeconds * maxPrintsPerSecond)) * 82;
+  return Math.max(1024, Math.round(bufferSeconds * maxPrintsPerSecond)) * 83;
 }

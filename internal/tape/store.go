@@ -18,6 +18,8 @@ const (
 )
 
 type Trade struct {
+	Flags          uint8          `json:"f,omitempty"`
+	Conditions     string         `json:"conditions,omitempty"`
 	Seq            uint64         `json:"s"`
 	ExchangeTimeMS int64          `json:"t"`
 	ReceivedUS     int64          `json:"r"`
@@ -38,6 +40,7 @@ type Quote struct {
 }
 
 type FeedStatus struct {
+	Epoch     uint64 `json:"epoch,omitempty"`
 	Provider  string `json:"provider,omitempty"`
 	Mode      string `json:"mode"`
 	State     string `json:"state"`
@@ -66,16 +69,17 @@ type Store struct {
 }
 
 type symbolTape struct {
-	mu         sync.RWMutex
-	symbol     string
-	items      []Trade
-	start      int
-	count      int
-	nextSeq    uint64
-	quote      Quote
-	lastPrice  float64
-	lastSide   int8
-	generation uint64
+	mu           sync.RWMutex
+	symbol       string
+	items        []Trade
+	start        int
+	count        int
+	nextSeq      uint64
+	quote        Quote
+	lastMarketMS int64
+	lastPrice    float64
+	lastSide     int8
+	generation   uint64
 }
 
 func NewStore(defaultSymbol string, ringSize, historySize int) *Store {
@@ -387,6 +391,7 @@ func (s *Store) Clear(symbol string) {
 	tape.start = 0
 	tape.count = 0
 	tape.quote = Quote{}
+	tape.lastMarketMS = 0
 	tape.lastPrice = 0
 	tape.lastSide = 0
 	tape.generation++
@@ -490,7 +495,7 @@ func (t *symbolTape) add(exchangeTime, received time.Time, price, size float64) 
 	defer t.mu.Unlock()
 	class := classify(price, t.quote.Bid, t.quote.Ask)
 	side := direction(class, price, t.lastPrice, t.lastSide)
-	return t.appendLocked(exchangeTime, received, price, size, class, side, t.quote.Bid, t.quote.Ask)
+	return t.appendLocked(exchangeTime, received, price, size, class, side, t.quote.Bid, t.quote.Ask, 0, "")
 }
 
 func (t *symbolTape) addRecorded(exchangeTime, received time.Time, price, size float64, class Classification, side int8, bid, ask float64) Trade {
@@ -505,13 +510,13 @@ func (t *symbolTape) addRecorded(exchangeTime, received time.Time, price, size f
 	if ask <= 0 {
 		ask = t.quote.Ask
 	}
-	return t.appendLocked(exchangeTime, received, price, size, class, side, bid, ask)
+	return t.appendLocked(exchangeTime, received, price, size, class, side, bid, ask, 0, "")
 }
 
-func (t *symbolTape) appendLocked(exchangeTime, received time.Time, price, size float64, class Classification, side int8, bid, ask float64) Trade {
+func (t *symbolTape) appendLocked(exchangeTime, received time.Time, price, size float64, class Classification, side int8, bid, ask float64, flags uint8, conditions string) Trade {
 	trade := Trade{
 		Seq: t.nextSeq, ExchangeTimeMS: exchangeTime.UnixMilli(), ReceivedUS: received.UnixMicro(),
-		Price: price, Size: size, Class: class, Side: side, Bid: bid, Ask: ask,
+		Price: price, Size: size, Class: class, Side: side, Bid: bid, Ask: ask, Flags: flags, Conditions: conditions,
 	}
 	t.nextSeq++
 	if t.count < len(t.items) {
@@ -522,9 +527,12 @@ func (t *symbolTape) appendLocked(exchangeTime, received time.Time, price, size 
 		t.items[t.start] = trade
 		t.start = (t.start + 1) % len(t.items)
 	}
-	t.lastPrice = price
-	if side != 0 {
-		t.lastSide = side
+	if UpdatesOpenClose(flags) && exchangeTime.UnixMilli() >= t.lastMarketMS {
+		t.lastPrice = price
+		t.lastMarketMS = exchangeTime.UnixMilli()
+		if side != 0 {
+			t.lastSide = side
+		}
 	}
 	return trade
 }
@@ -636,4 +644,35 @@ func direction(class Classification, price, lastPrice float64, lastSide int8) in
 		}
 	}
 	return lastSide
+}
+
+func (s *Store) AddTradeWithRules(symbol string, exchangeTime, received time.Time, price, size float64, flags uint8, conditions string) Trade {
+	t := s.getOrCreate(symbol)
+	if t == nil || price <= 0 || size < 0 || math.IsNaN(price) || math.IsInf(price, 0) {
+		return Trade{}
+	}
+	return t.addRules(exchangeTime, received, price, size, "", 0, 0, 0, flags, conditions)
+}
+func (t *symbolTape) addRules(exchangeTime, received time.Time, price, size float64, class Classification, side int8, bid, ask float64, flags uint8, conditions string) Trade {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if class == "" {
+		bid, ask = t.quote.Bid, t.quote.Ask
+		class = classify(price, bid, ask)
+		side = direction(class, price, t.lastPrice, t.lastSide)
+	}
+	return t.appendLocked(exchangeTime, received, price, size, class, side, bid, ask, flags, conditions)
+}
+
+// Optional sink extension preserves condition policy through staged replay.
+func (w storeSink) AddTradeRules(exchangeTime, received time.Time, price, size float64, class Classification, side int8, bid, ask float64, flags uint8, conditions string) {
+	if t := w.store.getOrCreate(w.symbol); t != nil {
+		t.addRules(exchangeTime, received, price, size, class, side, bid, ask, flags, conditions)
+	}
+}
+func (r *RebuildStage) AddTradeRules(exchangeTime, received time.Time, price, size float64, class Classification, side int8, bid, ask float64, flags uint8, conditions string) {
+	r.tape.addRules(exchangeTime, received, price, size, class, side, bid, ask, flags, conditions)
+}
+func (t *symbolTape) AddTradeRules(exchangeTime, received time.Time, price, size float64, class Classification, side int8, bid, ask float64, flags uint8, conditions string) {
+	t.addRules(exchangeTime, received, price, size, class, side, bid, ask, flags, conditions)
 }

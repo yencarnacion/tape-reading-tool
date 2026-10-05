@@ -420,12 +420,24 @@ func (r *Replay) applyEventTo(sink tape.Sink, event storage.Event) {
 		sink.UpdateQuote(event.Bid, event.Ask, event.BidSize, event.AskSize)
 		return
 	}
-	if !event.ChartEligible {
+	if !event.ChartEligible && (event.Provider != "massive" || event.Flags == tape.RulesPresent || event.Size <= 0) {
 		return
 	}
 	exchangeMS := event.ExchangeTimeMS
 	if exchangeMS <= 0 {
 		exchangeMS = event.MarketTimeUS / 1000
+	}
+	if event.Provider == "massive" {
+		if ruleSink, ok := sink.(interface {
+			AddTradeRules(time.Time, time.Time, float64, float64, tape.Classification, int8, float64, float64, uint8, string)
+		}); ok {
+			class := event.Class
+			if event.Source == "historical" {
+				class = ""
+			}
+			ruleSink.AddTradeRules(time.UnixMilli(exchangeMS), received, event.Price, event.Size, class, event.Side, event.Bid, event.Ask, event.Flags, event.Conditions)
+			return
+		}
 	}
 	if event.Source == "historical" {
 		sink.AddTrade(time.UnixMilli(exchangeMS), received, event.Price, event.Size)

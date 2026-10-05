@@ -74,7 +74,9 @@ The next architecture step should be another first-party indicator exercising th
 ## Lower slot and forecasting extension
 
 `lowerAnalytics` is a second independent slot. Its default/fallback is
-`kronos-forecast`; its registry also offers `tick-chart` and `blank`.
+`options-flow`; its registry also offers `kronos-forecast`, `tick-chart`, and `blank`.
+The previous saved Kronos default migrates to Options Flow on settings load.
+Subsequent manual selections remain remembered; Reset restores Options Flow.
 `PanelHost` now accepts `slotId` and `fallbackId`; its original defaults and
 primary-slot debug hook remain compatible. Per-slot diagnostics are under
 `window.__tapePanelSlotsDebug`. Saved primary selection is not changed by lower
@@ -87,3 +89,11 @@ canvas region. Neither grants arbitrary URL fetches, credentials or order
 functions. Kronos receives a lightweight clock/symbol/generation snapshot, not a
 copied trade ring on every animation frame. See `KRONOS_FORECAST.md` for the
 current live-only adapter and statistical/operational limits.
+
+`options-flow` is also available in `lowerAnalytics`. Its `options-flow`
+capability grants only `getOptionsFlow({symbol, signal})`, a same-origin,
+selected-symbol, live-only request. It uses the existing read-only `stream`
+capability for stock pressure without copying the trade ring, and `clock` for
+status/generation boundaries. It opens no browser WebSocket and stops polling
+on unmount, hidden pages, disconnected stock tape, or replay. See
+[Options Flow](OPTIONS_FLOW.md) for the method and gateway requirements.

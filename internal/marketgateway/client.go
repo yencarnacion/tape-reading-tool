@@ -70,6 +70,7 @@ func (c *Client) Request(ctx context.Context, path string) (*http.Response, erro
 	if e != nil {
 		return nil, errors.New("invalid gateway request")
 	}
+	req.Header.Set("X-DaiDai-Priority", "interactive")
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
@@ -133,14 +134,14 @@ func (c *Client) Stream(ctx context.Context, symbols, channels string, fn func(s
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		t := time.NewTicker(5 * time.Second)
+		t := time.NewTicker(time.Second)
 		defer t.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if time.Now().UnixMilli()-last.Load() > 20000 {
+				if time.Now().UnixMilli()-last.Load() > 8000 {
 					cancel()
 					return
 				}

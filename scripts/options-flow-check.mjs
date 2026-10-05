@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {flowView,direction,premium} from '../internal/server/web/options-flow-model.js';
+const now=1791201600000;
+export const windowFixture=(seconds,net=60000)=>({seconds,observedSeconds:seconds,callAsk:80000,callBid:10000,putAsk:10000,putBid:0,unknown:10000,prints:20,classifiedPrints:18,largePrints:1,bull:80000,bear:20000,net,coverage:100000/110000,ready:true});
+export const flowFixture=(symbol='QQQ',generation=1)=>({schemaVersion:1,symbol,generation,status:'ready',asOfMS:now,startedMS:now-400000,lastTradeMS:now-1000,lastQuoteMS:now-500,contracts:80,universeLimited:true,recording:'off',windows:[15,60,300].map(s=>windowFixture(s)),previous15:{...windowFixture(15),callAsk:50000,bull:50000,net:30000}});
+const reply=flowFixture();
+let view=flowView(reply,now,{ready:true,side:-1});assert.equal(view.title,'FLOW DIVERGENCE');assert.equal(view.side,1);assert.equal(view.pace,'ACCELERATING');
+assert.equal(flowView(reply,now,{ready:true,side:1}).title,'TAPE + FLOW ALIGN');
+assert.equal(flowView(reply,now,{ready:false,side:-1}).divergence,false);
+assert.equal(flowView(reply,now+6000,{ready:true,side:-1}).status,'stale');
+assert.equal(flowView({...reply,status:'delayed'},now).status,'delayed');
+assert.equal(flowView({...reply,lastTradeMS:now-21000},now).status,'stale');
+assert.equal(flowView({...reply,windows:reply.windows.map(w=>({...w,ready:false}))},now).status,'collecting');
+assert.equal(direction({...windowFixture(15),net:1000}),0);assert.equal(direction({...windowFixture(15),net:-60000}),-1);
+assert.equal(premium(-184000,true),'−$184K');assert.equal(premium(1200000,true),'+$1.20M');
+console.log('Options flow model: divergence, alignment, sample gates, freshness, pace and premium formatting passed');

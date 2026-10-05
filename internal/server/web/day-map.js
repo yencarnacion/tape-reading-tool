@@ -45,12 +45,12 @@ export class DailyMapHistory {
         bar.high >= Math.max(bar.open, bar.close) && bar.low <= Math.min(bar.open, bar.close)
       ).sort((a, b) => a.timeUS - b.timeUS).slice(-HISTORY_SESSIONS);
       this.done = payload.status === 'ready';
-      this.retryAt = this.now() + 30000;
+      this.retryAt = this.now() + 5000;
       this.apply({ status: bars.length ? 'ready' : payload.status === 'unavailable' ? 'unavailable' : 'empty',
         bars, message: payload.message || '' });
     } catch (error) {
       if (token !== this.token || error.name === 'AbortError') return;
-      this.retryAt = this.now() + 30000;
+      this.retryAt = this.now() + 5000;
       this.apply({ status: 'unavailable', bars: [], message: String(error.message || error) });
     } finally {
       // An old request must never release the new ticker's request slot.

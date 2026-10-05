@@ -170,6 +170,8 @@ const (
 )
 
 type Event struct {
+	Conditions     string
+	Flags          uint8
 	ID             int64
 	Kind           string
 	Source         string
@@ -392,7 +394,7 @@ func (d *Database) readOnly() (*sql.DB, error) {
 // has already overwritten. Rows are matched on the persisted ring sequence and
 // restricted to receipts from the running process, because the ring restarts its
 // numbering when the program restarts.
-func (d *Database) TradesByRingSeq(ctx context.Context, symbol string, fromSeq, toSeq uint64, minReceivedUS int64, limit int) ([]tape.Trade, error) {
+func (d *Database) TradesByRingSeq(ctx context.Context, symbol string, fromSeq, toSeq uint64, minReceivedUS int64, limit int, providers ...string) ([]tape.Trade, error) {
 	if symbol == "" || fromSeq == 0 || toSeq < fromSeq || limit < 1 {
 		return nil, fmt.Errorf("invalid ring sequence range")
 	}
@@ -400,10 +402,17 @@ func (d *Database) TradesByRingSeq(ctx context.Context, symbol string, fromSeq, 
 	if err != nil {
 		return nil, err
 	}
-	rows, err := reader.QueryContext(ctx, `SELECT ring_seq,exchange_time_ms,received_us,price,size,class,side,bid,ask
-	  FROM trades WHERE symbol=? AND source='live' AND provider='ibkr'
-	    AND ring_seq>=? AND ring_seq<=? AND received_us>=? AND chart_eligible=1
-	  ORDER BY ring_seq LIMIT ?`, symbol, fromSeq, toSeq, minReceivedUS, limit)
+	provider := "ibkr"
+	if len(providers) > 0 {
+		provider = providers[0]
+	}
+	if provider != "ibkr" && provider != "massive" {
+		return nil, fmt.Errorf("specific live provider required")
+	}
+	rows, err := reader.QueryContext(ctx, `SELECT ring_seq,exchange_time_ms,received_us,price,size,class,side,bid,ask,provider,conditions
+	  FROM trades WHERE symbol=? AND source='live' AND provider=?
+	    AND ring_seq>=? AND ring_seq<=? AND received_us>=? AND (chart_eligible=1 OR (provider='massive' AND unreported=0 AND chart_exclusion_reason IN ('','massive_sale_condition')))
+	  ORDER BY ring_seq LIMIT ?`, symbol, provider, fromSeq, toSeq, minReceivedUS, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -411,10 +420,12 @@ func (d *Database) TradesByRingSeq(ctx context.Context, symbol string, fromSeq, 
 	trades := make([]tape.Trade, 0, min(limit, 4096))
 	for rows.Next() {
 		var trade tape.Trade
+		var tradeProvider string
 		if err := rows.Scan(&trade.Seq, &trade.ExchangeTimeMS, &trade.ReceivedUS, &trade.Price,
-			&trade.Size, &trade.Class, &trade.Side, &trade.Bid, &trade.Ask); err != nil {
+			&trade.Size, &trade.Class, &trade.Side, &trade.Bid, &trade.Ask, &tradeProvider, &trade.Conditions); err != nil {
 			return nil, err
 		}
+		trade.Flags = recordedFlags(tradeProvider, trade.Conditions, trade.Price, trade.Size)
 		trades = append(trades, trade)
 	}
 	return trades, rows.Err()
@@ -890,11 +901,11 @@ func (d *Database) Events(ctx context.Context, symbol, source, provider string, 
 	if err != nil {
 		return nil, err
 	}
-	query := `SELECT id,kind,source,provider,event_us,market_time_us,sequence_id,received_us,exchange_time_ms,price,size,class,side,bid,ask,bid_size,ask_size,chart_eligible FROM (
-	    SELECT 'trade' AS kind,source,provider,event_us,market_time_us,sequence_id,received_us,exchange_time_ms,price,size,class,side,bid,ask,0 AS bid_size,0 AS ask_size,chart_eligible,id
+	query := `SELECT id,kind,source,provider,event_us,market_time_us,sequence_id,received_us,exchange_time_ms,price,size,class,side,bid,ask,bid_size,ask_size,chart_eligible,conditions,excluded FROM (
+	    SELECT 'trade' AS kind,source,provider,event_us,market_time_us,sequence_id,received_us,exchange_time_ms,price,size,class,side,bid,ask,0 AS bid_size,0 AS ask_size,chart_eligible,conditions,(unreported=1 OR chart_exclusion_reason NOT IN ('','massive_sale_condition')) AS excluded,id
 	      FROM trades WHERE symbol=? AND ` + filter + ` AND event_us>=? AND event_us<=?
 	    UNION ALL
-	    SELECT 'quote' AS kind,source,provider,event_us,event_us AS market_time_us,0 AS sequence_id,received_us,0 AS exchange_time_ms,0 AS price,0 AS size,'' AS class,0 AS side,bid,ask,bid_size,ask_size,1 AS chart_eligible,id
+	    SELECT 'quote' AS kind,source,provider,event_us,event_us AS market_time_us,0 AS sequence_id,received_us,0 AS exchange_time_ms,0 AS price,0 AS size,'' AS class,0 AS side,bid,ask,bid_size,ask_size,1 AS chart_eligible,'' AS conditions,0 AS excluded,id
       FROM quotes WHERE symbol=? AND ` + filter + ` AND event_us>=? AND event_us<=?
   ) ORDER BY event_us, CASE kind WHEN 'quote' THEN 0 ELSE 1 END, id`
 	args := []any{symbol}
@@ -913,7 +924,7 @@ func (d *Database) MinuteBars(ctx context.Context, symbol, source, provider stri
 	if err != nil {
 		return nil, err
 	}
-	query := `SELECT market_time_us,price,size FROM trades WHERE symbol=? AND ` + filter + ` AND market_time_us>=? AND market_time_us<=? AND chart_eligible=1`
+	query := `SELECT market_time_us,price,size,provider,conditions FROM trades WHERE symbol=? AND ` + filter + ` AND market_time_us>=? AND market_time_us<=? AND (chart_eligible=1 OR (provider='massive' AND unreported=0 AND chart_exclusion_reason IN ('','massive_sale_condition')))`
 	args := []any{symbol}
 	args = append(args, filterArgs...)
 	args = append(args, startUS, endUS)
@@ -933,19 +944,32 @@ func (d *Database) MinuteBars(ctx context.Context, symbol, source, provider stri
 	for rows.Next() {
 		var eventUS int64
 		var price, size float64
-		if err := rows.Scan(&eventUS, &price, &size); err != nil {
+		var tradeProvider, conditions string
+		if err := rows.Scan(&eventUS, &price, &size, &tradeProvider, &conditions); err != nil {
 			return nil, err
 		}
 		minuteUS := eventUS - eventUS%int64(time.Minute/time.Microsecond)
-		bar, exists := tradeBars[minuteUS]
-		if !exists {
-			bar = MinuteBar{TimeUS: minuteUS, Open: price, High: price, Low: price, Close: price}
+		flags := recordedFlags(tradeProvider, conditions, price, size)
+		bar := tradeBars[minuteUS]
+		bar.TimeUS = minuteUS
+		if tape.UpdatesOpenClose(flags) {
+			if bar.Open <= 0 {
+				bar.Open = price
+			}
+			bar.Close = price
 		}
-		bar.High = max(bar.High, price)
-		bar.Low = min(bar.Low, price)
-		bar.Close = price
-		bar.Volume += size
-		bar.DollarVolume += price * size
+		if tape.UpdatesHighLow(flags) {
+			bar.High = max(bar.High, price)
+			if bar.Low <= 0 {
+				bar.Low = price
+			} else {
+				bar.Low = min(bar.Low, price)
+			}
+		}
+		if tape.UpdatesVolume(flags) {
+			bar.Volume += size
+			bar.DollarVolume += price * size
+		}
 		tradeBars[minuteUS] = bar
 	}
 	if err := rows.Err(); err != nil {
@@ -1001,6 +1025,9 @@ func (d *Database) MinuteBars(ctx context.Context, symbol, source, provider stri
 		}
 	}
 	for minute, b := range tradeBars {
+		if b.Open <= 0 || b.Close <= 0 {
+			continue
+		}
 		if minute == currentMinute {
 			cached[minute] = b
 			continue
@@ -1029,8 +1056,8 @@ func (d *Database) EligibleSessionTradeStats(ctx context.Context, symbol, source
 	if err != nil {
 		return SessionTradeStats{}, err
 	}
-	query := `SELECT market_time_us,price,CASE WHEN source='live' AND received_us>0 THEN received_us ELSE event_us END AS available_us
-      FROM trades WHERE symbol=? AND ` + filter + ` AND market_time_us>=? AND market_time_us<=? AND chart_eligible=1
+	query := `SELECT market_time_us,price,size,provider,conditions,CASE WHEN source='live' AND received_us>0 THEN received_us ELSE event_us END AS available_us
+      FROM trades WHERE symbol=? AND ` + filter + ` AND market_time_us>=? AND market_time_us<=? AND (chart_eligible=1 OR (provider='massive' AND unreported=0 AND chart_exclusion_reason IN ('','massive_sale_condition')))
       AND (CASE WHEN source='live' AND received_us>0 THEN received_us ELSE event_us END)<=?
       ORDER BY available_us,sequence_id,id`
 	args := []any{strings.ToUpper(strings.TrimSpace(symbol))}
@@ -1044,20 +1071,30 @@ func (d *Database) EligibleSessionTradeStats(ctx context.Context, symbol, source
 	var result SessionTradeStats
 	for rows.Next() {
 		var marketUS, availableUS int64
-		var price float64
-		if err := rows.Scan(&marketUS, &price, &availableUS); err != nil {
+		var price, size float64
+		var tradeProvider, conditions string
+		if err := rows.Scan(&marketUS, &price, &size, &tradeProvider, &conditions, &availableUS); err != nil {
 			return SessionTradeStats{}, err
 		}
-		if result.Count == 0 {
-			result.Open, result.High, result.HighTimeUS, result.Low, result.LowTimeUS = price, price, marketUS, price, marketUS
+		flags := recordedFlags(tradeProvider, conditions, price, size)
+		oc, hl := tape.UpdatesOpenClose(flags), tape.UpdatesHighLow(flags)
+		if !oc && !hl {
+			continue
 		}
-		if price > result.High {
+		if oc {
+			if result.Open <= 0 {
+				result.Open = price
+			}
+			if marketUS >= result.LastTimeUS {
+				result.Last, result.LastTimeUS = price, marketUS
+			}
+		}
+		if hl && (result.High <= 0 || price > result.High) {
 			result.High, result.HighTimeUS = price, marketUS
 		}
-		if price < result.Low {
+		if hl && (result.Low <= 0 || price < result.Low) {
 			result.Low, result.LowTimeUS = price, marketUS
 		}
-		result.Last, result.LastTimeUS = price, marketUS
 		result.Count++
 	}
 	return result, rows.Err()
@@ -1065,8 +1102,30 @@ func (d *Database) EligibleSessionTradeStats(ctx context.Context, symbol, source
 
 func ScanEvent(rows *sql.Rows) (Event, error) {
 	var event Event
-	err := rows.Scan(&event.ID, &event.Kind, &event.Source, &event.Provider, &event.EventUS, &event.MarketTimeUS, &event.SequenceID, &event.ReceivedUS, &event.ExchangeTimeMS, &event.Price, &event.Size, &event.Class, &event.Side, &event.Bid, &event.Ask, &event.BidSize, &event.AskSize, &event.ChartEligible)
+	var excluded bool
+	err := rows.Scan(&event.ID, &event.Kind, &event.Source, &event.Provider, &event.EventUS, &event.MarketTimeUS, &event.SequenceID, &event.ReceivedUS, &event.ExchangeTimeMS, &event.Price, &event.Size, &event.Class, &event.Side, &event.Bid, &event.Ask, &event.BidSize, &event.AskSize, &event.ChartEligible, &event.Conditions, &excluded)
+
+	if event.Kind == "trade" && event.Provider == "massive" {
+		event.Flags = recordedFlags(event.Provider, event.Conditions, event.Price, event.Size)
+		if excluded {
+			event.Flags = tape.RulesPresent
+		}
+		event.ChartEligible = tape.UpdatesOpenClose(event.Flags)
+		if event.ExchangeTimeMS > 0 {
+			event.MarketTimeUS = event.ExchangeTimeMS * 1000
+		}
+	}
 	return event, err
+}
+
+func recordedFlags(provider, conditions string, price, size float64) uint8 {
+	if provider != "massive" {
+		return 0
+	}
+	if ok, _ := tape.ChartEligibility(tape.TradeEligibilityInput{Price: price, Size: size}); !ok {
+		return tape.RulesPresent
+	}
+	return tape.MassiveTradeFlags(conditions)
 }
 
 func normalizeTradeRecord(r *TradeRecord) {
@@ -1084,6 +1143,13 @@ func normalizeTradeRecord(r *TradeRecord) {
 	}
 	if r.FeedType == "" {
 		r.FeedType = tape.FeedLast
+	}
+	if r.Provider == "massive" && !r.Unreported && (r.ChartExclusionReason == "" || r.ChartExclusionReason == "massive_sale_condition") {
+		flags := recordedFlags(r.Provider, r.Conditions, r.Price, r.Size)
+		r.ChartEligible = tape.UpdatesOpenClose(flags)
+		if !r.ChartEligible {
+			r.ChartExclusionReason = "massive_sale_condition"
+		}
 	}
 	if !r.ChartEligible && r.ChartExclusionReason == "" {
 		r.ChartEligible, r.ChartExclusionReason = tape.ChartEligibility(tape.TradeEligibilityInput{FeedType: r.FeedType, Price: r.Price, Size: r.Size, Unreported: r.Unreported})

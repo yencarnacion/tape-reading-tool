@@ -137,9 +137,9 @@ export function createOptionsView({root,host,getSnapshot,getADRExtension}) {
         if(payload.asOfMS<=clock)archiveCursor=Math.max(archiveCursor,payload.asOfMS||0);
       } else model.accept(payload,clock);
     } catch(error) {
-      if(mounted && current===epoch && !controller.signal.aborted)model.unavailable('gateway-offline');
+      if(mounted && current===epoch && !host.signal.aborted)model.unavailable('gateway-offline');
     } finally {
-      if(current===epoch) {pending=null;nextPoll=performance.now()+(['replay','render'].includes(snapshot.mode)?500:model.status==='ready'?5000:15000);}
+      if(current===epoch) {pending=null;nextPoll=performance.now()+(['replay','render'].includes(snapshot.mode)?500:model.status==='ready'?5000:['gateway-offline','gateway-unavailable','unavailable','waiting-tape','context-changed'].includes(model.status)?1000:5000);}
     }
   }
   return {

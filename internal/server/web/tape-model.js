@@ -74,7 +74,12 @@ export function computeTapeRate(source, nowUS) {
 // One tick bar boundary. `firstSeq` is what lets a rewound pane reproduce the
 // live pane's bar phase: count-based bars depend on where aggregation started,
 // so the rewind view anchors on a live boundary rather than on its buffer floor.
+export function priceEligible(event) { return !event.f || (event.f & 1) !== 0; }
+export function rangeEligible(event) { return !event.f || (event.f & 2) !== 0; }
+export function volumeEligible(event) { return !event.f || (event.f & 4) !== 0; }
+
 export function appendTickBar(bars, event, tickSize) {
+  if (!priceEligible(event)) return null;
   let bar = bars[bars.length - 1];
   if (!bar || bar.count >= tickSize) {
     bar = {
@@ -128,44 +133,41 @@ export function aggregateTickBars(source, fromSeq, toSeq, tickSize, maxBars = 0)
   return bars;
 }
 
+// Reports that count only toward volume cannot establish a candle price.
+// Retain their totals until the first qualifying price in that minute arrives.
+const pendingMinutes = new WeakMap();
 export function appendMinuteBar(bars, event, limit = 2000) {
   const marketUS = Number(event.t) * 1000;
   const price = Number(event.p);
-  const size = Math.max(0, Number(event.z) || 0);
+  const size = volumeEligible(event) ? Math.max(0, Number(event.z) || 0) : 0;
   if (!marketUS || !Number.isFinite(price) || price <= 0) return null;
   const timeUS = Math.floor(marketUS / 6e7) * 6e7;
-  // Delivery is ordered by receipt time, but candles use exchange time. A late
-  // report can therefore belong to an earlier minute. Appending it at the end
-  // creates a duplicate old candle, and the next ordinary print creates a
-  // duplicate current candle. Keep the array ordered and merge by minute.
-  const index = lowerBound(bars, timeUS, (candidate) => Number(candidate.timeUS));
+  const oc = priceEligible(event), hl = rangeEligible(event);
+  const index = lowerBound(bars, timeUS, candidate => Number(candidate.timeUS));
   let bar = bars[index];
+  let pending = pendingMinutes.get(bars);
+  if (!pending) { pending = new Map(); pendingMinutes.set(bars, pending); }
   if (!bar || Number(bar.timeUS) !== timeUS) {
-    bar = {
-      timeUS, open: price, high: price, low: price, close: price,
-      volume: 0, dollarVolume: 0, _openTimeUS: marketUS, _closeTimeUS: marketUS
-    };
+    const prior = pending.get(timeUS) || { volume: 0, dollarVolume: 0, high: -Infinity, low: Infinity };
+    if (!oc) {
+      prior.volume += size; prior.dollarVolume += price * size;
+      if (hl) { prior.high = Math.max(prior.high, price); prior.low = Math.min(prior.low, price); }
+      pending.set(timeUS, prior);
+      if (pending.size > limit) pending.delete(pending.keys().next().value);
+      return null;
+    }
+    bar = { timeUS, open: price, high: Math.max(price, prior.high), low: Math.min(price, prior.low), close: price,
+      volume: prior.volume, dollarVolume: prior.dollarVolume, _openTimeUS: marketUS, _closeTimeUS: marketUS };
+    pending.delete(timeUS);
     bars.splice(index, 0, bar);
     if (bars.length > limit) bars.splice(0, bars.length - limit);
-  } else {
-    // These timestamps are client-only aggregation metadata. Bars hydrated
-    // from an authoritative snapshot do not have them; in that case a prior
-    // completed candle keeps its established open/close while still accepting
-    // the late print's high, low, and volume.
-    if (Number.isFinite(bar._openTimeUS) && marketUS < bar._openTimeUS) {
-      bar.open = price;
-      bar._openTimeUS = marketUS;
-    }
+  } else if (oc) {
+    if (Number.isFinite(bar._openTimeUS) && marketUS < bar._openTimeUS) { bar.open = price; bar._openTimeUS = marketUS; }
     if ((Number.isFinite(bar._closeTimeUS) && marketUS >= bar._closeTimeUS) ||
-        (!Number.isFinite(bar._closeTimeUS) && index === bars.length - 1)) {
-      bar.close = price;
-      bar._closeTimeUS = marketUS;
-    }
+        (!Number.isFinite(bar._closeTimeUS) && index === bars.length - 1)) { bar.close = price; bar._closeTimeUS = marketUS; }
   }
-  bar.high = Math.max(bar.high, price);
-  bar.low = Math.min(bar.low, price);
-  bar.volume += size;
-  bar.dollarVolume += price * size;
+  if (hl) { bar.high = Math.max(bar.high, price); bar.low = Math.min(bar.low, price); }
+  bar.volume += size; bar.dollarVolume += price * size;
   return bar;
 }
 
