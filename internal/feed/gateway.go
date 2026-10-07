@@ -190,12 +190,34 @@ func (f *Gateway) snapshot(ctx context.Context, symbol string) {
 				AS  float64 `json:"S"`
 				T   int64   `json:"t"`
 			} `json:"lastQuote"`
+			Trade massiveStreamTrade `json:"lastTrade"`
 		} `json:"ticker"`
 	}
-	if f.client.Get(ctx, "/rest/v2/snapshot/locale/us/markets/stocks/tickers/"+url.PathEscape(symbol), &s) != nil || ctx.Err() != nil || symbol != f.store.Active() {
+	for attempt := 0; ; attempt++ {
+		if ctx.Err() != nil || symbol != f.store.Active() {
+			return
+		}
+		if f.client.Get(ctx, "/rest/v2/snapshot/locale/us/markets/stocks/tickers/"+url.PathEscape(symbol), &s) == nil {
+			break
+		}
+		if attempt >= 2 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(250 * time.Millisecond * time.Duration(1<<attempt)):
+		}
+	}
+	if ctx.Err() != nil || symbol != f.store.Active() {
 		return
 	}
 	f.store.UpdatePreviousClose(symbol, s.Ticker.Prev.C)
+	tr := s.Ticker.Trade
+	tradeMS := marketgateway.Millis(tr.Timestamp)
+	if tr.Size > 0 && tradeMS <= time.Now().Add(time.Second).UnixMilli() && tape.UpdatesLastPrice(tape.MassiveTradeFlags(formatConditionCodes(tr.Conditions))) {
+		f.store.UpdateLastPrice(symbol, tr.Price, tradeMS)
+	}
 	q := s.Ticker.Quote
 	at := marketgateway.Millis(q.T)
 	if time.Now().UnixMilli()-at <= 5000 {

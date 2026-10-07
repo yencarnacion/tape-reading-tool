@@ -77,25 +77,45 @@ export function computeTapeRate(source, nowUS) {
 export function priceEligible(event) { return !event.f || (event.f & 1) !== 0; }
 export function rangeEligible(event) { return !event.f || (event.f & 2) !== 0; }
 export function volumeEligible(event) { return !event.f || (event.f & 4) !== 0; }
+export function lastPriceEligible(event) { return priceEligible(event) || (event.f & 16) !== 0; }
+
+// Provider snapshots hydrate LAST before the next print. Exchange timestamps
+// keep a delayed snapshot from rolling back a newer streamed execution.
+export function selectLastPrice(trade, quote = {}) {
+  const price = Number(quote.last_price), time = Number(quote.last_time_ms);
+  if (Number.isFinite(price) && price > 0 && time > 0 && (!trade || time > Number(trade.t))) {
+    return { p: price, t: time };
+  }
+  return trade;
+}
 
 export function appendTickBar(bars, event, tickSize) {
-  if (!priceEligible(event)) return null;
+  const oc = priceEligible(event), hl = rangeEligible(event), volume = volumeEligible(event);
+  if (!oc && !hl && !volume) return null;
   let bar = bars[bars.length - 1];
   if (!bar || bar.count >= tickSize) {
     bar = {
-      count: 0, open: event.p, high: event.p, low: event.p, close: event.p,
+      count: 0, open: null, high: null, low: null, close: null,
       volume: 0, delta: 0, dollarDelta: 0, time: event.t, received: event.r, className: event.c,
       firstSeq: event.s
     };
     bars.push(bar);
   }
   bar.count++;
-  bar.high = Math.max(bar.high, event.p);
-  bar.low = Math.min(bar.low, event.p);
-  bar.close = event.p;
-  bar.volume += event.z;
-  bar.delta += event.z * event.d;
-  bar.dollarDelta += event.p * event.z * event.d;
+  // Delta follows eligible volume, including premarket and odd-lot prints.
+  // Candle prices retain their separate sale-condition rules.
+  if (oc) {
+    if (bar.open === null) bar.open = event.p;
+    bar.close = event.p;
+  }
+  if (hl) {
+    bar.high = bar.high === null ? event.p : Math.max(bar.high, event.p);
+    bar.low = bar.low === null ? event.p : Math.min(bar.low, event.p);
+  }
+  const size = volume ? event.z : 0;
+  bar.volume += size;
+  bar.delta += size * event.d;
+  bar.dollarDelta += event.p * size * event.d;
   bar.time = event.t;
   bar.received = event.r;
   bar.className = event.c;

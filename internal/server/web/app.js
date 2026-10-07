@@ -1,6 +1,6 @@
 import { formatTradeSize, tradeSizeLabel } from './trade-size.js';
 import {
-  aggregateTickBars, appendMinuteBar, appendTickBar, priceEligible, rangeEligible, volumeEligible,
+  aggregateTickBars, appendMinuteBar, appendTickBar, priceEligible, rangeEligible, volumeEligible, lastPriceEligible, selectLastPrice,
   calculateCandleRVOL, computeHorizon, computeTapeRate, lowerBound, rewindWindowStart, updatePriceScale
 } from './tape-model.js';
 import { createStreamSource, prefixFromTrade } from './tape-source.js';
@@ -581,7 +581,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
   }
 
   function observePriceTrade(trade) {
-    if (priceEligible(trade) && (!state.lastPriceTrade || Number(trade.t) >= Number(state.lastPriceTrade.t))) state.lastPriceTrade = trade;
+    if (lastPriceEligible(trade) && (!state.lastPriceTrade || Number(trade.t) >= Number(state.lastPriceTrade.t))) state.lastPriceTrade = trade;
   }
   function prepareTradeHistory() {
     state.lastPriceTrade = null;
@@ -987,6 +987,9 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     target.empty?.classList.add('hidden');
     const visible = bars.slice(-target.visibleBars());
     const step = (right - left) / visible.length;
+    const priceBars = visible.map((bar, index) => ({ bar, index }))
+      .filter(({ bar }) => Number.isFinite(bar.close));
+    const showPrices = target.priceVisible?.() !== false && priceBars.length > 0;
 
     let minimum = Infinity;
     let maximum = -Infinity;
@@ -996,8 +999,10 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     let maxDeltaDollars = 0;
     let minDeltaDollars = 0;
     for (const bar of visible) {
-      minimum = Math.min(minimum, bar.low);
-      maximum = Math.max(maximum, bar.high);
+      if (Number.isFinite(bar.close)) {
+        minimum = Math.min(minimum, bar.low ?? bar.close, bar.open, bar.close);
+        maximum = Math.max(maximum, bar.high ?? bar.close, bar.open, bar.close);
+      }
       maxAbsDelta = Math.max(maxAbsDelta, Math.abs(bar.delta));
       if (bar.delta > maxDelta) {
         maxDelta = bar.delta;
@@ -1011,8 +1016,10 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     const pricePadding = Math.max((maximum - minimum) * 0.08, maximum * 0.00008, 0.005);
     minimum -= pricePadding;
     maximum += pricePadding;
-    const scale = updatePriceScale(target.getScale(), minimum, maximum, visualNowMS());
-    target.setScale(scale);
+    const scale = priceBars.length
+      ? updatePriceScale(target.getScale(), minimum, maximum, visualNowMS())
+      : { minimum: 0, maximum: 1, contracting: false };
+    if (priceBars.length) target.setScale(scale);
     minimum = scale.minimum; maximum = scale.maximum;
     const priceY = (value) => priceBottom - (value - minimum) / (maximum - minimum) * (priceBottom - priceTop);
     const xAt = (index) => left + (index + 0.5) * step;
@@ -1020,7 +1027,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     context.font = '11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     context.textBaseline = 'middle';
     context.lineWidth = 1;
-    if (target.priceVisible?.() !== false) {
+    if (showPrices) {
     for (let i = 0; i <= 4; i++) {
       const y = priceTop + (priceBottom - priceTop) * i / 4;
       const price = maximum - (maximum - minimum) * i / 4;
@@ -1034,23 +1041,23 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     context.strokeStyle = '#66717e';
     context.globalAlpha = 0.45;
     context.beginPath();
-    visible.forEach((bar, index) => {
+    priceBars.forEach(({ bar, index }, priceIndex) => {
       const x = xAt(index);
       const y = priceY(bar.close);
-      if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
+      if (priceIndex === 0) context.moveTo(x, y); else context.lineTo(x, y);
     });
     context.stroke();
     context.globalAlpha = 1;
 
     const tickWidth = Math.max(0.6, Math.min(2.2, step * 0.3));
-    visible.forEach((bar, index) => {
+    priceBars.forEach(({ bar, index }) => {
       const x = xAt(index);
       const up = bar.close >= bar.open;
       context.strokeStyle = up ? '#34c7d9' : '#ff4d5e';
       context.lineWidth = step < 1 ? 0.7 : 1;
       context.beginPath();
-      context.moveTo(x, priceY(bar.high));
-      context.lineTo(x, priceY(bar.low));
+      context.moveTo(x, priceY(bar.high ?? bar.close));
+      context.lineTo(x, priceY(bar.low ?? bar.close));
       context.moveTo(x - tickWidth, priceY(bar.open));
       context.lineTo(x, priceY(bar.open));
       context.moveTo(x, priceY(bar.close));
@@ -1082,7 +1089,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
       context.fillText(formatSigned(-maxAbsDelta), right + 5, zero + deltaHeight);
     }
 
-    if (target.priceVisible?.() !== false) {
+    if (showPrices) {
     const labelIndexes = visible.length < 3 ? [0] : [0, Math.floor((visible.length - 1) / 2), visible.length - 1];
     context.fillStyle = '#78818c';
     context.textBaseline = 'bottom';
@@ -1091,7 +1098,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
       context.fillText(formatTime(visible[index].time), xAt(index), plotBottom - 2);
     });
 
-    const last = visible[visible.length - 1];
+    const last = priceBars[priceBars.length - 1].bar;
     const currentY = priceY(last.close);
     context.setLineDash([2, 3]);
     context.strokeStyle = '#d4d9df';
@@ -2518,6 +2525,13 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     elements.nbbo.title = hasSpread ? `NBBO spread ${formatPrice(spread)}` : 'National best bid and offer';
     elements.nbbo.setAttribute('aria-label', `Best bid ${bid}, size ${bidSize}; best ask ${ask}, size ${askSize}${hasSpread ? `; spread ${formatPrice(spread)}` : ''}`);
     elements.quoteText.textContent = `BID ${bid} / ASK ${ask}`;
+    updateLastPrice();
+  }
+
+  function updateLastPrice() {
+    const last = selectLastPrice(state.lastPriceTrade, state.quote);
+    elements.lastPrice.textContent = last ? formatPrice(last.p) : '--';
+    updatePriceChange(last?.p, state.quote.previous_close);
   }
 
   function updateRelativeVolume(nowUS) {
@@ -2549,9 +2563,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     audio.setTapeRate(tapeRate);
     panelHost?.render(receiptNowUS);
     lowerPanelHost?.render(receiptNowUS);
-    const last = state.lastPriceTrade;
-    elements.lastPrice.textContent = last ? formatPrice(last.p) : '--';
-    updatePriceChange(last?.p, state.quote.previous_close);
+    updateLastPrice();
     elements.streamText.textContent = `${formatSize(state.trades.length)} PRINTS${state.dropped ? ` / ${formatSize(state.dropped)} LAGGED` : ''}`;
     const replayMode = state.status?.mode === 'replay';
     const relativeVolumeMode = ['live', 'massive', 'demo', 'replay'].includes(String(state.status?.mode || '').toLowerCase());
@@ -3005,7 +3017,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
   window.__tapeReadingChart = { state: () => ({
     bars: state.minuteBars.map(({timeUS,open,high,low,close,volume}) => ({timeUS,open,high,low,close,volume})),
     scale: state.minuteScale ? {...state.minuteScale} : null,
-    last: state.lastPriceTrade?.p, daily: state.dailyBars.length
+    last: selectLastPrice(state.lastPriceTrade, state.quote)?.p, daily: state.dailyBars.length
   }) };
   window.__tapeReadingCandleVolume = formatCandleVolume;
   window.__tapeReadingSignedDollars = formatSignedDollars;

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"tape-reading-tool/internal/config"
 	"tape-reading-tool/internal/marketgateway"
 	"tape-reading-tool/internal/tape"
@@ -97,5 +98,32 @@ func TestGatewayGapClearsOldBidAskButKeepsReference(t *testing.T) {
 	q := s.Quote("TEST")
 	if q.Bid != 0 || q.Ask != 0 || q.PreviousClose != 90 {
 		t.Fatal(q)
+	}
+}
+
+func TestGatewaySnapshotRetryDoesNotRollBackFreshTrade(t *testing.T) {
+	var calls atomic.Int32
+	at := time.Now().Add(-time.Second)
+	store := tape.NewStore("TEST", 100, 2)
+	store.AddTradeWithRules("TEST", at.Add(time.Millisecond), at, 429.5, 20, tape.MassiveTradeFlags("12"), "12")
+	adapter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			http.Error(w, "temporary outage", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"ticker":{"prevDay":{"c":441.64},"lastTrade":{"p":1,"s":100,"c":[12],"t":%d}}}`, at.UnixNano())
+	}))
+	defer adapter.Close()
+	f := NewGateway(config.MassiveConfig{GatewayURL: adapter.URL + "/adapter"}, store, nil)
+	defer f.client.Close()
+	f.snapshot(context.Background(), "TEST")
+	if got := store.Quote("TEST"); got.LastPrice != 429.5 || got.PreviousClose != 441.64 || calls.Load() != 2 {
+		t.Fatal(got, calls.Load())
+	}
+	store.Activate("NEW")
+	f.snapshot(context.Background(), "TEST")
+	if calls.Load() != 2 || store.Quote("NEW").LastPrice != 0 {
+		t.Fatal("old symbol snapshot leaked")
 	}
 }

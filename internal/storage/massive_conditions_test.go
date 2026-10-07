@@ -37,7 +37,7 @@ func TestRecordedMassiveCandlesRespectPerFieldRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	want := []uint8{12, 15, 12, 14, 15, 8}
+	want := []uint8{28, 31, 12, 14, 31, 8}
 	i := 0
 	for rows.Next() {
 		e, err := ScanEvent(rows)

@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {lastPriceEligible, priceEligible, selectLastPrice} from '../internal/server/web/tape-model.js';
+const premarket={p:429.5,t:1000,f:28,conditions:'12,37'};
+assert.equal(lastPriceEligible(premarket),true);
+assert.equal(priceEligible(premarket),false,'LAST must not loosen candle prices');
+for(const f of [8,12,14])assert.equal(lastPriceEligible({f}),false,'special reports must not supply LAST');
+for(const f of [0,15,31])assert.equal(lastPriceEligible({f}),true,'legacy and regular executions still supply LAST');
+const quote={last_price:429,last_time_ms:900,previous_close:441.64};
+assert.equal(selectLastPrice(null,quote).p,429,'snapshot fills LAST without any delivered tape');
+assert.equal(selectLastPrice(premarket,quote),premarket,'old snapshot cannot roll back live price');
+assert.equal(selectLastPrice(premarket,{...quote,last_price:430,last_time_ms:1100}).p,430);
+assert.equal(selectLastPrice(null,{}),null,'new symbol cannot inherit an old price');
+assert.equal(selectLastPrice(null,{last_price:0,last_time_ms:100}),null);
+assert.equal(selectLastPrice(null,{last_price:Infinity,last_time_ms:100}),null);
+assert.equal(selectLastPrice(null,{last_price:429,last_time_ms:0}),null);
+console.log('LAST checks passed: premarket/odd-lot eligibility, candle isolation, immediate snapshot hydration, and timestamp ordering');

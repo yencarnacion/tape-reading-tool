@@ -37,6 +37,8 @@ type Quote struct {
 	BidSize       float64 `json:"bid_size"`
 	AskSize       float64 `json:"ask_size"`
 	PreviousClose float64 `json:"previous_close"`
+	LastPrice     float64 `json:"last_price,omitempty"`
+	LastTimeMS    int64   `json:"last_time_ms,omitempty"`
 }
 
 type FeedStatus struct {
@@ -185,7 +187,27 @@ func (s *Store) ClearTopOfBook(symbol string) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.quote = Quote{PreviousClose: t.quote.PreviousClose}
+	t.quote = Quote{PreviousClose: t.quote.PreviousClose, LastPrice: t.quote.LastPrice, LastTimeMS: t.quote.LastTimeMS}
+}
+
+// UpdateLastPrice hydrates the display from a provider snapshot without adding
+// a synthetic print to the tape, volume, candles, recorder, or audio stream.
+func (s *Store) UpdateLastPrice(symbol string, price float64, marketMS int64) {
+	t := s.getOrCreate(symbol)
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.updateLastPriceLocked(price, marketMS)
+}
+
+func (t *symbolTape) updateLastPriceLocked(price float64, marketMS int64) {
+	if price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) || marketMS <= 0 || marketMS < t.quote.LastTimeMS {
+		return
+	}
+	t.quote.LastPrice = price
+	t.quote.LastTimeMS = marketMS
 }
 
 // UpdatePreviousClose records the reference close supplied by the market-data feed.
@@ -519,6 +541,9 @@ func (t *symbolTape) appendLocked(exchangeTime, received time.Time, price, size 
 		Price: price, Size: size, Class: class, Side: side, Bid: bid, Ask: ask, Flags: flags, Conditions: conditions,
 	}
 	t.nextSeq++
+	if UpdatesLastPrice(flags) && size > 0 {
+		t.updateLastPriceLocked(price, exchangeTime.UnixMilli())
+	}
 	if t.count < len(t.items) {
 		idx := (t.start + t.count) % len(t.items)
 		t.items[idx] = trade

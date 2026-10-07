@@ -18,10 +18,26 @@ func TestMassiveFieldEligibility(t *testing.T) {
 }
 
 func TestExplicitRegularSaleConditions(t *testing.T) {
-	if got := MassiveTradeFlags("0,14,41"); got != RulesPresent|PriceOpenClose|PriceHighLow|TradeVolume {
+	if got := MassiveTradeFlags("0,14,41"); got != RulesPresent|PriceOpenClose|PriceHighLow|TradeVolume|PriceLast {
 		t.Fatalf("regular sale excluded: %d", got)
 	}
-	if got := MassiveTradeFlags("0,37"); got != RulesPresent|TradeVolume {
+	if got := MassiveTradeFlags("0,37"); got != RulesPresent|TradeVolume|PriceLast {
 		t.Fatalf("regular marker overrode odd-lot restriction: %d", got)
+	}
+}
+
+func TestLastPriceAllowsTimelyPremarketAndOddLots(t *testing.T) {
+	for _, conditions := range []string{"", "0,14,41", "12", "12,37", "14,12,37,41", "37"} {
+		if !UpdatesLastPrice(MassiveTradeFlags(conditions)) {
+			t.Errorf("timely execution did not supply LAST: %s", conditions)
+		}
+	}
+	for _, conditions := range []string{"2", "2,12,37", "13", "13,37", "32,37", "10,12", "15", "999,12"} {
+		if UpdatesLastPrice(MassiveTradeFlags(conditions)) {
+			t.Errorf("special report supplied LAST: %s", conditions)
+		}
+	}
+	if UpdatesOpenClose(MassiveTradeFlags("12,37")) || UpdatesHighLow(MassiveTradeFlags("12,37")) {
+		t.Fatal("display policy changed candle eligibility")
 	}
 }

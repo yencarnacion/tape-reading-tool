@@ -7,7 +7,11 @@ const rows=[[50,1,12],[75,100,15],[95,200,12],[74,100,14],[76,100,15],[1,100,8]]
 const bars=[],ticks=[];
 for(const e of rows){appendMinuteBar(bars,e);appendTickBar(ticks,e,1);}
 assert.equal(bars.length,1);assert.deepEqual(['open','high','low','close','volume'].map(k=>bars[0][k]),[75,76,74,76,501]);
-assert.deepEqual(ticks.map(b=>b.close),[75,76]);
+assert.deepEqual(ticks.filter(b=>b.close!==null).map(b=>b.close),[75,76]);
+assert.equal(ticks.reduce((sum,b)=>sum+b.volume,0),501);
+assert.equal(ticks.reduce((sum,b)=>sum+b.delta,0),501);
+const mixedTicks=[];for(const e of rows)appendTickBar(mixedTicks,e,10);
+assert.deepEqual(['open','high','low','close','volume','delta'].map(k=>mixedTicks[0][k]),[75,76,74,76,501,501]);
 appendMinuteBar(bars,{...rows[1],s:7,t:start+1,p:74.5});
 assert.equal(bars[0].close,76,'late eligible print must not roll back close');
 const state={symbol:'PCVX',sessionDateET:'2026-10-05',completeFromRTHOpen:true};
@@ -30,3 +34,23 @@ for (const sample of [
   assert.equal(candle[0].low,sample.low);assert.equal(candle[0].high,sample.high);
 }
 console.log('Recorded wick patterns passed: odd-lot sold-last high and average-price low cannot stretch candle range');
+
+// The observed premarket stream is entirely Form T/odd-lot (f=12). It must
+// produce delta bars without inventing a candle price, live or in rewind.
+const premarket=new RewindBuffer({bufferSeconds:30,maxPrintsPerSecond:100});
+const premarketRows=[{z:19,d:-1},{z:80,d:1},{z:.25,d:-1}].map((e,i)=>({...e,s:i+1,t:start+i,r:(start+i)*1000,p:760.65,f:12,c:e.d>0?'ask':'bid'}));
+for(const e of premarketRows)premarket.push(e);
+const source=createRewindSource(premarket);
+for(const tickSize of [1,10,100]){
+ const live=[];for(const e of premarketRows)appendTickBar(live,e,tickSize);
+ const rewind=aggregateTickBars(source,1,3,tickSize);
+ assert.deepEqual(rewind,live);
+ assert.equal(live.reduce((sum,b)=>sum+b.volume,0),99.25);
+ assert.equal(live.reduce((sum,b)=>sum+b.delta,0),60.75);
+ assert.ok(Math.abs(live.reduce((sum,b)=>sum+b.dollarDelta,0)-760.65*60.75)<1e-8);
+ assert.ok(live.every(b=>[b.open,b.high,b.low,b.close].every(p=>p===null)));
+}
+const noVolume=[];appendTickBar(noVolume,{...premarketRows[0],f:11},1);
+assert.equal(noVolume[0].volume,0);assert.equal(noVolume[0].delta,0);
+assert.equal(appendTickBar(noVolume,{...premarketRows[0],f:8},1),null);
+console.log('Premarket and odd-lot delta: shares, notional, tick sizes, live/rewind parity, and candle-price isolation passed');

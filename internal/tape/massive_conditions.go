@@ -14,11 +14,13 @@ const (
 	PriceHighLow
 	TradeVolume
 	RulesPresent
+	PriceLast
 )
 
 func UpdatesOpenClose(flags uint8) bool { return flags == 0 || flags&PriceOpenClose != 0 }
 func UpdatesHighLow(flags uint8) bool   { return flags == 0 || flags&PriceHighLow != 0 }
 func UpdatesVolume(flags uint8) bool    { return flags == 0 || flags&TradeVolume != 0 }
+func UpdatesLastPrice(flags uint8) bool { return UpdatesOpenClose(flags) || flags&PriceLast != 0 }
 
 type ConditionRule struct {
 	ID          int32  `json:"id"`
@@ -57,12 +59,12 @@ func SetMassiveConditions(table ConditionTable) bool {
 	rules := make(map[int32]uint8, len(table.Results))
 	// The glossary defines 0 as Regular Sale; the reference list omits it.
 	// https://massive.com/glossary/trade-conditions
-	rules[0] = RulesPresent | PriceOpenClose | PriceHighLow | TradeVolume
+	rules[0] = RulesPresent | PriceOpenClose | PriceHighLow | TradeVolume | PriceLast
 	for _, c := range table.Results {
 		flags := uint8(RulesPresent)
 		if r := c.UpdateRules.Consolidated; r != nil {
 			if r.OpenClose {
-				flags |= PriceOpenClose
+				flags |= PriceOpenClose | PriceLast
 			}
 			if r.HighLow {
 				flags |= PriceHighLow
@@ -71,19 +73,24 @@ func SetMassiveConditions(table ConditionTable) bool {
 				flags |= TradeVolume
 			}
 		} else {
-			flags |= PriceOpenClose | PriceHighLow | TradeVolume
+			flags |= PriceOpenClose | PriceHighLow | TradeVolume | PriceLast
 		} // indicators, not sale restrictions
+		// Timely extended-hours and odd-lot executions can supply LAST without
+		// becoming consolidated candle prices. Other modifiers still restrict it.
+		if c.ID == 12 || c.ID == 37 {
+			flags |= PriceLast
+		}
 		rules[c.ID] = flags
 	}
 	// A truncated/reference error must never erase the core exclusion policy.
-	if rules[37] != RulesPresent|TradeVolume || rules[2] != RulesPresent|TradeVolume {
+	if rules[37]&^PriceLast != RulesPresent|TradeVolume || rules[2] != RulesPresent|TradeVolume {
 		return false
 	}
 	massiveConditions.Store(rules)
 	return true
 }
 func MassiveTradeFlags(conditions string) uint8 {
-	flags := uint8(RulesPresent | PriceOpenClose | PriceHighLow | TradeVolume)
+	flags := uint8(RulesPresent | PriceOpenClose | PriceHighLow | TradeVolume | PriceLast)
 	rules := massiveConditions.Load().(map[int32]uint8)
 	for _, raw := range strings.Split(conditions, ",") {
 		if strings.TrimSpace(raw) == "" {
