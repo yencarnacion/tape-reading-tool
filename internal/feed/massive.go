@@ -175,13 +175,19 @@ func (f *Massive) handleSizedTrade(value massiveStreamTrade, received time.Time)
 		return
 	}
 	exchangeTime := time.UnixMilli(value.Timestamp)
-	trade := f.store.AddTrade(value.Symbol, exchangeTime, received, value.Price, float64(value.Size))
+	conditions := formatConditionCodes(value.Conditions)
+	flags := tape.MassiveIntradayFlags(conditions, exchangeTime)
+	if value.Size <= 0 {
+		flags = tape.RulesPresent
+	}
+	trade := f.store.AddTradeWithRules(value.Symbol, exchangeTime, received, value.Price, value.Size, flags, conditions)
 	if f.recorder != nil {
 		f.recorder.RecordTrade(storage.TradeRecord{
 			Symbol: value.Symbol, EventUS: trade.ReceivedUS, ReceivedUS: trade.ReceivedUS,
+			MarketTimeUS:   exchangeTime.UnixMicro(),
 			ExchangeTimeMS: trade.ExchangeTimeMS, Price: trade.Price, Size: trade.Size,
 			Class: trade.Class, Side: trade.Side, Bid: trade.Bid, Ask: trade.Ask,
-			Exchange: strconv.FormatInt(int64(value.Exchange), 10), Conditions: formatConditionCodes(value.Conditions),
+			Exchange: strconv.FormatInt(int64(value.Exchange), 10), Conditions: conditions,
 			Source: "live", Provider: "massive",
 		})
 	}

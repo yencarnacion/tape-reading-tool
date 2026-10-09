@@ -35,8 +35,9 @@ for (const sample of [
 }
 console.log('Recorded wick patterns passed: odd-lot sold-last high and average-price low cannot stretch candle range');
 
-// The observed premarket stream is entirely Form T/odd-lot (f=12). It must
-// produce delta bars without inventing a candle price, live or in rewind.
+// Volume-only odd-lot and special reports must still produce delta bars
+// without inventing a candle price, live or in rewind. Timely round-lot Form T
+// executions now carry OHLC flags during extended hours (tested end to end).
 const premarket=new RewindBuffer({bufferSeconds:30,maxPrintsPerSecond:100});
 const premarketRows=[{z:19,d:-1},{z:80,d:1},{z:.25,d:-1}].map((e,i)=>({...e,s:i+1,t:start+i,r:(start+i)*1000,p:760.65,f:12,c:e.d>0?'ask':'bid'}));
 for(const e of premarketRows)premarket.push(e);

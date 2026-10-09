@@ -141,6 +141,15 @@ Connect to the Massive live stocks feed instead:
 
 Both live modes continuously record trades and quotes into `data/tape.db`. Recording uses a large non-blocking queue, WAL mode, and batched commits so SQLite disk I/O does not run inside the feed callback. The terminal heartbeat reports dropped recording events if the queue is ever saturated.
 
+Massive intraday candles continue from the initial history load using timely Form T trades during 04:00–09:30 and 16:00–20:00 Eastern. Eligibility follows the trade's market timestamp, including daylight-saving changes, so delayed delivery and replay use the same rules. Other sale conditions still apply: odd lots, average-price reports, and out-of-sequence extended-hours reports cannot establish candle prices. Regular-hours eligibility remains unchanged. Existing recordings are re-evaluated when read; no redownload is needed.
+
+The pre-market regression check exercises a local raw-trade gateway, the production server, and a headless browser, including history loading, consecutive new candles, the RTH transition, and after-hours updates:
+
+```bash
+go build -o /tmp/tape-reading-tool ./cmd/tape-reading-tool
+TAPE_BINARY=/tmp/tape-reading-tool CHROME=/path/to/chrome node scripts/premarket-chart-check.mjs
+```
+
 Recorded trades keep the IBKR `tickAttribLast` attributes (`pastLimit`, `unreported`) along with the reporting exchange and special-conditions strings from `tickByTickAllLast`, plus the browser-visible tape sequence. Whether a print was a sweep, an ISO, or derivatively priced changes how a spike reads and is not reconstructable afterwards.
 
 Schema version 3 intentionally has no migration path. Delete `data/tape.db` before starting this version if a database from an earlier version exists. The program reports an error and never silently deletes it.

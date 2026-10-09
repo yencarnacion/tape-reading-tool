@@ -156,7 +156,7 @@ func (f *Gateway) event(symbol string, e marketgateway.Event) {
 		return
 	}
 	conditions := formatConditionCodes(t.Conditions)
-	flags := tape.MassiveTradeFlags(conditions)
+	flags := tape.MassiveIntradayFlags(conditions, time.UnixMilli(e.EventMS))
 	if t.Size <= 0 {
 		flags = tape.RulesPresent
 	}

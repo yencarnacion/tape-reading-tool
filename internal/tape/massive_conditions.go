@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 // A zero flag byte is the legacy/IBKR policy. Massive always sets RulesPresent.
@@ -44,8 +45,14 @@ type ConditionTable struct {
 //go:embed massive_conditions.json
 var defaultConditionJSON []byte
 var massiveConditions atomic.Value
+var massiveMarketLocation *time.Location
 
 func init() {
+	var err error
+	massiveMarketLocation, err = time.LoadLocation("America/New_York")
+	if err != nil {
+		panic(err)
+	}
 	var v ConditionTable
 	if json.Unmarshal(defaultConditionJSON, &v) != nil {
 		panic("invalid condition table")
@@ -90,6 +97,22 @@ func SetMassiveConditions(table ConditionTable) bool {
 	return true
 }
 func MassiveTradeFlags(conditions string) uint8 {
+	return massiveTradeFlags(conditions, false)
+}
+
+// MassiveIntradayFlags distinguishes extended-session candles from the
+// consolidated regular-session statistics in the reference condition table.
+// Timely Form T executions establish intraday OHLC outside RTH; every other
+// modifier still restricts the trade (in particular odd lots and late reports).
+// Use market time, never receipt time, so delayed delivery and replay agree.
+func MassiveIntradayFlags(conditions string, marketTime time.Time) uint8 {
+	et := marketTime.In(massiveMarketLocation)
+	minute := et.Hour()*60 + et.Minute()
+	extended := marketTime.UnixMilli() > 0 && ((minute >= 240 && minute < 570) || (minute >= 960 && minute < 1200))
+	return massiveTradeFlags(conditions, extended)
+}
+
+func massiveTradeFlags(conditions string, extended bool) uint8 {
 	flags := uint8(RulesPresent | PriceOpenClose | PriceHighLow | TradeVolume | PriceLast)
 	rules := massiveConditions.Load().(map[int32]uint8)
 	for _, raw := range strings.Split(conditions, ",") {
@@ -101,6 +124,9 @@ func MassiveTradeFlags(conditions string) uint8 {
 		if err != nil || !known {
 			return RulesPresent
 		} // unknown must not create a spike
+		if extended && code == 12 {
+			r |= PriceOpenClose | PriceHighLow
+		}
 		flags &= r
 	}
 	return flags

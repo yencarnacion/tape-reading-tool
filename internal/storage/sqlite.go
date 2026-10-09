@@ -425,7 +425,7 @@ func (d *Database) TradesByRingSeq(ctx context.Context, symbol string, fromSeq, 
 			&trade.Size, &trade.Class, &trade.Side, &trade.Bid, &trade.Ask, &tradeProvider, &trade.Conditions); err != nil {
 			return nil, err
 		}
-		trade.Flags = recordedFlags(tradeProvider, trade.Conditions, trade.Price, trade.Size)
+		trade.Flags = recordedFlags(tradeProvider, trade.Conditions, trade.Price, trade.Size, trade.ExchangeTimeMS*1000)
 		trades = append(trades, trade)
 	}
 	return trades, rows.Err()
@@ -949,7 +949,7 @@ func (d *Database) MinuteBars(ctx context.Context, symbol, source, provider stri
 			return nil, err
 		}
 		minuteUS := eventUS - eventUS%int64(time.Minute/time.Microsecond)
-		flags := recordedFlags(tradeProvider, conditions, price, size)
+		flags := recordedFlags(tradeProvider, conditions, price, size, eventUS)
 		bar := tradeBars[minuteUS]
 		bar.TimeUS = minuteUS
 		if tape.UpdatesOpenClose(flags) {
@@ -1076,7 +1076,7 @@ func (d *Database) EligibleSessionTradeStats(ctx context.Context, symbol, source
 		if err := rows.Scan(&marketUS, &price, &size, &tradeProvider, &conditions, &availableUS); err != nil {
 			return SessionTradeStats{}, err
 		}
-		flags := recordedFlags(tradeProvider, conditions, price, size)
+		flags := recordedFlags(tradeProvider, conditions, price, size, marketUS)
 		oc, hl := tape.UpdatesOpenClose(flags), tape.UpdatesHighLow(flags)
 		if !oc && !hl {
 			continue
@@ -1106,26 +1106,26 @@ func ScanEvent(rows *sql.Rows) (Event, error) {
 	err := rows.Scan(&event.ID, &event.Kind, &event.Source, &event.Provider, &event.EventUS, &event.MarketTimeUS, &event.SequenceID, &event.ReceivedUS, &event.ExchangeTimeMS, &event.Price, &event.Size, &event.Class, &event.Side, &event.Bid, &event.Ask, &event.BidSize, &event.AskSize, &event.ChartEligible, &event.Conditions, &excluded)
 
 	if event.Kind == "trade" && event.Provider == "massive" {
-		event.Flags = recordedFlags(event.Provider, event.Conditions, event.Price, event.Size)
+		if event.ExchangeTimeMS > 0 {
+			event.MarketTimeUS = event.ExchangeTimeMS * 1000
+		}
+		event.Flags = recordedFlags(event.Provider, event.Conditions, event.Price, event.Size, event.MarketTimeUS)
 		if excluded {
 			event.Flags = tape.RulesPresent
 		}
 		event.ChartEligible = tape.UpdatesOpenClose(event.Flags)
-		if event.ExchangeTimeMS > 0 {
-			event.MarketTimeUS = event.ExchangeTimeMS * 1000
-		}
 	}
 	return event, err
 }
 
-func recordedFlags(provider, conditions string, price, size float64) uint8 {
+func recordedFlags(provider, conditions string, price, size float64, marketUS int64) uint8 {
 	if provider != "massive" {
 		return 0
 	}
 	if ok, _ := tape.ChartEligibility(tape.TradeEligibilityInput{Price: price, Size: size}); !ok {
 		return tape.RulesPresent
 	}
-	return tape.MassiveTradeFlags(conditions)
+	return tape.MassiveIntradayFlags(conditions, time.UnixMicro(marketUS))
 }
 
 func normalizeTradeRecord(r *TradeRecord) {
@@ -1145,7 +1145,7 @@ func normalizeTradeRecord(r *TradeRecord) {
 		r.FeedType = tape.FeedLast
 	}
 	if r.Provider == "massive" && !r.Unreported && (r.ChartExclusionReason == "" || r.ChartExclusionReason == "massive_sale_condition") {
-		flags := recordedFlags(r.Provider, r.Conditions, r.Price, r.Size)
+		flags := recordedFlags(r.Provider, r.Conditions, r.Price, r.Size, r.MarketTimeUS)
 		r.ChartEligible = tape.UpdatesOpenClose(flags)
 		if !r.ChartEligible {
 			r.ChartExclusionReason = "massive_sale_condition"
