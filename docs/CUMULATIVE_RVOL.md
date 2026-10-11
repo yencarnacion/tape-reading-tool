@@ -32,8 +32,9 @@ For a completed minute ending at time `t` in New York:
   than five represented sessions shows an insufficient-history state.
 - Compare the same ET minute, including across daylight-saving changes.
   Empty intervals within a successfully fetched range have zero added volume;
-  the cumulative sum carries forward. Shortened sessions carry their final
-  cumulative total through the rest of the fixed RTH window.
+  the cumulative sum carries forward. This experiment uses the fixed
+  09:30–16:00 window on every session date; it does not detect early exchange
+  closes, so that window can include post-close prints on half-days.
 - Both numerator and denominator use the **selected provider's historical
   one-minute aggregates**. IBKR live prints are not added to IBKR history;
   Massive trades are not combined with an IBKR baseline. Providers can report
