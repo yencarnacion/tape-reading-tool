@@ -164,6 +164,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	mux.HandleFunc("/api/historical/coverage/check", s.handleCoverageCheck)
 	mux.HandleFunc("/api/render", s.handleRender)
 	mux.HandleFunc("/api/rvol-history", s.handleRVOLHistory)
+	mux.HandleFunc("/api/cumulative-rvol", s.handleCumulativeRVOL)
 	mux.HandleFunc("/api/chart-history", s.handleChartHistory)
 	mux.HandleFunc("/api/daily-history", s.handleDailyHistory)
 	mux.HandleFunc("/api/panel-data/daily-bars", s.handlePanelDailyBars)

@@ -63,6 +63,13 @@ func (f *IBKR) RVOLMinuteBars(ctx context.Context, symbol string, endExclusive t
 	return f.historicalBars(ctx, symbol, endExclusive.UTC().Truncate(time.Minute), limit, "7 D", "1 min", false)
 }
 
+// SessionMinuteBars bounds the optional cumulative RVOL refresh to one day.
+// Its numerator and baseline both use TRADES aggregates, never a mixture of
+// filtered historical volume and unfiltered live tick volume.
+func (f *IBKR) SessionMinuteBars(ctx context.Context, symbol string, end time.Time, limit int) ([]storage.MinuteBar, error) {
+	return f.historicalBars(ctx, symbol, end, limit, "1 D", "1 min", false)
+}
+
 // DailyBars returns completed regular-session daily candles for longer-term
 // context without creating a streaming subscription.
 func (f *IBKR) DailyBars(ctx context.Context, symbol string, endExclusive time.Time, limit int) ([]storage.MinuteBar, error) {

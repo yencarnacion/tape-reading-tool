@@ -29,6 +29,16 @@ _Deterministic IREN replay for July 22, 2026, from 09:30–09:32 ET with the opt
 
 The program is read-only. It does not place or manage orders.
 
+The one-minute chart also has an optional **5D RVOL** experiment. It starts off;
+click **5D RVOL OFF** to show a compact cumulative-volume histogram below the
+existing volume pane, with a **1×** reference and the latest multiple on the
+right. **VOL ON/OFF** independently controls the original volume bars, candle
+volume, and day total. Both choices persist under **CONTROLS → DISPLAY**.
+Turning RVOL off restores the original candle/volume layout and stops its
+history requests. The existing **RVOL PACE** readout stays independent.
+See [5-day cumulative RVOL](docs/CUMULATIVE_RVOL.md) for the session definition,
+IBKR/Massive support, history requirements, and verification.
+
 ## Analytics panels
 
 The expanded ADR section includes options-volatility context through an optional local options gateway: ATM IV/change, observed IV peak, frozen implied-move usage, RV/IV, skew, classified flow changes, and visible divergence checks. It borrows space from the lower panel while preserving a compact Kronos view. No additional Massive key is used by this feature. See [Options volatility](docs/OPTIONS_VOLATILITY.md) for setup, calculation definitions, data-quality gates, and the local preview.

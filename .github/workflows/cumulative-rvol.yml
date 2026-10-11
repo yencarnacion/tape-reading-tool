@@ -1,0 +1,57 @@
+name: Cumulative RVOL verification
+on:
+  push:
+    branches: [feature/cumulative-rvol-5d]
+  pull_request:
+    paths:
+      - 'internal/server/**'
+      - 'internal/feed/ibkr_minute_bars.go'
+      - 'internal/storage/sqlite.go'
+      - 'scripts/cumulative-rvol*'
+      - '.github/workflows/cumulative-rvol.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: cumulative-rvol-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Go race suite and vet
+        run: |
+          go test -race ./...
+          go vet ./...
+          go build -o /tmp/tape-reading-tool ./cmd/tape-reading-tool
+      - name: Study and chart regression checks
+        run: |
+          node scripts/cumulative-rvol-check.mjs
+          node scripts/chart-history-check.mjs
+          node scripts/rewind-check.mjs
+          node scripts/massive-chart-check.mjs
+          node --check internal/server/web/app.js
+      - name: Full-page chart verification
+        env:
+          CHROME: google-chrome
+          RVOL_SCREENSHOT_DIR: /tmp/cumulative-rvol-ui
+          TAPE_BINARY: /tmp/tape-reading-tool
+        run: |
+          node scripts/cumulative-rvol-browser-check.mjs
+          node scripts/premarket-chart-check.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cumulative-rvol-layouts
+          path: /tmp/cumulative-rvol-ui/
+          retention-days: 7

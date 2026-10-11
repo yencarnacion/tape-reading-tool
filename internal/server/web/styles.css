@@ -203,6 +203,14 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .market-chart-tabs { position: absolute; z-index: 5; top: 5px; left: 8px; display: flex; gap: 2px; }
 .market-chart-tabs button { min-height: 22px; height: 22px; padding: 0 8px; border-radius: 2px; color: var(--muted); background: rgba(14,18,23,.94); font: 850 9px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .market-chart-tabs button.active { color: #07110e; border-color: var(--yellow); background: var(--yellow); }
+.market-chart-tabs button[hidden] { display: none; }
+#cumulativeRVOLButton.active { color: #160e20; border-color: var(--rvol-elevated); background: var(--rvol-elevated); }
+.replay-market-panel.rvol-compact-price .day-context { display: none; }
+.study-screen-reader { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@container (max-width: 460px) {
+  .market-chart-tabs { gap: 1px; left: 5px; }
+  .market-chart-tabs button { padding-inline: 4px; font-size: 8px; }
+}
 .replay-chart-legend { position: absolute; z-index: 1; top: 31px; left: 8px; display: flex; flex-wrap: wrap; gap: 5px 12px; padding: 3px 5px; color: var(--muted); background: rgba(12, 15, 19, .82); font: 800 10px/14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; pointer-events: none; }
 .replay-chart-legend strong { color: #cbd2da; }
 .legend-vwap { color: #ffd447; }

@@ -76,7 +76,10 @@
             <button id="minuteChartTab" class="active" type="button" aria-pressed="true">1 MIN</button>
             <button id="dailyChartTab" type="button" aria-pressed="false">90 DAY</button>
             <button id="trendlinesButton" class="active" type="button" aria-label="Automatic trendlines" aria-pressed="true">TRENDLINES ON</button>
+            <button id="volumeButton" class="active" type="button" aria-label="One-minute volume pane" aria-pressed="true" title="Show the existing volume bars, candle volume, and day volume">VOL ON</button>
+            <button id="cumulativeRVOLButton" type="button" aria-label="Experimental 5-day cumulative RVOL pane" aria-pressed="false">5D RVOL OFF</button>
           </nav>
+          <output id="cumulativeRVOLStatus" class="study-screen-reader" aria-live="polite"></output>
           <div class="replay-chart-legend" aria-hidden="true">
             <span class="legend-vwap">VWAP 09:30</span>
             <span class="legend-sma9">SMA 9</span>
@@ -193,6 +196,9 @@
         <label class="field-row"><span>Visible bars</span><input id="visibleBars" type="number" min="20" max="4000" step="10"></label>
         <label class="field-row"><span>Tape rows</span><input id="tapeRowCount" type="number" min="10" max="300" step="5"></label>
         <label class="switch-row"><span>Chart</span><input id="showChart" type="checkbox"><i></i></label>
+        <label class="switch-row"><span>1-minute volume pane</span><input id="showMinuteVolume" type="checkbox"><i></i></label>
+        <label class="switch-row"><span>5-day cumulative RVOL (experimental)</span><input id="showCumulativeRVOL" type="checkbox"><i></i></label>
+        <p class="control-note">RVOL stays below price and volume. Compares completed 09:30–16:00 ET minutes with the same time across 5 prior sessions from the selected provider. Updates each minute; needs historical data and the recording database.</p>
         <label class="switch-row"><span>Time &amp; sales</span><input id="showTape" type="checkbox"><i></i></label>
         <label class="switch-row"><span>Trade size</span><input id="showSize" type="checkbox"><i></i></label>
       </section>

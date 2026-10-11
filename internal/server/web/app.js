@@ -14,6 +14,7 @@ import { AutoTrendlinesController } from './auto-trendlines-controller.js';
 import { ChartHistoryLoader, mergeChartHistory } from './chart-history.js';
 import { createLowerPanelHost, lowerPanelSettings, DEFAULT_LOWER_PANEL } from './lower-panel-slot.js';
 import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js';
+import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulative-rvol.js';
 
 (() => {
   'use strict';
@@ -35,6 +36,8 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     dayContextTitle: $('dayContextTitle'), dayContextDaily: $('dayContextDaily'), dayContextIntraday: $('dayContextIntraday'),
     replayMarketPanel: $('replayMarketPanel'), replayChart: $('replayChartCanvas'), replayChartEmpty: $('replayChartEmpty'),
     dailyChart: $('dailyChartCanvas'), dailyChartEmpty: $('dailyChartEmpty'), minuteChartTab: $('minuteChartTab'), dailyChartTab: $('dailyChartTab'),
+    volumeButton: $('volumeButton'), cumulativeRVOLButton: $('cumulativeRVOLButton'),
+    showMinuteVolume: $('showMinuteVolume'), showCumulativeRVOL: $('showCumulativeRVOL'), cumulativeRVOLStatus: $('cumulativeRVOLStatus'),
     tapePanel: $('tapePanel'), tapeRows: $('tapeRows'), sizeHeading: $('sizeHeading'),
     tickerForm: $('tickerForm'), tickerInput: $('tickerInput'), historySelect: $('historySelect'), externalReplayBadge: $('externalReplayBadge'),
     historyBack: $('historyBack'), historyForward: $('historyForward'), tickSelect: $('tickSelect'),
@@ -95,6 +98,8 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     redraw: () => { state.dirtyReplayChart = true; }
   });
   window.__tapeReadingAutoTrendlines = () => autoTrendlines.debug();
+  const cumulativeRVOL = new CumulativeRVOL({ changed: () => { state.dirtyReplayChart = true; } });
+  window.addEventListener('pagehide', () => cumulativeRVOL.reset());
   const chartHistory = new ChartHistoryLoader({ apply: (payload) => {
     const boundary = Math.min(Number(payload.through_us), serverNowUS(performance.now()));
     state.minuteBars = mergeChartHistory(state.minuteBars, payload.bars, boundary);
@@ -109,7 +114,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
   } });
   window.addEventListener('pagehide', () => dailyMapHistory.reset());
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) chartHistory.reset();
+    if (document.hidden) { chartHistory.reset(); cumulativeRVOL.reset(); }
     else state.dirtyReplayChart = true;
   });
   const DAY_MAP_CORNERS = ['', 'day-map-lower-left', 'day-map-lower-right', 'day-map-upper-right'];
@@ -223,6 +228,8 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
       showSize: display.show_size !== false,
       showChart: display.show_chart !== false,
       showTape: display.show_tape !== false,
+      showMinuteVolume: true,
+      showCumulativeRVOL: false,
       audio: {
         profileVersion: SOUND_PROFILE_VERSION,
         enabled: audioConfig.enabled !== false,
@@ -257,6 +264,8 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
       }
     }
     result.audio.profileVersion = SOUND_PROFILE_VERSION;
+    result.showMinuteVolume = result.showMinuteVolume !== false;
+    result.showCumulativeRVOL = result.showCumulativeRVOL === true;
     result.tickSize = clampInt(result.tickSize, 1, 100000, defaults.tickSize);
     result.customTicks = clampInt(result.customTicks, 1, 100000, result.tickSize);
     result.visibleBars = clampInt(result.visibleBars, 20, 4000, defaults.visibleBars);
@@ -481,6 +490,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
       state.dirtyTape = true;
       setConnection(state.status);
       resetRVOLWarmup();
+      cumulativeRVOL.reset();
       if (symbolChanged) selectDayMap('daily');
       ensureDailyMapHistory();
       chartHistory.reset();
@@ -536,7 +546,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
           updateReplayControls(state.replay);
         }
         setConnection(message.status);
-        if (recovered) { resetRVOLWarmup(); state.dailyHistoryRetryAt = 0; dailyMapHistory.reset(); }
+        if (recovered) { resetRVOLWarmup(); cumulativeRVOL.reset(); state.dailyHistoryRetryAt = 0; dailyMapHistory.reset(); }
         ensureRVOLWarmup();
         // Status heartbeats repeat an unchanged mode several times a minute.
         // The panel lifecycle already receives the authoritative clock through
@@ -837,6 +847,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     elements.dailyChartTab.setAttribute('aria-pressed', String(daily));
     document.querySelector('.legend-vwap').hidden = daily;
     document.querySelector('.legend-volume').hidden = !daily;
+    syncStudyControls();
     if (daily) {
       state.dirtyDailyChart = true;
       void loadDailyHistory();
@@ -1481,13 +1492,12 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     const rightAxis = state.xtraEnabled ? (width < 500 ? 142 : 154) : standardRightAxis;
     const left = 7;
     const right = width - rightAxis;
-    const top = 25;
-    const axisBottom = 20;
-    const paneGap = 8;
-    const volumeHeight = Math.max(45, Math.min(92, (height - top - axisBottom) * 0.22));
-    const volumeBottom = height - axisBottom;
-    const volumeTop = volumeBottom - volumeHeight;
-    const priceBottom = volumeTop - paneGap;
+    const { top, volumeHeight, volumeBottom, volumeTop, priceBottom, rvolTop, rvolBottom } =
+      minutePaneLayout(height, state.settings.showMinuteVolume, state.settings.showCumulativeRVOL);
+    // The fixed-height inset must not spill out of a short price pane onto
+    // either volume study. Normal/default-off layouts retain the existing map.
+    elements.replayMarketPanel.classList.toggle('rvol-compact-price',
+      state.settings.showCumulativeRVOL && priceBottom < 260);
     elements.dayContext.style.setProperty('--day-map-bottom', `${height - priceBottom + 8}px`);
     elements.dayContext.style.setProperty('--day-map-right', `${rightAxis + 8}px`);
     const rightGapBars = Math.max(5, Math.min(100, Math.round(Number(state.replayConfig?.chart_right_gap_bars) || 5)));
@@ -1584,48 +1594,56 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
 
     drawTradingPositionLevels(replayContext, priceY, minimum, maximum, left, right, top, priceBottom, '#0c0f13');
 
-    replayContext.strokeStyle = '#3a424c';
-    replayContext.beginPath(); replayContext.moveTo(left, volumeTop); replayContext.lineTo(width, volumeTop); replayContext.stroke();
-    const volumeUsable = volumeHeight - 15;
-    visible.forEach((bar, index) => {
-      const heightValue = maxVolume ? bar.volume / maxVolume * volumeUsable : 0;
-      replayContext.fillStyle = bar.close >= bar.open ? 'rgba(52,199,217,.68)' : 'rgba(255,77,94,.68)';
-      replayContext.fillRect(xAt(index) - bodyWidth / 2, volumeBottom - heightValue, bodyWidth, heightValue);
-    });
-
     const last = visible[visible.length - 1];
-    const currentVolume = formatCandleVolume(last.volume);
-    const dayVolume = formatCandleVolume(volumeSinceFourAM(state.minuteBars));
-    replayContext.textAlign = 'left';
-    replayContext.textBaseline = 'top';
-    replayContext.font = '800 24px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-    const currentVolumeWidth = replayContext.measureText(currentVolume).width;
-    const dayVolumeWidth = replayContext.measureText(dayVolume).width;
-    const dayVolumeLeft = left + currentVolumeWidth + 20;
-    // A narrow pane with a wide current candle leaves no room beside it. Drop
-    // the day total rather than run it under the price axis.
-    const showDayVolume = dayVolumeLeft + dayVolumeWidth <= right;
-    replayContext.fillStyle = 'rgba(12,15,19,.88)';
-    replayContext.fillRect(left, volumeTop + 14,
-      showDayVolume ? currentVolumeWidth + dayVolumeWidth + 30 : currentVolumeWidth + 8, 29);
-    replayContext.fillStyle = '#f2f5f7';
-    replayContext.fillText(currentVolume, left + 2, volumeTop + 13);
-    if (showDayVolume) {
-      replayContext.fillStyle = '#34c7d9';
-      replayContext.fillText(dayVolume, dayVolumeLeft, volumeTop + 13);
+    if (state.settings.showMinuteVolume) {
+      replayContext.strokeStyle = '#3a424c';
+      replayContext.beginPath(); replayContext.moveTo(left, volumeTop); replayContext.lineTo(width, volumeTop); replayContext.stroke();
+      const volumeUsable = volumeHeight - 15;
+      visible.forEach((bar, index) => {
+        const heightValue = maxVolume ? bar.volume / maxVolume * volumeUsable : 0;
+        replayContext.fillStyle = bar.close >= bar.open ? 'rgba(52,199,217,.68)' : 'rgba(255,77,94,.68)';
+        replayContext.fillRect(xAt(index) - bodyWidth / 2, volumeBottom - heightValue, bodyWidth, heightValue);
+      });
+
+      const currentVolume = formatCandleVolume(last.volume);
+      const dayVolume = formatCandleVolume(volumeSinceFourAM(state.minuteBars));
+      replayContext.textAlign = 'left';
+      replayContext.textBaseline = 'top';
+      replayContext.font = '800 24px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+      const currentVolumeWidth = replayContext.measureText(currentVolume).width;
+      const dayVolumeWidth = replayContext.measureText(dayVolume).width;
+      const dayVolumeLeft = left + currentVolumeWidth + 20;
+      // A narrow pane with a wide current candle leaves no room beside it. Drop
+      // the day total rather than run it under the price axis.
+      const showDayVolume = dayVolumeLeft + dayVolumeWidth <= right;
+      replayContext.fillStyle = 'rgba(12,15,19,.88)';
+      replayContext.fillRect(left, volumeTop + 14,
+        showDayVolume ? currentVolumeWidth + dayVolumeWidth + 30 : currentVolumeWidth + 8, 29);
+      replayContext.fillStyle = '#f2f5f7';
+      replayContext.fillText(currentVolume, left + 2, volumeTop + 13);
+      if (showDayVolume) {
+        replayContext.fillStyle = '#34c7d9';
+        replayContext.fillText(dayVolume, dayVolumeLeft, volumeTop + 13);
+      }
+      replayContext.font = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+      replayContext.fillStyle = '#8d96a2';
+      replayContext.fillText('VOLUME', left + 2, volumeTop + 3);
+      replayContext.fillText(formatSize(maxVolume), right + 5, volumeTop + 7);
+      if (showDayVolume) {
+        const dayVolumeLabel = ['DAY VOL · 04:00 ET', 'DAY VOL 04:00', 'DAY VOL']
+          .find((text) => dayVolumeLeft + replayContext.measureText(text).width <= right);
+        replayContext.fillStyle = '#34c7d9';
+        replayContext.fillText(dayVolumeLabel || '', dayVolumeLeft, volumeTop + 3);
+      }
     }
-    replayContext.font = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-    replayContext.fillStyle = '#8d96a2';
-    replayContext.fillText('VOLUME', left + 2, volumeTop + 3);
-    replayContext.fillText(formatSize(maxVolume), right + 5, volumeTop + 7);
-    if (showDayVolume) {
-      const dayVolumeLabel = ['DAY VOL · 04:00 ET', 'DAY VOL 04:00', 'DAY VOL']
-        .find((text) => dayVolumeLeft + replayContext.measureText(text).width <= right);
-      replayContext.fillStyle = '#34c7d9';
-      replayContext.fillText(dayVolumeLabel || '', dayVolumeLeft, volumeTop + 3);
+    if (state.settings.showCumulativeRVOL) {
+      drawCumulativeRVOL(replayContext, cumulativeRVOL, {
+        visible, xAt, bodyWidth, left, right, width, top: rvolTop, bottom: rvolBottom
+      });
     }
 
     const labelIndexes = visible.length < 3 ? [0] : [0, Math.floor((visible.length - 1) / 2), visible.length - 1];
+    replayContext.font = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     replayContext.fillStyle = '#78818c';
     replayContext.textBaseline = 'bottom';
     labelIndexes.forEach((index, labelIndex) => {
@@ -2075,6 +2093,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     if (!state.settings) return;
     const { showSize } = state.settings;
     applyWorkspaceClasses();
+    syncStudyControls();
     elements.replayMarketPanel.hidden = !paneSlotReserved();
     applyRewindSlot();
     elements.tapePanel.classList.toggle('hide-size', !showSize);
@@ -2095,6 +2114,9 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     elements.showChart.checked = settings.showChart;
     elements.showTape.checked = settings.showTape;
     elements.showSize.checked = settings.showSize;
+    elements.showMinuteVolume.checked = settings.showMinuteVolume;
+    elements.showCumulativeRVOL.checked = settings.showCumulativeRVOL;
+    syncStudyControls();
     elements.masterVolume.value = settings.audio.masterVolume;
     elements.tapeRateEnabled.checked = settings.audio.tapeRateEnabled;
     elements.tapeRateVolume.value = settings.audio.tapeRateVolume;
@@ -2140,6 +2162,14 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
   }
 
   function bindControls() {
+    for (const [button, key] of [[elements.volumeButton, 'showMinuteVolume'], [elements.cumulativeRVOLButton, 'showCumulativeRVOL']]) {
+      button.addEventListener('click', () => {
+        if (!state.settings) return;
+        state.settings[key] = !state.settings[key];
+        syncControlValues();
+        commitSettings(false);
+      });
+    }
     const moveDayMap = (event) => {
       if (event.target.closest('.day-context-modes')) return;
       elements.dayContext.classList.remove(...DAY_MAP_CORNERS.filter(Boolean));
@@ -2263,7 +2293,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
       state.settings.tapeRows = clampInt(elements.tapeRowCount.value, 10, 300, 90);
       commitSettings(false);
     });
-    for (const [element, key] of [[elements.showChart, 'showChart'], [elements.showTape, 'showTape'], [elements.showSize, 'showSize']]) {
+    for (const [element, key] of [[elements.showChart, 'showChart'], [elements.showTape, 'showTape'], [elements.showSize, 'showSize'], [elements.showMinuteVolume, 'showMinuteVolume'], [elements.showCumulativeRVOL, 'showCumulativeRVOL']]) {
       element.addEventListener('change', () => { state.settings[key] = element.checked; commitSettings(false); });
     }
     elements.tapeRateEnabled.addEventListener('change', async () => {
@@ -2864,6 +2894,32 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
   }
 
   let lastPaintMS = 0;
+  function syncStudyControls() {
+    if (!state.settings) return;
+    for (const [button, key, label] of [[elements.volumeButton, 'showMinuteVolume', 'VOL'], [elements.cumulativeRVOLButton, 'showCumulativeRVOL', '5D RVOL']]) {
+      const enabled = state.settings[key];
+      button.classList.toggle('active', enabled);
+      button.setAttribute('aria-pressed', String(enabled));
+      button.textContent = `${label} ${enabled ? 'ON' : 'OFF'}`;
+      button.hidden = state.marketChartView !== 'minute';
+    }
+  }
+
+  function syncCumulativeRVOL(now) {
+    const enabled = Boolean(state.settings?.showCumulativeRVOL && state.settings.showChart &&
+      state.marketChartEnabled && state.marketChartView === 'minute' && !state.rewind.active && !state.pendingReplayReset && !document.hidden);
+    cumulativeRVOL.sync({ enabled, symbol: state.symbol,
+      identity: `${state.status.mode}|${state.streamGeneration || 0}|${state.replay?.generation || 0}|${state.status.epoch || 0}`,
+      clockUS: serverNowUS(now) });
+    const result = cumulativeRVOL.result;
+    const latest = result?.points?.at(-1)?.ratio;
+    const text = !enabled ? '' : result?.status === 'ready' && Number.isFinite(latest)
+      ? `5-day cumulative RVOL ${latest.toFixed(2)} times, through ${formatTime(result.through_us / 1000).slice(0, 5)} ET. Five prior sessions: ${result.baseline_sessions.join(', ')}.`
+      : `5-day cumulative RVOL: ${result?.message || 'Loading history'}`;
+    if (elements.cumulativeRVOLStatus.textContent !== text) elements.cumulativeRVOLStatus.textContent = text;
+    elements.cumulativeRVOLButton.title = text || 'Experimental 5-day cumulative RVOL, in its own pane. Completed RTH minutes; five prior sessions from the selected provider.';
+  }
+
   function animationLoop(now) {
     // Coalesce paint work under a dense feed; ingestion still processes every
     // report. Thirty frames per second keeps candles responsive without doing
@@ -2888,6 +2944,7 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
     if (state.dirtyDailyChart && state.marketChartView === 'daily' && state.settings?.showChart) drawDailyChart();
     if (state.dirtyTape && state.settings?.showTape) renderTape();
     if (now - state.lastMetricUpdate > 100) {
+      syncCumulativeRVOL(now);
       updateLiveMetrics(now);
       state.lastMetricUpdate = now;
     }

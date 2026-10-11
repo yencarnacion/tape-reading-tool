@@ -849,6 +849,34 @@ func (d *Database) RecentCachedMinuteBars(ctx context.Context, symbol, provider 
 	return bars, rows.Err()
 }
 
+// CachedMinuteBars reads only provider aggregates in [startUS, endUS). RVOL
+// must not substitute tick-derived volume for either side of its comparison.
+func (d *Database) CachedMinuteBars(ctx context.Context, symbol, provider string, startUS, endUS int64) ([]MinuteBar, error) {
+	resolved, err := resolveProvider(provider)
+	if err != nil {
+		return nil, err
+	}
+	if startUS <= 0 || endUS <= startUS || endUS-startUS > int64(35*24*time.Hour/time.Microsecond) {
+		return nil, fmt.Errorf("invalid aggregate range")
+	}
+	rows, err := d.db.QueryContext(ctx, `SELECT minute_us,open,high,low,close,volume,dollar_volume
+	 FROM minute_bars WHERE symbol=? AND provider=? AND source='historical' AND minute_us>=? AND minute_us<? ORDER BY minute_us`,
+		tape.NormalizeSymbol(symbol), resolved, startUS, endUS)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	bars := make([]MinuteBar, 0)
+	for rows.Next() {
+		var bar MinuteBar
+		if err := rows.Scan(&bar.TimeUS, &bar.Open, &bar.High, &bar.Low, &bar.Close, &bar.Volume, &bar.DollarVolume); err != nil {
+			return nil, err
+		}
+		bars = append(bars, bar)
+	}
+	return bars, rows.Err()
+}
+
 // coveredMinute answers the per-minute precedence question from one merged
 // interval list instead of one query per minute, which keeps a full session
 // chart to a single bounded coverage read.
