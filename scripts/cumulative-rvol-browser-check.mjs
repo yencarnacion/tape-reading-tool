@@ -10,6 +10,7 @@ const out = process.env.RVOL_SCREENSHOT_DIR || '/tmp/cumulative-rvol-ui';
 await mkdir(out,{recursive:true});
 const open = Date.parse('2026-10-09T09:30:00-04:00');
 const clock = open + 45*60000 + 10000;
+let dailyReady = true;
 let mode = 'live', symbol = 'AAPL', generation = 1, status = 'ready', requests = 0, hold = false;
 const peers = new Set(), held = [];
 const bars = Array.from({length:45}, (_,i) => ({time_us:(open+i*60000)*1000,
@@ -43,6 +44,11 @@ const server=createServer(async(req,res)=>{
     }
     if(req.url.startsWith('/api/rvol-history')) { json(res,{symbol,through_us:(clock-10000)*1000,bars}); return; }
     if(req.url.startsWith('/api/chart-history')) { json(res,{symbol,through_us:(clock-10000)*1000,bars}); return; }
+    if(req.url.startsWith('/api/panel-data/daily-bars')) {
+      const dates=[]; let date=new Date('2026-10-08T13:30:00Z');
+      while(dates.length<19) { if(date.getUTCDay()!==0 && date.getUTCDay()!==6) dates.unshift(date.toISOString().slice(0,10)); date.setUTCDate(date.getUTCDate()-1); }
+      json(res,{schemaVersion:1,status:dailyReady?'ready':'unavailable',symbol,beforeSessionDateET:'2026-10-09',bars:dailyReady?dates.map((day,i)=>({sessionDateET:day,startUS:Date.parse(day+'T13:30:00Z')*1000,complete:true,open:i===18?100:i===17?99:98,high:102,low:97,close:i===18?100:i===17?99:98})):[]}); return;
+    }
     if(req.url.startsWith('/api/panel-data/')) { json(res,{schemaVersion:1,status:'unavailable',bars:[],symbol}); return; }
     if(req.url.startsWith('/api/')) { json(res,{}); return; }
     const path=resolve(root,req.url==='/'?'index.html':'.'+new URL(req.url,'http://localhost').pathname);
@@ -126,6 +132,14 @@ try {
     await evaluate(`localStorage.removeItem('tape-reading-tool.settings.v1')`);
     await command('Page.reload');
     await waitFor(labels('VOLUME'));
+    await waitFor(`document.querySelector('#dailyRunValue').textContent==='↑3D*'`);
+    assert.ok((await evaluate(`document.querySelector('#dailyBBValue').textContent`)).startsWith('↑'));
+    const dailyBox=await evaluate(`(()=>{
+      const readout=document.querySelector('#dailyExtensionReadout'), cell=readout.closest('.metric');
+      return {bottom:readout.getBoundingClientRect().bottom,cellBottom:cell.getBoundingClientRect().bottom,
+        right:Math.max(...[...readout.children].map(x=>x.getBoundingClientRect().right)),cellRight:cell.getBoundingClientRect().right};
+    })()`);
+    assert.ok(dailyBox.bottom<=dailyBox.cellBottom && dailyBox.right<=dailyBox.cellRight, 'Daily readout overflow '+JSON.stringify(dailyBox));
     const before=requests;
     await sleep(300);
     assert.equal(requests,before,'RVOL off must not fetch');
@@ -161,6 +175,11 @@ try {
     await evaluate(`document.querySelector('#cumulativeRVOLButton').click(); document.querySelector('#volumeButton').click()`);
     await waitFor(labels('VOLUME'));
     assert.equal(await evaluate(`window.__rvolLabels.find(label=>label.text==='VOLUME').y`),original,'off restores the original chart geometry');
+    await evaluate(`(()=>{const box=document.querySelector('#showDailyExtension');box.checked=false;box.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+    await waitFor(`document.querySelector('#dailyExtensionReadout').hidden`);
+    await command('Page.reload');
+    await waitFor(labels('VOLUME'));
+    assert.equal(await evaluate(`document.querySelector('#dailyExtensionReadout').hidden`),true,'daily context toggle persists');
     console.log(`RVOL layout ${width}x${height}: price ${Math.round(layout.pane.priceBottom-layout.pane.top)}px, independent volume/RVOL, no overflow`);
   }
   mode='massive'; generation++; sendSnapshot();
@@ -174,9 +193,11 @@ try {
   status='ready'; hold=true; generation++; sendSnapshot();
   for(let i=0;i<50 && !held.length;i++) await sleep(50);
   assert.ok(held.length);
-  symbol='MSFT'; generation++; hold=false; sendSnapshot();
+  dailyReady=false; symbol='MSFT'; generation++; hold=false; sendSnapshot();
   for(const release of held.splice(0)) release();
   await waitFor(`window.__tapeReadingPanels.symbol()==='MSFT' && ${labels('4.35×')}`);
+  await evaluate(`(()=>{const box=document.querySelector('#showDailyExtension');box.checked=true;box.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+  await waitFor(`document.querySelector('#dailyRunValue').textContent==='—' && document.querySelector('#dailyBBValue').textContent==='—'`);
   await evaluate(`document.querySelector('#dailyChartTab').click()`);
   await sleep(250);
   const dailyRequests=requests;

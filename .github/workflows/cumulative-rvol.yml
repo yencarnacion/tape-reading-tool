@@ -36,6 +36,8 @@ jobs:
           go build -o /tmp/tape-reading-tool ./cmd/tape-reading-tool
       - name: Study and chart regression checks
         run: |
+          node scripts/daily-extension-check.mjs
+          node scripts/day-map-check.mjs
           node scripts/cumulative-rvol-check.mjs
           node scripts/chart-history-check.mjs
           node scripts/rewind-check.mjs

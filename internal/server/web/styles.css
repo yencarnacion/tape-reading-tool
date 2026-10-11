@@ -676,3 +676,10 @@ input[type="range"] { width: 100%; height: 5px; padding: 0; accent-color: var(--
 /* Keep special reports visible on the tape without implying a candle move. */
 .tape-row.price-excluded { opacity: .55; }
 .tape-row.price-excluded > :first-child::after { content: " ·"; color: #9aa3af; }
+
+/* Daily context lives in unused LAST-cell space, never over candles. */
+.daily-extension-readout { display: flex; flex-wrap: wrap; column-gap: 9px; row-gap: 0; margin-top: 2px; }
+.daily-extension-readout[hidden] { display: none; }
+.metric .daily-extension-readout span { font-size: 9px; line-height: 17px; overflow: visible; }
+.daily-extension-readout output { color: var(--text); font: 800 14px/17px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.daily-extension-readout .daily-emphasis { color: var(--yellow); }

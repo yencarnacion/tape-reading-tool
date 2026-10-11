@@ -421,3 +421,7 @@ Choose **OPTIONS FLOW** from the lower panel picker to compare 15s, 60s, and 5m
 options premium pressure with the stock tape. It uses actual options trades and
 quotes through the configured local options gateway. Kronos and Tick Chart
 remain selectable. [Setup, interpretation, quality gates, and limitations](docs/OPTIONS_FLOW.md).
+
+## Daily run and Bollinger readouts
+
+See [the daily-context guide](docs/DAILY_EXTENSION.md) for readouts, formula, data behavior and checks.

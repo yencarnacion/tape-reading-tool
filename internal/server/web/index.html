@@ -60,6 +60,9 @@
         <div class="metric price-metric">
           <span>LAST</span>
           <div class="price-values"><strong id="lastPrice">--</strong><output id="priceChange" class="price-change" aria-live="polite">--</output></div>
+          <div id="dailyExtensionReadout" class="daily-extension-readout" aria-label="Daily extension context">
+            <span>DAY <output id="dailyRunValue">—</output></span><span>BB <output id="dailyBBValue">—</output></span>
+          </div>
         </div>
         <div class="metric positive"><span>MAX DELTA</span><div class="delta-values"><strong id="maxDelta">0</strong><output id="maxDeltaDollars">$0</output></div></div>
         <div class="metric negative"><span>MIN DELTA</span><div class="delta-values"><strong id="minDelta">0</strong><output id="minDeltaDollars">$0</output></div></div>
@@ -196,6 +199,7 @@
         <label class="field-row"><span>Visible bars</span><input id="visibleBars" type="number" min="20" max="4000" step="10"></label>
         <label class="field-row"><span>Tape rows</span><input id="tapeRowCount" type="number" min="10" max="300" step="5"></label>
         <label class="switch-row"><span>Chart</span><input id="showChart" type="checkbox"><i></i></label>
+        <label class="switch-row"><span>Daily run / BB readouts</span><input id="showDailyExtension" type="checkbox"><i></i></label>
         <label class="switch-row"><span>1-minute volume pane</span><input id="showMinuteVolume" type="checkbox"><i></i></label>
         <label class="switch-row"><span>5-day cumulative RVOL (experimental)</span><input id="showCumulativeRVOL" type="checkbox"><i></i></label>
         <p class="control-note">RVOL stays below price and volume. Compares completed 09:30–16:00 ET minutes with the same time across 5 prior sessions from the selected provider. Updates each minute; needs historical data and the recording database.</p>

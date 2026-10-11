@@ -1,3 +1,4 @@
+import { dailyExtension, dailyExtensionLabels } from './daily-extension.js';
 import { formatTradeSize, tradeSizeLabel } from './trade-size.js';
 import {
   aggregateTickBars, appendMinuteBar, appendTickBar, priceEligible, rangeEligible, volumeEligible, lastPriceEligible, selectLastPrice,
@@ -43,6 +44,7 @@ import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulati
     historyBack: $('historyBack'), historyForward: $('historyForward'), tickSelect: $('tickSelect'),
     soundButton: $('soundButton'), replayButton: $('replayButton'), replayPlayButton: $('replayPlayButton'), replayPauseButton: $('replayPauseButton'), controlsButton: $('controlsButton'), connectionState: $('connectionState'),
     nbbo: $('nbbo'), bestBid: $('bestBid'), bestBidSize: $('bestBidSize'), nbboSpread: $('nbboSpread'), nbboSpreadDollars: $('nbboSpreadDollars'), bestAsk: $('bestAsk'), bestAskSize: $('bestAskSize'),
+    dailyExtensionReadout: $('dailyExtensionReadout'), dailyRunValue: $('dailyRunValue'), dailyBBValue: $('dailyBBValue'), showDailyExtension: $('showDailyExtension'),
     lastPrice: $('lastPrice'), priceChange: $('priceChange'), maxDelta: $('maxDelta'), minDelta: $('minDelta'),
     maxDeltaDollars: $('maxDeltaDollars'), minDeltaDollars: $('minDeltaDollars'), tapeRate: $('tapeRate'),
     marketClock: $('marketClock'), marketClockLabel: $('marketClockLabel'), marketClockTime: $('marketClockTime'),
@@ -230,6 +232,7 @@ import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulati
       showTape: display.show_tape !== false,
       showMinuteVolume: true,
       showCumulativeRVOL: false,
+      showDailyExtension: true,
       audio: {
         profileVersion: SOUND_PROFILE_VERSION,
         enabled: audioConfig.enabled !== false,
@@ -266,6 +269,7 @@ import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulati
     result.audio.profileVersion = SOUND_PROFILE_VERSION;
     result.showMinuteVolume = result.showMinuteVolume !== false;
     result.showCumulativeRVOL = result.showCumulativeRVOL === true;
+    result.showDailyExtension = result.showDailyExtension !== false;
     result.tickSize = clampInt(result.tickSize, 1, 100000, defaults.tickSize);
     result.customTicks = clampInt(result.customTicks, 1, 100000, result.tickSize);
     result.visibleBars = clampInt(result.visibleBars, 20, 4000, defaults.visibleBars);
@@ -1355,8 +1359,8 @@ import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulati
   }
 
   function ensureDailyMapHistory() {
-    if (state.dayMapView !== 'daily' || state.marketChartView !== 'minute' ||
-        !state.marketChartEnabled || !state.settings?.showChart || document.hidden) return;
+    const mapVisible = state.dayMapView === 'daily' && state.marketChartView === 'minute' && state.marketChartEnabled && state.settings?.showChart;
+    if ((!mapVisible && !state.settings?.showDailyExtension) || document.hidden || state.pendingReplayReset) return;
     const sessionDateET = dailyMapSessionDate();
     if (!sessionDateET) return;
     const key = `${state.symbol}|${state.status.mode}|${state.replayConfig?.source || 'live'}|${state.replayConfig?.provider || 'all'}|${sessionDateET}`;
@@ -2116,6 +2120,7 @@ import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulati
     elements.showSize.checked = settings.showSize;
     elements.showMinuteVolume.checked = settings.showMinuteVolume;
     elements.showCumulativeRVOL.checked = settings.showCumulativeRVOL;
+    elements.showDailyExtension.checked = settings.showDailyExtension;
     syncStudyControls();
     elements.masterVolume.value = settings.audio.masterVolume;
     elements.tapeRateEnabled.checked = settings.audio.tapeRateEnabled;
@@ -2293,7 +2298,7 @@ import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulati
       state.settings.tapeRows = clampInt(elements.tapeRowCount.value, 10, 300, 90);
       commitSettings(false);
     });
-    for (const [element, key] of [[elements.showChart, 'showChart'], [elements.showTape, 'showTape'], [elements.showSize, 'showSize'], [elements.showMinuteVolume, 'showMinuteVolume'], [elements.showCumulativeRVOL, 'showCumulativeRVOL']]) {
+    for (const [element, key] of [[elements.showChart, 'showChart'], [elements.showTape, 'showTape'], [elements.showSize, 'showSize'], [elements.showMinuteVolume, 'showMinuteVolume'], [elements.showCumulativeRVOL, 'showCumulativeRVOL'], [elements.showDailyExtension, 'showDailyExtension']]) {
       element.addEventListener('change', () => { state.settings[key] = element.checked; commitSettings(false); });
     }
     elements.tapeRateEnabled.addEventListener('change', async () => {
@@ -2562,6 +2567,28 @@ import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulati
     const last = selectLastPrice(state.lastPriceTrade, state.quote);
     elements.lastPrice.textContent = last ? formatPrice(last.p) : '--';
     updatePriceChange(last?.p, state.quote.previous_close);
+    updateDailyExtension(last);
+  }
+
+  function updateDailyExtension(last) {
+    const visible = state.settings?.showDailyExtension !== false;
+    elements.dailyExtensionReadout.hidden = !visible;
+    if (!visible) return;
+    const clockUS = serverNowUS(performance.now());
+    const session = easternMinuteParts(clockUS)?.day;
+    const lastSession = last?.t ? easternMinuteParts(Number(last.t) * 1000)?.day : '';
+    // A yesterday snapshot, pending seek or future timestamp is not today's
+    // developing candle. Show unavailable until this session has a LAST.
+    const price = session && lastSession === session && Number(last.t) * 1000 <= clockUS && !state.pendingReplayReset ? Number(last.p) : NaN;
+    const value = dailyExtension(state.dailyMap.bars, session || '', price);
+    const labels = dailyExtensionLabels(value);
+    elements.dailyRunValue.textContent = labels.run;
+    elements.dailyRunValue.title = labels.runTitle;
+    elements.dailyRunValue.className = value.days >= 3 ? 'daily-emphasis' : '';
+    elements.dailyBBValue.textContent = labels.band;
+    elements.dailyBBValue.title = labels.bandTitle;
+    elements.dailyBBValue.className = value.extension ? 'daily-emphasis' : '';
+    elements.dailyExtensionReadout.setAttribute('aria-label', `Daily run ${labels.run}. Daily Bollinger extension ${labels.band}. Asterisk includes today, developing.`);
   }
 
   function updateRelativeVolume(nowUS) {
