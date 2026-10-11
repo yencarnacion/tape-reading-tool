@@ -57,10 +57,12 @@ server.on('upgrade',(req,socket)=>{
   peers.add(socket); socket.on('close',()=>peers.delete(socket)); socket.on('error',()=>peers.delete(socket)); socket.write(frame(snapshot()));
 });
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
-const target=`http://127.0.0.1:${server.address().port}`, debug=9489;
+const target=`http://127.0.0.1:${server.address().port}`;
 const profile=`/tmp/rvol-chrome-${process.pid}`;
-const browser=spawn(process.env.CHROME||'google-chrome',['--headless=new','--no-sandbox','--disable-gpu','--disable-dev-shm-usage','--remote-allow-origins=*',`--remote-debugging-port=${debug}`,`--user-data-dir=${profile}`,'about:blank'],{stdio:['ignore','ignore','pipe']});
-let launchOutput=''; browser.stderr.on('data', data=>{launchOutput=(launchOutput+data).slice(-2000);});
+const browser=spawn(process.env.CHROME||'google-chrome',['--headless=new','--no-sandbox','--disable-gpu','--disable-dev-shm-usage','--no-first-run','--no-default-browser-check','--remote-allow-origins=*','--remote-debugging-port=0',`--user-data-dir=${profile}`,'about:blank'],{stdio:['ignore','ignore','pipe']});
+let launchOutput='', launchError;
+browser.stderr.on('data', data=>{launchOutput=(launchOutput+data).slice(-2000);});
+browser.on('error', error=>{launchError=error;});
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 let socket,next=1; const pending=new Map(), errors=[];
 function command(method,params={}) {
@@ -82,8 +84,18 @@ async function waitFor(expression) {
 const labels = text => `window.__rvolLabels?.some(label=>label.text===${JSON.stringify(text)})`;
 try {
   let page;
-  for(let i=0;i<80;i++) {
-    try { page=await(await fetch(`http://127.0.0.1:${debug}/json/new?about:blank`,{method:'PUT'})).json(); break; }
+  // Cold GitHub runners may need more than eight seconds to start Chrome.
+  // Wait for its actual port rather than assuming a fixed port is available.
+  const launchDeadline=Date.now()+30000;
+  while(Date.now()<launchDeadline) {
+    if(launchError) throw launchError;
+    if(browser.exitCode!==null) throw new Error(`Chrome exited ${browser.exitCode}: ${launchOutput}`);
+    try {
+      const debug=(await readFile(`${profile}/DevToolsActivePort`,'utf8')).split('\n')[0];
+      page=await(await fetch(`http://127.0.0.1:${debug}/json/new?about:blank`,{method:'PUT',signal:AbortSignal.timeout(2000)})).json();
+      if(page.webSocketDebuggerUrl) break;
+      page=null;
+    }
     catch { await sleep(100); }
   }
   assert.ok(page,'Chromium failed to start: '+launchOutput);
