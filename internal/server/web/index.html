@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/auto-trendlines.css">
   <link rel="stylesheet" href="/options-volatility.css">
+  <link rel="stylesheet" href="/gex.css">
 </head>
 <body>
   <main class="app" id="app">
@@ -174,6 +175,12 @@
           <strong id="relativeVolumeValue">--</strong>
           <div class="rvol-track" aria-hidden="true"><i></i></div>
         </div>
+        <section id="momentumContext" class="momentum-context" aria-label="Current momentum and exhaustion context">
+          <button type="button" class="momentum-summary" aria-haspopup="dialog" aria-controls="momentumDialog" aria-label="Open momentum context details"><span>C/AVG</span><strong data-momentum>—</strong><small aria-hidden="true">ⓘ</small></button>
+          <output data-state data-tone="neutral">FLOW WAIT</output>
+          <output data-setup data-tone="neutral">SETUP WAIT</output>
+          <output data-rvol data-tone="neutral">3m VOL —</output>
+        </section>
         <header class="tape-header">
           <span>PRICE</span><span id="sizeHeading">SIZE</span>
         </header>
@@ -186,6 +193,14 @@
       <span id="streamText">0 PRINTS</span>
     </footer>
   </main>
+
+  <dialog id="momentumDialog" class="momentum-dialog" aria-labelledby="momentumTitle">
+    <form method="dialog" class="dialog-heading"><strong id="momentumTitle">MOMENTUM CONTEXT</strong><button value="close" aria-label="Close momentum context">CLOSE</button></form>
+    <p data-context-title></p>
+    <p class="momentum-key"><span data-tone="up">↑ UP / BUY</span> · <span data-tone="down">↓ DOWN / SELL</span> · <span data-tone="caution">⚠ CAUTION</span> · <span data-tone="volume">VOLUME</span></p>
+    <dl></dl>
+    <p class="momentum-note">Stretch and exhaustion are context, not a reversal entry or a measured probability. News, catalyst quality, sentiment, and forced liquidation are unchecked.</p>
+  </dialog>
 
   <dialog id="controlsDialog" class="controls-dialog">
     <form method="dialog" class="dialog-heading">

@@ -32,7 +32,7 @@ func DownloadGatewayHistorical(ctx context.Context, cfg config.MassiveConfig, db
 		return e
 	}
 	for _, kind := range []string{"trades", "quotes"} {
-		path := fmt.Sprintf("/rest/v3/%s/%s?timestamp.gte=%d&timestamp.lte=%d&sort=timestamp&order=asc&limit=50000", kind, url.PathEscape(symbol), o.Start.UnixNano(), o.End.UnixNano())
+		path := fmt.Sprintf("/rest/v3/%s/%s?timestamp.gte=%d&timestamp.lte=%d&sort=timestamp&order=asc&limit=10000", kind, url.PathEscape(symbol), o.Start.UnixNano(), o.End.UnixNano())
 		seen := map[string]bool{}
 		total := int64(0)
 		lastPrice := 0.0

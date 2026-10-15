@@ -167,7 +167,7 @@ def main():
 
     def download(contract):
         path = '/v3/quotes/' + contract['ticker']
-        params = {'timestamp.gte': (start_ms - 20000) * 1000000, 'timestamp.lte': end_ms * 1000000, 'limit': 50000, 'sort': 'timestamp', 'order': 'asc'}
+        params = {'timestamp.gte': (start_ms - 20000) * 1000000, 'timestamp.lte': end_ms * 1000000, 'limit': 10000, 'sort': 'timestamp', 'order': 'asc'}
         fingerprint = hashlib.sha256(json.dumps([path, params], sort_keys=True).encode()).hexdigest()[:20]
         dest = cache / (contract['ticker'].replace(':', '-') + '-' + fingerprint + '.json.gz')
         if dest.exists():

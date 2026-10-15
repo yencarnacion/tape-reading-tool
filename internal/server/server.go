@@ -27,12 +27,15 @@ import (
 var webFS embed.FS
 
 type Server struct {
+	alertMu              sync.RWMutex
+	alertContext         *AlertContext
 	historyRequests      sync.Map // one cancellable request gate per history key
 	chartHistorySlot     chan struct{}
 	chartHistoryFetch    func(context.Context, string, string, time.Time, time.Time) error
 	chartHistoryOpenIBKR func(context.Context) (feed.MinuteBarReader, func(), error)
 	forecast             *forecastService
 	options              *optionsService
+	gex                  *gexService
 	cfg                  config.Config
 	store                *tape.Store
 	feed                 feed.Feed
@@ -88,6 +91,7 @@ func (n *jsonNumber) UnmarshalJSON(data []byte) error {
 }
 
 type streamMessage struct {
+	AlertContext *AlertContext         `json:"alert_context"`
 	Type         string                `json:"type"`
 	Symbol       string                `json:"symbol,omitempty"`
 	Snapshot     *tape.Snapshot        `json:"snapshot,omitempty"`
@@ -131,6 +135,7 @@ func New(cfg config.Config, store *tape.Store, source feed.Feed, liveChart ...bo
 	}); ok {
 		server.dailyBars = source.DailyBars
 	}
+	server.gex = newGEXService(server.options, func() time.Time { return server.now() })
 	return server
 }
 
@@ -149,11 +154,13 @@ func (s *Server) ReserveRewindPane(reserve bool) {
 
 func (s *Server) Serve(ctx context.Context) error {
 	defer s.forecast.cancel()
+	defer s.gex.close()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/forecast", s.handleForecast)
 	mux.HandleFunc("/api/panel-data/options", s.handleOptions)
 	mux.HandleFunc("/api/panel-data/options-flow", s.handleOptionsFlow)
+	mux.HandleFunc("/api/panel-data/gex", s.handleGEX)
 	mux.HandleFunc("/api/ticker", s.handleTicker)
 	mux.HandleFunc("/api/tape/range", s.handleTapeRange)
 	mux.HandleFunc("/api/ui-event", s.handleUIEvent)
@@ -487,7 +494,8 @@ func (s *Server) handleTicker(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 	var request struct {
-		Symbol string `json:"symbol"`
+		Symbol       string        `json:"symbol"`
+		AlertContext *AlertContext `json:"alert_context,omitempty"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 	decoder.DisallowUnknownFields()
@@ -500,12 +508,17 @@ func (s *Server) handleTicker(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "ticker must be 1-16 letters, digits, dot, or hyphen", http.StatusBadRequest)
 		return
 	}
+	if err := validateAlertContext(request.AlertContext, symbol, s.now().UnixMicro()); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	// Manual symbol changes and external cues share one operation lock. Without
 	// it, a cue that was already rebuilding could publish and reattach after this
 	// manual action had detached, taking control back from the operator.
 	s.externalControlMu.Lock()
 	defer s.externalControlMu.Unlock()
 	s.detachExternalForManualAction()
+	s.setAlertContext(request.AlertContext)
 	s.store.Activate(symbol)
 	s.noteSymbolActive(symbol, s.now().UnixMicro())
 	s.feed.SetSymbol(symbol)
@@ -909,7 +922,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		case <-statusTicker.C:
 			status := s.store.Status()
 			if err := writeWebSocketJSON(conn, streamMessage{
-				Type: "status", Symbol: symbol, Status: &status, History: s.store.Symbols(), ServerTimeMS: s.streamTimeMS(),
+				Type: "status", Symbol: symbol, AlertContext: s.currentAlertContext(symbol), Status: &status, History: s.store.Symbols(), ServerTimeMS: s.streamTimeMS(),
 			}); err != nil {
 				return
 			}
@@ -925,7 +938,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 func (s *Server) writeSnapshot(conn *websocket.Conn, symbol string) (uint64, error) {
 	snapshot := s.store.Snapshot(symbol, s.cfg.Tape.SnapshotTrades)
 	message := streamMessage{
-		Type: "snapshot", Symbol: symbol, Snapshot: &snapshot,
+		Type: "snapshot", Symbol: symbol, AlertContext: s.currentAlertContext(symbol), Snapshot: &snapshot,
 		Display: &s.cfg.Display, Audio: &s.cfg.Audio, ReplayConfig: &s.cfg.Replay,
 		ServerTimeMS: s.streamTimeMS(), MarketChart: s.liveChart, Xtra: s.liveXtra,
 		Rewind: &s.cfg.Rewind, RewindPane: s.rewindPane,

@@ -201,3 +201,29 @@ func TestIBKRReplayHistoryClosesSessionOnError(t *testing.T) {
 		t.Fatalf("err=%v closed=%v", err, closed)
 	}
 }
+
+func TestMomentumCachedHistoryNeverDownloadsOrWaitsForChart(t *testing.T) {
+	s := panelServer(t, "live")
+	s.AttachRecorder(openPanelDatabase(t))
+	through := s.now().Truncate(time.Minute)
+	seedChartHistory(t, s, through)
+	s.chartHistorySlot <- struct{}{}
+	defer func() { <-s.chartHistorySlot }()
+	s.chartHistoryFetch = func(context.Context, string, string, time.Time, time.Time) error {
+		t.Fatal("GET downloaded missing coverage")
+		return nil
+	}
+	s.rvolMinuteBars = nil
+	w := httptest.NewRecorder()
+	s.handleChartHistory(w, httptest.NewRequest("GET", "/api/chart-history?symbol=AAPL", nil))
+	var result struct {
+		CacheOnly bool                `json:"cache_only"`
+		Bars      []storage.MinuteBar `json:"bars"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err, w.Body.String())
+	}
+	if w.Code != 200 || !result.CacheOnly || len(result.Bars) != 5000 || result.Bars[4999].TimeUS >= through.UnixMicro() {
+		t.Fatal("cached history was not bounded as of the minute", w.Code)
+	}
+}

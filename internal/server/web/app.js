@@ -16,6 +16,8 @@ import { ChartHistoryLoader, mergeChartHistory } from './chart-history.js';
 import { createLowerPanelHost, lowerPanelSettings, DEFAULT_LOWER_PANEL } from './lower-panel-slot.js';
 import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js';
 import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulative-rvol.js';
+import { MomentumContextModel } from './momentum-context-model.js';
+import { MomentumContextView } from './momentum-context-view.js';
 
 (() => {
   'use strict';
@@ -95,6 +97,9 @@ import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulati
   // The live and replay panes read every panel through this source. Live Rewind
   // adds a second source over the same aggregation code, never a second copy.
   const liveSource = createStreamSource(state);
+  const momentumModel = new MomentumContextModel();
+  const momentumView = new MomentumContextView($('momentumContext'), $('momentumDialog'));
+  state.alertContext = null;
   const autoTrendlines = new AutoTrendlinesController({
     button: $('trendlinesButton'),
     redraw: () => { state.dirtyReplayChart = true; }
@@ -109,14 +114,24 @@ import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulati
     state.dirtyReplayChart = true;
     state.dirtyDayContext = true;
   } });
-  window.addEventListener('pagehide', () => chartHistory.reset());
+  // The strip reads cached history even when the market chart is hidden. GET
+  // never starts a provider download; POST remains owned by chart hydration.
+  const momentumHistory = new ChartHistoryLoader({
+    fetcher: (url, options) => fetch(url, { ...options, method: 'GET' }),
+    apply: payload => {
+      const boundary = Math.min(Number(payload.through_us), Math.floor(serverNowUS(performance.now()) / 6e7) * 6e7);
+      state.minuteBars = mergeChartHistory(state.minuteBars, payload.bars, boundary);
+      state.dirtyReplayChart = true; state.dirtyDayContext = true;
+    }
+  });
+  window.addEventListener('pagehide', () => { chartHistory.reset(); momentumHistory.reset(); });
   const dailyMapHistory = new DailyMapHistory({ apply: (result) => {
     state.dailyMap = result;
     state.dirtyDayContext = true;
   } });
   window.addEventListener('pagehide', () => dailyMapHistory.reset());
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { chartHistory.reset(); cumulativeRVOL.reset(); }
+    if (document.hidden) { chartHistory.reset(); momentumHistory.reset(); cumulativeRVOL.reset(); }
     else state.dirtyReplayChart = true;
   });
   const DAY_MAP_CORNERS = ['', 'day-map-lower-left', 'day-map-lower-right', 'day-map-upper-right'];
@@ -377,6 +392,7 @@ import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulati
             // widen its own limits or write another panel's settings.
             savePanelSettings: (panelId, next, defaults) => {
               const merged = mergePanelSettings(defaults, next);
+              if (panelId === 'estimated-gex') merged.maxDTE = [30,60,120].includes(merged.maxDTE) ? merged.maxDTE : 120;
               if (panelId === 'kronos-forecast') merged.horizon = [1, 3, 5, 10].includes(merged.horizon) ? merged.horizon : 5;
               if (panelId === 'adr-rth-extension') {
                 merged.lookbackSessions = clampInt(merged.lookbackSessions, 5, 60, 20);
@@ -390,7 +406,7 @@ import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulati
         panelHost.swap(state.settings.panels.slots.primaryAnalytics.activePanelId, false);
         lowerPanelHost = createLowerPanelHost({
           root: $('lowerPanelRoot'), picker: $('lowerPanelPicker'), settings: state.settings.panels,
-          capabilities: { ...panelHost.capabilities, currentSnapshot: () => ({ symbol: state.symbol, generation: state.streamGeneration || 0, mode: state.status?.mode || '', status: { ...state.status }, clockUS: serverNowUS(performance.now()) }) }, saveSettings,
+          capabilities: { ...panelHost.capabilities, currentSnapshot: () => ({ symbol: state.symbol, generation: state.streamGeneration || 0, mode: state.status?.mode || '', status: { ...state.status }, clockUS: serverNowUS(performance.now()), spot: selectLastPrice(state.lastPriceTrade, state.quote)?.p }) }, saveSettings,
           tickVisible: (visible) => { lowerTickVisible = visible; $('lowerPanelSlot').classList.toggle('show-tick-chart', visible); state.dirtyChart = true; }
         });
         window.__tapeReadingPanels = {
@@ -409,6 +425,7 @@ import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulati
       const nextSymbol = snapshot.symbol || message.symbol;
       const symbolChanged = nextSymbol !== state.symbol;
       state.symbol = nextSymbol;
+      state.alertContext = message.alert_context || null;
       // A scale from the previous ticker makes the new chart appear to ease or
       // animate into place. Start the new ticker from its own range so its
       // first rendered frame is already final.
@@ -497,7 +514,7 @@ import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulati
       cumulativeRVOL.reset();
       if (symbolChanged) selectDayMap('daily');
       ensureDailyMapHistory();
-      chartHistory.reset();
+      chartHistory.reset(); momentumHistory.reset();
       const chartKey = `${state.symbol}|${state.replayConfig?.source || 'live'}|${state.replayConfig?.provider || 'all'}`;
       if (state.status.mode === 'replay' && (generationChanged || state.replayChartKey !== chartKey)) {
         state.replayChartKey = chartKey;
@@ -532,6 +549,7 @@ import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulati
       return;
     }
     if (message.type === 'status') {
+      if (message.symbol === state.symbol) state.alertContext = message.alert_context || null;
       if (message.status) {
         const previousMode = state.status?.mode;
         const previousState = state.status?.state;
@@ -1360,7 +1378,7 @@ import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulati
 
   function ensureDailyMapHistory() {
     const mapVisible = state.dayMapView === 'daily' && state.marketChartView === 'minute' && state.marketChartEnabled && state.settings?.showChart;
-    if ((!mapVisible && !state.settings?.showDailyExtension) || document.hidden || state.pendingReplayReset) return;
+    if ((!mapVisible && !state.settings?.showDailyExtension && !state.settings?.showTape) || document.hidden || state.pendingReplayReset) return;
     const sessionDateET = dailyMapSessionDate();
     if (!sessionDateET) return;
     const key = `${state.symbol}|${state.status.mode}|${state.replayConfig?.source || 'live'}|${state.replayConfig?.provider || 'all'}|${sessionDateET}`;
@@ -2585,9 +2603,11 @@ import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulati
     elements.dailyRunValue.textContent = labels.run;
     elements.dailyRunValue.title = labels.runTitle;
     elements.dailyRunValue.className = value.days >= 3 ? 'daily-emphasis' : '';
+    elements.dailyRunValue.dataset.tone = value.direction > 0 ? 'up' : value.direction < 0 ? 'down' : 'neutral';
     elements.dailyBBValue.textContent = labels.band;
     elements.dailyBBValue.title = labels.bandTitle;
     elements.dailyBBValue.className = value.extension ? 'daily-emphasis' : '';
+    elements.dailyBBValue.dataset.tone = value.extension > 0 ? 'up' : value.extension < 0 ? 'down' : 'neutral';
     elements.dailyExtensionReadout.setAttribute('aria-label', `Daily run ${labels.run}. Daily Bollinger extension ${labels.band}. Asterisk includes today, developing.`);
   }
 
@@ -2615,6 +2635,9 @@ import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulati
   function updateLiveMetrics(now) {
     ensureDailyMapHistory();
     const receiptNowUS = serverNowUS(now);
+    if (!document.hidden && state.settings?.showTape && receiptNowUS && ['live', 'massive', 'replay'].includes(state.status?.mode)) {
+      momentumHistory.ensure(`${state.symbol}|${state.status.mode}|${state.replay?.generation || 0}|${dailyMapSessionDate()}`, state.symbol);
+    }
     const tapeRate = computeTapeRate(liveSource, receiptNowUS);
     elements.tapeRate.textContent = `${tapeRate >= 1000 ? formatSize(tapeRate) : tapeRate}/s`;
     audio.setTapeRate(tapeRate);
@@ -2627,6 +2650,18 @@ import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulati
     const replayState = String(state.replay?.state || state.status?.state || '').toLowerCase();
     const replayHasTimeline = replayMode && receiptNowUS && replayState !== 'ready' && replayState !== 'stopped';
     if (relativeVolumeMode) updateRelativeVolume(replayMode ? (replayHasTimeline ? receiptNowUS : 0) : receiptNowUS);
+    $('momentumContext').hidden = !relativeVolumeMode;
+    if (relativeVolumeMode && receiptNowUS && (!replayMode || replayHasTimeline)) {
+      const last = selectLastPrice(state.lastPriceTrade, state.quote);
+      // A prior session's print cannot become today's developing daily close.
+      const lastParts = last && easternMinuteParts(Number(last.t) * 1000);
+      const clockParts = easternMinuteParts(receiptNowUS);
+      const price = lastParts?.day === clockParts?.day && Number(last.t) * 1000 <= receiptNowUS ? last.p : NaN;
+      momentumView.render(momentumModel.calculate({ bars: state.minuteBars, dailyBars: state.dailyMap.bars,
+        nowUS: receiptNowUS, price, priceTimeUS: Number(last?.t) * 1000, source: liveSource, alert: state.alertContext }), state.symbol, state.alertContext);
+    } else {
+      momentumView.render({ momentum: { ready: false }, tape: { ready: false }, daily: {}, flow: { state: 'BUILD' }, nowUS: receiptNowUS || Date.now() * 1000 }, state.symbol, null);
+    }
     const clockDate = replayHasTimeline ? new Date(receiptNowUS / 1000) : new Date();
     const clockValue = new Intl.DateTimeFormat('en-US', {
       timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false

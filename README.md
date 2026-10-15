@@ -422,6 +422,31 @@ options premium pressure with the stock tape. It uses actual options trades and
 quotes through the configured local options gateway. Kronos and Tick Chart
 remain selectable. [Setup, interpretation, quality gates, and limitations](docs/OPTIONS_FLOW.md).
 
+### Estimated GEX in the lower panel
+
+Choose **ESTIMATED GEX** from the lower panel picker for a compact positioning
+proxy: teal ↔ **RANGE / FADE BIAS**, amber ⇅ **EXPANSION BIAS**, gray when balanced
+or inputs are missing/stale. It uses the existing slot, with **DETAILS** for scope,
+coverage and assumptions. The calls+/puts− convention assumes dealer positions;
+its colors describe damping/amplification, not bullish/bearish direction.
+Recorded snapshots support replay without using current chains for past sessions.
+[Calculation, setup, interpretation and replay limits](docs/ESTIMATED_GEX.md).
+
 ## Daily run and Bollinger readouts
 
 See [the daily-context guide](docs/DAILY_EXTENSION.md) for readouts, formula, data behavior and checks.
+
+## Momentum context beside the tape
+
+A compact readout above time and sales shows **C/AVG**, explicit **BUY / SELL** flow arrows, stock **TIRED / CLIMAX / TURN**, and **3m VOL**. Green ↑ means up/buying flow; coral ↓ means down/selling flow; amber ⚠ marks exhaustion or slowdown; violet shows volume magnitude. Daily **DAY / BB** values sit beside LAST rather than repeating in the rail. It stays within the existing tape rail, without changing chart sizes or adding a panel. On laptop-height windows, RVOL PACE uses a shorter horizontal layout. Click C/AVG (or focus it and press Enter) for the explanatory dialog; Escape closes it.
+
+- C/AVG is latest same-session close / average of the latest 15 minute closes, including a developing candle when available. UP requires strictly greater than 1.02; DOWN strictly less than 0.98. Missing or stale minute context shows a dash.
+- TIRED (25–59) and CLIMAX (60+) use DaiDai's stock-only accelerating-leg heuristic. Daily extension alone does not produce exhaustion. Seven consecutive completed minutes are required, and a preceding climax is retained within the last 16 completed minutes through its first turn. These labels work without options data and are separate from the options panel's existing exhaustion watch.
+- PUSH, EASE, PULL, and FLIP measure classified flow and midpoint progress over 15 seconds, comparing the prior 15 seconds. FLIP also requires matching opposite flow over 5 seconds. Thin, stale, or incomplete tape shows QUIET / BUILD. **TURN** requires a completed minute close through the preceding three candles' lows/highs after a measurable preceding leg. FLIP and PULL are early warnings, not a completed turn. Automatic trendline confirmation keeps its own definition.
+- DAY is the developing close-to-close daily run, including the current price. BB is signed percent beyond the upper (+) or lower (−) daily Bollinger band; IN means inside. Like DaiDai, bands use 19 prior closes plus current price, 20 periods and 2 population standard deviations. Daily history is shared with the Daily Map loader. Provider adjustment semantics can differ from DaiDai; equal arithmetic does not guarantee equal provider prices.
+- 3m VOL is the last three completed minutes / median volume at the same clock window in up to five earlier loaded sessions, requiring three complete windows. It reuses prepared minute history through a bounded read of the local cache even when the market chart is hidden, with no additional provider request. The existing chart can still hydrate its own history in the background. A missing minute is unknown, not zero. RVOL PACE retains its separate projected-current-minute / recent-candle baseline. The optional 5D cumulative RVOL histogram compares the RTH cumulative prefix with five prior sessions; its violet latest-value arrow denotes above/below 1× normal volume, not price direction.
+- A DaiDai ticker click can carry an optional `alert_context` snapshot containing direction, CONT, MR direction, industry and timestamp. It is shown in details as alert-time context, separate from current readings. Manual ticker selection or replay detach clears it. Future timestamps and mismatched symbols are rejected; an old aggregate-replay click is left without scores when the exact snapshot is unavailable. Legacy review ranks are never renamed CONT. The public tool does not recreate scanner-wide industry confirmation.
+
+These are descriptive, uncalibrated heuristics, not probabilities or entry instructions. News, sentiment, catalyst quality, float rotation, and forced liquidation are unchecked. Replay calculations exclude later sessions and developing candles from completed-turn evidence. Live Rewind keeps the strip on the main live tape; it does not present these readings as rewound data.
+
+Validation: `node scripts/momentum-context-check.mjs` and `CHROME=/path/to/chrome node scripts/momentum-context-browser-check.mjs`. The browser check uses synthetic local data and verifies the full dashboard at laptop sizes, text fit, available tape rows, dialog controls, ticker changes and replay cutoffs.

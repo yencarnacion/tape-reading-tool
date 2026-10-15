@@ -45,7 +45,7 @@ For a completed minute ending at time `t` in New York:
   The current session's prefix is refreshed so late/revised aggregates can be
   included. It is a completed-minute indicator, not tick-by-tick projected RVOL.
 - Histogram colors follow each minute candle's direction; they do not classify
-  buying/selling volume. The right-hand value describes the latest returned
+  buying/selling volume. Its violet latest-value arrow shows above/below 1× normal cumulative volume; a brighter violet marks 2× or more. The right-hand value describes the latest returned
   RTH minute even when after-hours candles have moved the RTH bars off screen.
 - A zero baseline yields no ratio. An unavailable provider or incomplete
   five-session baseline shows a message and no fabricated multiple. Hover the

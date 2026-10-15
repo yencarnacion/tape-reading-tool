@@ -148,7 +148,7 @@ try {
     const original=await evaluate(`window.__rvolLabels.find(label=>label.text==='VOLUME').y`);
     const chartBefore=await evaluate(`window.__tapeReadingChart.state().bars`);
     await evaluate(`document.querySelector('#cumulativeRVOLButton').click()`);
-    await waitFor(labels('4.35×'));
+    await waitFor(labels('↑4.35×'));
     assert.ok(await evaluate(labels('1×')));
     assert.ok(await evaluate(labels('VOLUME')));
     const layout=await evaluate(`(async()=>{
@@ -168,9 +168,9 @@ try {
     const screenshot=await command('Page.captureScreenshot',{format:'png'});
     await writeFile(`${out}/rvol-${width}x${height}.png`,Buffer.from(screenshot.data,'base64'));
     await evaluate(`document.querySelector('#volumeButton').click()`);
-    await waitFor(`!${labels('VOLUME')} && ${labels('4.35×')}`);
+    await waitFor(`!${labels('VOLUME')} && ${labels('↑4.35×')}`);
     await command('Page.reload');
-    await waitFor(labels('4.35×'));
+    await waitFor(labels('↑4.35×'));
     assert.equal(await evaluate(`document.querySelector('#volumeButton').getAttribute('aria-pressed')`),'false','volume choice persists');
     await evaluate(`document.querySelector('#cumulativeRVOLButton').click(); document.querySelector('#volumeButton').click()`);
     await waitFor(labels('VOLUME'));
@@ -184,18 +184,18 @@ try {
   }
   mode='massive'; generation++; sendSnapshot();
   await evaluate(`document.querySelector('#cumulativeRVOLButton').click()`);
-  await waitFor(labels('4.35×'));
+  await waitFor(labels('↑4.35×'));
   assert.equal(await evaluate(`document.querySelector('#relativeVolume').hidden`),false,'existing RVOL PACE remains');
   status='insufficient'; generation++; sendSnapshot();
   await waitFor(`document.querySelector('#cumulativeRVOLStatus').textContent.includes('3 available')`);
-  await waitFor(`!${labels('4.35×')}`);
+  await waitFor(`!${labels('↑4.35×')}`);
   assert.ok(await evaluate(labels('VOLUME')),'missing RVOL history leaves volume visible');
   status='ready'; hold=true; generation++; sendSnapshot();
   for(let i=0;i<50 && !held.length;i++) await sleep(50);
   assert.ok(held.length);
   dailyReady=false; symbol='MSFT'; generation++; hold=false; sendSnapshot();
   for(const release of held.splice(0)) release();
-  await waitFor(`window.__tapeReadingPanels.symbol()==='MSFT' && ${labels('4.35×')}`);
+  await waitFor(`window.__tapeReadingPanels.symbol()==='MSFT' && ${labels('↑4.35×')}`);
   await evaluate(`(()=>{const box=document.querySelector('#showDailyExtension');box.checked=true;box.dispatchEvent(new Event('change',{bubbles:true}))})()`);
   await waitFor(`document.querySelector('#dailyRunValue').textContent==='—' && document.querySelector('#dailyBBValue').textContent==='—'`);
   await evaluate(`document.querySelector('#dailyChartTab').click()`);

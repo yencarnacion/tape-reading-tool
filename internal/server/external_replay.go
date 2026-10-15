@@ -54,19 +54,20 @@ type missingRange struct {
 }
 
 type externalControlRequest struct {
-	ProtocolVersion     int     `json:"protocol_version"`
-	ControllerID        string  `json:"controller_id"`
-	ControllerSessionID string  `json:"controller_session_id"`
-	Sequence            uint64  `json:"sequence"`
-	Action              string  `json:"action"`
-	Symbol              string  `json:"symbol"`
-	Source              string  `json:"source"`
-	Provider            string  `json:"provider"`
-	TargetUS            int64   `json:"target_us"`
-	WarmupStartUS       int64   `json:"warmup_start_us"`
-	RangeEndUS          int64   `json:"range_end_us"`
-	Playing             bool    `json:"playing"`
-	Speed               float64 `json:"speed"`
+	AlertContext        *AlertContext `json:"alert_context,omitempty"`
+	ProtocolVersion     int           `json:"protocol_version"`
+	ControllerID        string        `json:"controller_id"`
+	ControllerSessionID string        `json:"controller_session_id"`
+	Sequence            uint64        `json:"sequence"`
+	Action              string        `json:"action"`
+	Symbol              string        `json:"symbol"`
+	Source              string        `json:"source"`
+	Provider            string        `json:"provider"`
+	TargetUS            int64         `json:"target_us"`
+	WarmupStartUS       int64         `json:"warmup_start_us"`
+	RangeEndUS          int64         `json:"range_end_us"`
+	Playing             bool          `json:"playing"`
+	Speed               float64       `json:"speed"`
 }
 
 // uiAudioState is the browser heartbeat. Only the newest report is kept, so a
@@ -250,6 +251,11 @@ func (s *Server) handleExternalReplayControl(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	if err := validateAlertContext(request.AlertContext, request.Symbol, request.TargetUS); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	fast := request.Speed > s.cfg.ExternalReplay.MaxDetailedSpeed
 	tolerance, _ := time.ParseDuration(s.cfg.ExternalReplay.SyncTolerance)
 
@@ -285,6 +291,7 @@ func (s *Server) handleExternalReplayControl(w http.ResponseWriter, r *http.Requ
 				s.external.Generation = transportGeneration
 				s.externalMu.Unlock()
 			}
+			s.setAlertContext(request.AlertContext)
 			writeJSON(w, http.StatusOK, s.externalStatus())
 			return
 		}
@@ -304,6 +311,7 @@ func (s *Server) handleExternalReplayControl(w http.ResponseWriter, r *http.Requ
 				s.external.Error = ""
 				s.external.Missing = nil
 				s.externalMu.Unlock()
+				s.setAlertContext(request.AlertContext)
 				writeJSON(w, http.StatusOK, s.externalStatus())
 				return
 			}
@@ -366,6 +374,7 @@ func (s *Server) handleExternalReplayControl(w http.ResponseWriter, r *http.Requ
 		LastCueMS: report.Duration.Milliseconds(), LastCueRows: report.Rows,
 	}
 	s.externalMu.Unlock()
+	s.setAlertContext(request.AlertContext)
 	writeJSON(w, http.StatusOK, s.externalStatus())
 }
 
@@ -405,6 +414,7 @@ func (s *Server) recordExternalError(message string) {
 // is a no-op, because pausing there would let any caller reach into a manual
 // session it never controlled.
 func (s *Server) releaseExternal(replay *feed.Replay, state string) bool {
+	s.setAlertContext(nil)
 	s.externalMu.Lock()
 	attached := s.external.Attached
 	if attached {
@@ -480,6 +490,7 @@ func (s *Server) externalTokenAllowed(r *http.Request) bool {
 // detachExternalForManualAction runs before every manual transport or ticker
 // action so the operator, not the controller, owns what happens next.
 func (s *Server) detachExternalForManualAction() {
+	s.setAlertContext(nil)
 	s.externalMu.Lock()
 	if s.external.Attached {
 		s.external = externalReplayState{State: externalStateDetached}

@@ -101,10 +101,10 @@ export function drawCumulativeRVOL(ctx, study, { visible, xAt, bodyWidth, left, 
       ctx.fillRect(xAt(index) - bodyWidth / 2, y, bodyWidth, Math.max(0, plotBottom - y));
     });
     const latest = result.points.at(-1)?.ratio;
-    const label = Number.isFinite(latest) ? `${latest.toFixed(2)}×` : '--';
+    const label = Number.isFinite(latest) ? `${latest >= 1 ? '↑' : '↓'}${latest.toFixed(2)}×` : '--';
     ctx.fillStyle = '#272033'; ctx.fillRect(right + 1, top + 1, width - right - 2, 22);
-    ctx.fillStyle = '#edd9ff';
-    ctx.font = '800 16px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+    ctx.fillStyle = latest >= 2 ? '#df9cff' : latest < .75 ? '#74717f' : '#b98be6';
+    ctx.font = '800 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     ctx.fillText(label, right + 4, top + 12, width - right - 8);
     ctx.font = '9px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     ctx.fillStyle = '#8d96a2';

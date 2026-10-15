@@ -15,7 +15,7 @@ to that local service. Provider credentials stay in the adapter.
 
 `GET {base}/rest/v3/snapshot/options/{symbol}`
 
-The consumer sends `limit=250`, `sort=expiration_date`, `order=asc`, inclusive
+The IV consumer sends `limit=250`, `sort=expiration_date`, `order=asc`, inclusive
 `expiration_date.gte/lte` and `strike_price.gte/lte` bounds. Pagination may use
 an opaque `cursor`. Return an object with `status: "OK"`, `results: [...]`, and
 optional `next_url` **relative to the same gateway origin, with the full same
@@ -41,6 +41,31 @@ This is synthetic shape documentation, not a current quote. IV is a fraction,
 not percentage points; timestamps are Unix **nanoseconds**. At least two nearby
 strikes with calls **and** puts must pass the [quality gates](OPTIONS_VOLATILITY.md).
 Do not label delayed quotes real-time. Missing data stays missing.
+
+## Estimated GEX on the same route
+
+The optional [Estimated GEX panel](ESTIMATED_GEX.md) makes a separate full-strike
+request to this route, with both calls/puts and inclusive 0–30, 0–60 or 0–120
+calendar-day expiry bounds. Do not force its request into the IV ATM basket.
+It needs these additional fields alongside details and open interest:
+
+```json
+{
+  "greeks": {"gamma": 0.02},
+  "open_interest": 500,
+  "underlying_asset": {"ticker": "EXAMPLE", "price": 100,
+    "last_updated": 1784899800000000000, "timeframe": "REAL-TIME"}
+}
+```
+
+This is synthetic shape documentation. Missing gamma/OI remains absent, not a
+fabricated zero. OI is the prior trading-day value by provider convention; this
+feed does not supply its reporting date. Underlying freshness is only a proxy
+for Greek freshness, not a timestamp of the Greek calculation. Delayed/unknown
+freshness, insufficient coverage or a truncated chain yields a neutral panel.
+The gateway still owns provider credentials and relative pagination.
+GEX replay uses its separately recorded normalized snapshot archive, not the
+quote-derived IV archive below.
 
 ## Historical preparation routes
 

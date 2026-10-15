@@ -683,3 +683,38 @@ input[type="range"] { width: 100%; height: 5px; padding: 0; accent-color: var(--
 .metric .daily-extension-readout span { font-size: 9px; line-height: 17px; overflow: visible; }
 .daily-extension-readout output { color: var(--text); font: 800 14px/17px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .daily-extension-readout .daily-emphasis { color: var(--yellow); }
+.daily-extension-readout output[data-tone="up"] { color: var(--green); }
+.daily-extension-readout output[data-tone="down"] { color: var(--red); }
+.daily-extension-readout output.daily-emphasis { color: var(--yellow); }
+/* Context belongs to the existing tape rail; chart geometry never changes. */
+.momentum-context { flex: 0 0 78px; min-width: 0; padding: 4px 8px; border-bottom: 1px solid var(--line); display: grid; grid-template-rows: 20px repeat(3, 15px); gap: 1px; color: #cbd2db; font: 10px/16px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.momentum-context[hidden] { display: none; }
+.momentum-summary { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-height: 20px; padding: 0; border: 0; background: transparent; font: inherit; color: var(--text); }
+.momentum-summary span { color: var(--muted); font-size: 9px; }
+.momentum-summary strong { font-size: 13px; font-variant-numeric: tabular-nums; }
+.momentum-summary small { color: var(--muted); font-size: 12px; }
+.momentum-context output { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.momentum-context output { padding: 0 4px; border-left: 2px solid transparent; border-radius: 2px; font-weight: 800; }
+.momentum-context [data-tone="up"], .momentum-key [data-tone="up"] { color: var(--green); }
+.momentum-context [data-tone="down"], .momentum-key [data-tone="down"] { color: var(--red); }
+.momentum-context output[data-tone="up"] { background: #102c24; border-left-color: var(--green); }
+.momentum-context output[data-tone="down"] { background: #321a22; border-left-color: var(--red); }
+.momentum-context [data-tone="caution"], .momentum-key [data-tone="caution"] { color: var(--yellow); }
+.momentum-context output[data-tone="caution"] { background: #302b18; border-left-color: var(--yellow); }
+.momentum-context output[data-caution="yes"] { border-left-color: var(--yellow); }
+.momentum-context [data-tone="neutral"] { color: var(--muted); }
+.momentum-context [data-tone="volume"], .momentum-key [data-tone="volume"] { color: var(--rvol-elevated); }
+.momentum-context output[data-tone="volume-high"] { color: var(--rvol-surge); background: #292033; border-left-color: var(--rvol-surge); }
+.momentum-context output[data-tone="volume-low"] { color: var(--rvol-quiet); }
+.momentum-dialog { width: min(460px, calc(100vw - 32px)); max-height: calc(100dvh - 64px); overflow-y: auto; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); }
+.momentum-dialog::backdrop { background: #0009; }
+.momentum-dialog p { font-size: 12px; color: var(--muted); }
+.momentum-dialog dl { margin: 16px 0; }
+.momentum-dialog dt { margin-top: 12px; font-size: 11px; font-weight: 800; }
+.momentum-dialog dd { margin: 4px 0 0; font-size: 12px; line-height: 1.5; color: #cbd2db; }
+.momentum-dialog .momentum-note { line-height: 1.5; }
+@media (max-height: 800px) {
+  .relative-volume { height: 48px; flex-basis: 48px; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 1fr; column-gap: 5px; }
+  .rvol-label { flex-direction: column; }
+  .relative-volume strong { font-size: 24px; line-height: 28px; }
+}

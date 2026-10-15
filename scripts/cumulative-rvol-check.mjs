@@ -73,7 +73,7 @@ const ctx = new Proxy({}, { get: (_,name) => name === 'fillText' ? (...args)=>te
 study.setResult(answer('AAPL',.5));
 drawCumulativeRVOL(ctx,study,{visible:[{timeUS:clockUS-130e6},{timeUS:clockUS-70e6}],xAt:i=>10+i*8,bodyWidth:4,left:7,right:500,width:556,top:100,bottom:188});
 assert.ok(text.some(args=>args[0]==='1×'));
-assert.ok(text.some(args=>args[0]==='0.50×'));
+assert.ok(text.some(args=>args[0]==='↓0.50×'));
 assert.ok(rects.some(args=>args[0]===16),'RVOL histogram aligns to second matching candle, not row zero');
 study.reset();
 assert.ok(changed>0);

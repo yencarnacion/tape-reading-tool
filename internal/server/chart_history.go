@@ -17,7 +17,7 @@ const chartHistoryLimit = 5000
 // Separate from startup/RVOL and the stream path: at most one background
 // history request runs, with a pause between small, cached weekly ranges.
 func (s *Server) handleChartHistory(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
@@ -41,7 +41,7 @@ func (s *Server) handleChartHistory(w http.ResponseWriter, r *http.Request) {
 	provider := s.liveProvider()
 	switch s.store.Status().Mode {
 	case "live":
-		if s.rvolMinuteBars == nil {
+		if r.Method == http.MethodPost && s.rvolMinuteBars == nil {
 			http.Error(w, "live history unavailable", 422)
 			return
 		}
@@ -56,7 +56,9 @@ func (s *Server) handleChartHistory(w http.ResponseWriter, r *http.Request) {
 		status := replay.Status()
 		canDownload := (status.Provider == "massive" && status.Source == "historical") ||
 			(status.Provider == "ibkr" && (status.Source == "historical" || status.Source == "live"))
-		if status.Symbol != symbol || !canDownload || status.PositionUS <= 0 {
+		if status.Symbol != symbol || status.PositionUS <= 0 ||
+			(r.Method == http.MethodPost && !canDownload) ||
+			(r.Method == http.MethodGet && (status.Provider == "all" || status.Provider == "")) {
 			http.Error(w, "background replay history requires a specific IBKR or Massive historical provider", 422)
 			return
 		}
@@ -64,6 +66,17 @@ func (s *Server) handleChartHistory(w http.ResponseWriter, r *http.Request) {
 		through = time.UnixMicro(status.PositionUS).UTC().Truncate(time.Minute)
 	default:
 		http.Error(w, "history unavailable in this mode", 422)
+		return
+	}
+	if r.Method == http.MethodGet {
+		// Lightweight stock context may reuse already prepared bars without a
+		// visible market chart. This path cannot call a provider or mark coverage.
+		bars, err := s.recorder.RecentCachedMinuteBars(r.Context(), symbol, provider, through.UnixMicro(), chartHistoryLimit)
+		if err != nil {
+			http.Error(w, "cached momentum history unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"symbol": symbol, "provider": provider, "through_us": through.UnixMicro(), "bars": bars, "cache_only": true})
 		return
 	}
 	select {

@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS trades (
 );
 CREATE INDEX IF NOT EXISTS trades_replay_idx ON trades(symbol, source, provider, event_us, id);
 CREATE INDEX IF NOT EXISTS trades_rewind_idx ON trades(symbol, source, provider, ring_seq);
+CREATE INDEX IF NOT EXISTS trades_market_time_idx ON trades(symbol, source, provider, market_time_us, sequence_id, id);
 CREATE TABLE IF NOT EXISTS quotes (
   id INTEGER PRIMARY KEY,
   symbol TEXT NOT NULL,
