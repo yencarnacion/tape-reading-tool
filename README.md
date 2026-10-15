@@ -39,6 +39,14 @@ history requests. The existing **RVOL PACE** readout stays independent.
 See [5-day cumulative RVOL](docs/CUMULATIVE_RVOL.md) for the session definition,
 IBKR/Massive support, history requirements, and verification.
 
+The one-minute chart also offers a saved **GEX ON/OFF** strike overlay (off by
+default). Teal positive and amber negative bars align with option strikes on the
+existing stock price scale. Choose a 0–30/60/120-day expiry window and hover a
+strike for its estimated exposure and snapshot time. It uses the same
+calls+/puts− assumption and quality gates as the GEX panel and works independently
+of the lower-panel selection. See [Estimated GEX](docs/ESTIMATED_GEX.md#strike-overlay-on-the-one-minute-chart)
+for units, interpretation and recorded-replay limits.
+
 ## Analytics panels
 
 The expanded ADR section includes options-volatility context through an optional local options gateway: ATM IV/change, observed IV peak, frozen implied-move usage, RV/IV, skew, classified flow changes, and visible divergence checks. It borrows space from the lower panel while preserving a compact Kronos view. No additional Massive key is used by this feature. See [Options volatility](docs/OPTIONS_VOLATILITY.md) for setup, calculation definitions, data-quality gates, and the local preview.

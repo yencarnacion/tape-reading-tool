@@ -718,3 +718,20 @@ input[type="range"] { width: 100%; height: 5px; padding: 0; accent-color: var(--
   .rvol-label { flex-direction: column; }
   .relative-volume strong { font-size: 24px; line-height: 28px; }
 }
+
+/* GEX shares the candle price coordinates; these controls do not resize panes. */
+.market-chart-tabs { max-width: calc(100% - 16px); overflow-x: auto; scrollbar-width: none; }
+.market-chart-tabs button { flex-shrink: 0; }
+#gexOverlayButton.active { background: #59d4c8; border-color: #59d4c8; color: #07110e; }
+.gex-overlay-controls { position: absolute; top: 55px; left: 8px; right: 8px; z-index: 5; display: flex; align-items: center; gap: 6px; width: fit-content; max-width: calc(100% - 16px); padding: 2px 4px; background: rgba(12,15,19,.94); border: 1px solid #34434d; border-radius: 2px; font: 700 9px/16px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #aebac4; }
+.gex-overlay-controls[hidden] { display: none; }
+#gexOverlayStatus { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
+#gexOverlayScope { flex-shrink: 0; min-height: 20px; height: 20px; width: 75px; padding: 0 2px; border: 1px solid #46505d; border-radius: 2px; font: inherit; color: #dce2e7; background: #151c23; }
+.gex-overlay-visible .day-context:not(.day-map-lower-left):not(.day-map-lower-right) { top: 87px; }
+@container (max-width: 460px) {
+  .gex-overlay-controls { top: 72px; left: 5px; max-width: calc(100% - 10px); }
+  .gex-overlay-visible .day-context:not(.day-map-lower-left):not(.day-map-lower-right) { top: 104px; }
+}
+
+.gex-overlay-visible .day-context { max-height: var(--gex-map-max-height, 198px); }
+.gex-overlay-visible.gex-compact-price .day-context { display: none; }

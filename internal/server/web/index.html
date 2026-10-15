@@ -79,10 +79,17 @@
           <nav class="market-chart-tabs" aria-label="Market chart controls">
             <button id="minuteChartTab" class="active" type="button" aria-pressed="true">1 MIN</button>
             <button id="dailyChartTab" type="button" aria-pressed="false">90 DAY</button>
+            <button id="gexOverlayButton" type="button" aria-pressed="false" title="Estimated gamma exposure per strike. Amber − left / teal + right; calls+/puts− assumed. Hover a strike for details.">GEX OFF</button>
             <button id="trendlinesButton" class="active" type="button" aria-label="Automatic trendlines" aria-pressed="true">TRENDLINES ON</button>
             <button id="volumeButton" class="active" type="button" aria-label="One-minute volume pane" aria-pressed="true" title="Show the existing volume bars, candle volume, and day volume">VOL ON</button>
             <button id="cumulativeRVOLButton" type="button" aria-label="Experimental 5-day cumulative RVOL pane" aria-pressed="false">5D RVOL OFF</button>
           </nav>
+          <div id="gexOverlayControls" class="gex-overlay-controls" hidden>
+            <output id="gexOverlayStatus" aria-live="polite" role="status"></output>
+            <select id="gexOverlayScope" aria-label="Chart GEX expiry window" title="Expiry window for the chart overlay; saved independently of the GEX detail panel.">
+              <option value="30">0–30D</option><option value="60">0–60D</option><option value="120" selected>0–120D</option>
+            </select>
+          </div>
           <output id="cumulativeRVOLStatus" class="study-screen-reader" aria-live="polite"></output>
           <div class="replay-chart-legend" aria-hidden="true">
             <span class="legend-vwap">VWAP 09:30</span>

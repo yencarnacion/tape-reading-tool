@@ -18,6 +18,8 @@ import { DailyMapHistory, dailyMapModel, DAILY_MAP_SESSIONS } from './day-map.js
 import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulative-rvol.js';
 import { MomentumContextModel } from './momentum-context-model.js';
 import { MomentumContextView } from './momentum-context-view.js';
+import { GEXOverlayController } from './gex-overlay-controller.js';
+import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescription } from './gex-overlay.js';
 
 (() => {
   'use strict';
@@ -40,6 +42,8 @@ import { MomentumContextView } from './momentum-context-view.js';
     replayMarketPanel: $('replayMarketPanel'), replayChart: $('replayChartCanvas'), replayChartEmpty: $('replayChartEmpty'),
     dailyChart: $('dailyChartCanvas'), dailyChartEmpty: $('dailyChartEmpty'), minuteChartTab: $('minuteChartTab'), dailyChartTab: $('dailyChartTab'),
     volumeButton: $('volumeButton'), cumulativeRVOLButton: $('cumulativeRVOLButton'),
+    gexOverlayButton: $('gexOverlayButton'), gexOverlayScope: $('gexOverlayScope'),
+    gexOverlayControls: $('gexOverlayControls'), gexOverlayStatus: $('gexOverlayStatus'),
     showMinuteVolume: $('showMinuteVolume'), showCumulativeRVOL: $('showCumulativeRVOL'), cumulativeRVOLStatus: $('cumulativeRVOLStatus'),
     tapePanel: $('tapePanel'), tapeRows: $('tapeRows'), sizeHeading: $('sizeHeading'),
     tickerForm: $('tickerForm'), tickerInput: $('tickerInput'), historySelect: $('historySelect'), externalReplayBadge: $('externalReplayBadge'),
@@ -107,6 +111,18 @@ import { MomentumContextView } from './momentum-context-view.js';
   window.__tapeReadingAutoTrendlines = () => autoTrendlines.debug();
   const cumulativeRVOL = new CumulativeRVOL({ changed: () => { state.dirtyReplayChart = true; } });
   window.addEventListener('pagehide', () => cumulativeRVOL.reset());
+  const gexOverlay = new GEXOverlayController({ changed: () => {
+    state.dirtyReplayChart = true;
+    if (!gexOverlay.view?.usable || gexOverlay.result !== gexDrawnResult) {
+      elements.replayChart.title = '';
+      gexOverlayGeometry = null;
+    }
+  } });
+  let gexOverlayGeometry = null, gexHoverPoint = null, gexDrawnResult = null;
+  window.addEventListener('pagehide', () => { gexOverlay.reset(); gexOverlayGeometry = null; });
+  window.__tapeReadingGEXOverlay = () => ({ ...gexOverlay.debug(),
+    enabled: state.settings?.showGEXOverlay === true, status: gexOverlay.view?.status,
+    result: gexOverlay.result, geometry: gexOverlayGeometry });
   const chartHistory = new ChartHistoryLoader({ apply: (payload) => {
     const boundary = Math.min(Number(payload.through_us), serverNowUS(performance.now()));
     state.minuteBars = mergeChartHistory(state.minuteBars, payload.bars, boundary);
@@ -131,7 +147,7 @@ import { MomentumContextView } from './momentum-context-view.js';
   } });
   window.addEventListener('pagehide', () => dailyMapHistory.reset());
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { chartHistory.reset(); momentumHistory.reset(); cumulativeRVOL.reset(); }
+    if (document.hidden) { chartHistory.reset(); momentumHistory.reset(); cumulativeRVOL.reset(); gexOverlay.reset(); gexOverlayGeometry = null; }
     else state.dirtyReplayChart = true;
   });
   const DAY_MAP_CORNERS = ['', 'day-map-lower-left', 'day-map-lower-right', 'day-map-upper-right'];
@@ -247,6 +263,8 @@ import { MomentumContextView } from './momentum-context-view.js';
       showTape: display.show_tape !== false,
       showMinuteVolume: true,
       showCumulativeRVOL: false,
+      showGEXOverlay: false,
+      gexOverlayMaxDTE: 120,
       showDailyExtension: true,
       audio: {
         profileVersion: SOUND_PROFILE_VERSION,
@@ -284,6 +302,8 @@ import { MomentumContextView } from './momentum-context-view.js';
     result.audio.profileVersion = SOUND_PROFILE_VERSION;
     result.showMinuteVolume = result.showMinuteVolume !== false;
     result.showCumulativeRVOL = result.showCumulativeRVOL === true;
+    result.showGEXOverlay = result.showGEXOverlay === true;
+    result.gexOverlayMaxDTE = [30, 60, 120].includes(result.gexOverlayMaxDTE) ? result.gexOverlayMaxDTE : 120;
     result.showDailyExtension = result.showDailyExtension !== false;
     result.tickSize = clampInt(result.tickSize, 1, 100000, defaults.tickSize);
     result.customTicks = clampInt(result.customTicks, 1, 100000, result.tickSize);
@@ -1487,6 +1507,7 @@ import { MomentumContextView } from './momentum-context-view.js';
 
   function drawReplayChart() {
     syncTrendlineVisibility();
+    gexOverlayGeometry = null;
     if (!document.hidden && state.settings?.showChart && state.marketChartView === 'minute' && !state.rewind.active &&
         ((state.status.mode === 'live' && state.rvolWarmup.ready) ||
          state.status.mode === 'massive' ||
@@ -1520,6 +1541,11 @@ import { MomentumContextView } from './momentum-context-view.js';
     // either volume study. Normal/default-off layouts retain the existing map.
     elements.replayMarketPanel.classList.toggle('rvol-compact-price',
       state.settings.showCumulativeRVOL && priceBottom < 260);
+    // Keep the inset above the study panes when the GEX controls add a row.
+    const gexInsetTop = width <= 460 ? 104 : 87;
+    elements.replayMarketPanel.classList.toggle('gex-compact-price',
+      priceBottom - gexInsetTop < 120 || right - left < 430);
+    elements.dayContext.style.setProperty('--gex-map-max-height', `${Math.max(120, priceBottom - gexInsetTop - 8)}px`);
     elements.dayContext.style.setProperty('--day-map-bottom', `${height - priceBottom + 8}px`);
     elements.dayContext.style.setProperty('--day-map-right', `${rightAxis + 8}px`);
     const rightGapBars = Math.max(5, Math.min(100, Math.round(Number(state.replayConfig?.chart_right_gap_bars) || 5)));
@@ -1569,6 +1595,13 @@ import { MomentumContextView } from './momentum-context-view.js';
       bars: state.minuteBars, start, xAt, priceY, left, right, top, bottom: priceBottom
     });
 
+    if (gexOverlay.active && gexOverlay.view?.usable) {
+      gexOverlayGeometry = drawGEXOverlay(replayContext, gexOverlay.result.strikes, {
+        priceY, left, right, top, bottom: priceBottom,
+        side: state.dayMapCorner >= 2 ? 'left' : 'right'
+      });
+    }
+
     const bodyWidth = Math.max(1, Math.min(8, step * 0.62));
     visible.forEach((bar, index) => {
       const x = xAt(index);
@@ -1615,6 +1648,10 @@ import { MomentumContextView } from './momentum-context-view.js';
     }
 
     drawTradingPositionLevels(replayContext, priceY, minimum, maximum, left, right, top, priceBottom, '#0c0f13');
+    drawGEXOverlayLabels(replayContext, gexOverlayGeometry);
+    gexDrawnResult = gexOverlay.result;
+    updateGEXHover();
+    if (gexOverlay.active) updateGEXStatusText(true);
 
     const last = visible[visible.length - 1];
     if (state.settings.showMinuteVolume) {
@@ -2185,7 +2222,7 @@ import { MomentumContextView } from './momentum-context-view.js';
   }
 
   function bindControls() {
-    for (const [button, key] of [[elements.volumeButton, 'showMinuteVolume'], [elements.cumulativeRVOLButton, 'showCumulativeRVOL']]) {
+    for (const [button, key] of [[elements.volumeButton, 'showMinuteVolume'], [elements.cumulativeRVOLButton, 'showCumulativeRVOL'], [elements.gexOverlayButton, 'showGEXOverlay']]) {
       button.addEventListener('click', () => {
         if (!state.settings) return;
         state.settings[key] = !state.settings[key];
@@ -2193,6 +2230,18 @@ import { MomentumContextView } from './momentum-context-view.js';
         commitSettings(false);
       });
     }
+    elements.gexOverlayScope.addEventListener('change', () => {
+      const dte = Number(elements.gexOverlayScope.value);
+      if (!state.settings || ![30, 60, 120].includes(dte)) return;
+      state.settings.gexOverlayMaxDTE = dte;
+      commitSettings(false);
+    });
+    elements.replayChart.addEventListener('pointermove', event => {
+      const rect = elements.replayChart.getBoundingClientRect();
+      gexHoverPoint = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+      updateGEXHover();
+    });
+    elements.replayChart.addEventListener('pointerleave', () => { gexHoverPoint = null; elements.replayChart.title = ''; });
     const moveDayMap = (event) => {
       if (event.target.closest('.day-context-modes')) return;
       elements.dayContext.classList.remove(...DAY_MAP_CORNERS.filter(Boolean));
@@ -2200,6 +2249,7 @@ import { MomentumContextView } from './momentum-context-view.js';
       const cornerClass = DAY_MAP_CORNERS[state.dayMapCorner];
       if (cornerClass) elements.dayContext.classList.add(cornerClass);
       elements.dayContext.dataset.corner = DAY_MAP_CORNER_NAMES[state.dayMapCorner];
+      state.dirtyReplayChart = true;
     };
     elements.dayContext.addEventListener('click', moveDayMap);
     elements.dayContextCanvas.addEventListener('keydown', (event) => {
@@ -2958,13 +3008,50 @@ import { MomentumContextView } from './momentum-context-view.js';
   let lastPaintMS = 0;
   function syncStudyControls() {
     if (!state.settings) return;
-    for (const [button, key, label] of [[elements.volumeButton, 'showMinuteVolume', 'VOL'], [elements.cumulativeRVOLButton, 'showCumulativeRVOL', '5D RVOL']]) {
+    for (const [button, key, label] of [[elements.volumeButton, 'showMinuteVolume', 'VOL'], [elements.cumulativeRVOLButton, 'showCumulativeRVOL', '5D RVOL'], [elements.gexOverlayButton, 'showGEXOverlay', 'GEX']]) {
       const enabled = state.settings[key];
       button.classList.toggle('active', enabled);
       button.setAttribute('aria-pressed', String(enabled));
       button.textContent = `${label} ${enabled ? 'ON' : 'OFF'}`;
       button.hidden = state.marketChartView !== 'minute';
     }
+  }
+
+  function updateGEXHover() {
+    const row = gexHoverPoint && gexOverlayHit(gexOverlayGeometry, gexHoverPoint.x, gexHoverPoint.y);
+    elements.replayChart.title = row && gexOverlay.view?.usable
+      ? gexOverlayDescription(row, gexOverlay.result) : '';
+  }
+
+  function updateGEXStatusText(shown) {
+    const view = gexOverlay.view;
+    const text = !shown ? '' : view?.usable
+      ? `EST. GEX · C+/P−${gexOverlayGeometry ? ` · ${gexOverlayGeometry.rows.length} visible strikes` : ''}`
+      : state.pendingReplayReset ? 'GEX SWITCHING' : view?.label || 'GEX LOADING';
+    if (elements.gexOverlayStatus.textContent !== text) elements.gexOverlayStatus.textContent = text;
+  }
+
+  function syncGEXOverlay(now) {
+    const shown = Boolean(state.settings?.showGEXOverlay && state.settings.showChart &&
+      state.marketChartEnabled && state.marketChartView === 'minute' && !state.rewind.active);
+    elements.gexOverlayControls.hidden = !shown;
+    elements.replayMarketPanel.classList.toggle('gex-overlay-visible', shown);
+    const enabled = shown && !state.pendingReplayReset && !document.hidden;
+    const maxDTE = state.settings?.gexOverlayMaxDTE || 120;
+    gexOverlay.sync({ enabled, symbol: state.symbol, generation: state.streamGeneration || 0,
+      mode: state.status.mode, status: state.status, clockUS: serverNowUS(now),
+      spot: selectLastPrice(state.lastPriceTrade, state.quote)?.p, maxDTE,
+      identity: `${state.replay?.generation || 0}|${state.status.epoch || 0}` });
+    if (!enabled || !gexOverlay.view?.usable) {
+      gexOverlayGeometry = null;
+      elements.replayChart.title = '';
+    }
+    if (elements.gexOverlayScope.value !== String(maxDTE)) elements.gexOverlayScope.value = String(maxDTE);
+    const view = gexOverlay.view;
+    updateGEXStatusText(shown);
+    elements.gexOverlayStatus.title = view?.usable
+      ? `${state.symbol}: 0–${maxDTE} days. Estimated dollar hedge adjustment per 1% stock move. Negative amber bars extend left; positive teal bars extend right. Bars scale to the largest visible net exposure. Hover a strike for values. Snapshot age ${view.age}s${gexOverlay.result?.replay ? ' · recorded' : ''}. Calls+/puts− assumed, not actual dealer inventory or price targets.`
+      : view?.reason || 'Waiting for a complete chain snapshot';
   }
 
   function syncCumulativeRVOL(now) {
@@ -2999,6 +3086,7 @@ import { MomentumContextView } from './momentum-context-view.js';
       else if (state.rewind.dirty) drawRewindPane();
     }
     syncTrendlineVisibility();
+    syncGEXOverlay(now);
     if (state.dirtyReplayChart && (state.status?.mode === 'replay' || state.marketChartEnabled) && state.settings?.showChart) drawReplayChart();
     if (state.dirtyChart && state.settings?.showChart) drawChart();
     if (state.dirtyDayContext && state.settings?.showChart) drawDayContext();

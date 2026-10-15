@@ -55,6 +55,46 @@ The **net/gross balance** describes cancellation between the modeled call and
 put exposures; it is not confidence or a reversal probability. Unusable data
 does not display a current concentration profile.
 
+## Strike overlay on the one-minute chart
+
+Click **GEX OFF** in the one-minute chart toolbar to enable the optional strike
+profile. It starts off, and the toggle and its **0–30D / 0–60D / 0–120D** expiry
+window are saved independently of the lower GEX panel. The overlay works while
+Options Flow or another lower panel is selected; the ADR panel keeps its space.
+
+Each horizontal bar sits at its stock option strike on the existing candle
+price scale. **Teal positive bars extend right; amber negative bars extend left**
+from a common zero line. Length is proportional to the absolute net exposure,
+normalized to the largest visible strike in the chosen expiry window. Changing
+the visible price range or expiry scope can therefore change the length scale.
+All strikes inside the price pane are included; distant strikes never expand the
+candle scale. Zero net exposure gets a small neutral mark. Crowded labels favor
+larger concentrations, but bars remain visible. Hover a bar or label for its
+strike, signed net/call/put values, snapshot time and units. The status strip's
+hover text explains the scale, colors and snapshot age.
+
+The label **EST. GEX · C+/P−** retains the same positioning assumption as the
+panel. Amounts are estimated dollars of hedge adjustment per 1% stock move,
+calculated at snapshot spot. They are not actual dealer inventory or price
+magnets. This profile uses the stock's own strikes; it does not translate index
+strikes to futures prices. The supported windows include expirations from today
+through 30, 60 or 120 calendar days; 120 days is not all expirations. A separate
+0DTE profile and historical open/min/max strike markers are not supplied.
+
+The overlay refreshes visible live data on the same bounded schedule as the GEX
+panel. It clears unusable, incomplete or stale data, including when the tape is
+idle, and aborts obsolete symbol/scope/timeline requests. Switching to 90 DAY,
+hiding the page/chart, disabling GEX, or entering local tape rewind stops its
+requests. Server replay uses only recorded GEX at or before its replay clock;
+missing recordings show **NO RECORDED GEX**. Paused replay does not continuously
+poll. No current chain is substituted for a historical snapshot.
+
+Bars sit behind candles; labels remain readable above chart lines. No chart or
+study pane is resized. The profile moves to the opposite side when the Daily Map
+is moved to a right corner. The inset stays above the volume studies and hides
+while GEX is on if the price pane is too short or narrow to fit the profile and
+map without obscuring strikes.
+
 ## Data and quality
 
 The backend uses the existing loopback DaiDai options gateway and server-side
@@ -113,11 +153,18 @@ data must not be presented as past-session GEX.
 
 `node scripts/gex-check.mjs`
 
+`node scripts/gex-overlay-check.mjs`
+
 `CHROME=/path/to/chrome node scripts/gex-browser-check.mjs`
+
+`CHROME=/path/to/chrome node scripts/gex-overlay-browser-check.mjs`
 
 The browser check uses synthetic local fixtures, tests laptop-sized dashboard
 windows, details/settings, quality colors, paused replay, stale asynchronous
-responses and panel cleanup. Its screenshots are explicitly test data.
+responses and panel cleanup. The overlay check measures actual canvas bar
+coordinates and widths, verifies unchanged candle/volume/ADR geometry, persisted
+controls, request cancellation and replay cutoff safety. Screenshots use
+synthetic test data only.
 
 References: [Massive option-chain snapshot](https://massive.com/docs/rest/options/snapshots/option-chain-snapshot)
 for Greeks, OI convention, pagination and underlying metadata;
