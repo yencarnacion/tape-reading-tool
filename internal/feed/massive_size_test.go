@@ -60,7 +60,7 @@ func TestGatewayFractionalStreamRecordsAndReplays(t *testing.T) {
 			fmt.Fprint(w, `{"ticker":{}}`)
 			return
 		}
-		if r.URL.Query().Get("channels") != "T,Q" {
+		if r.URL.Query().Get("channels") != "T,Q,A,AM" {
 			t.Errorf("unexpected channels: %s", r.URL.RawQuery)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")

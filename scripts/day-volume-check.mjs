@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {providerDayVolume} from '../internal/server/web/day-volume.js';
+const clock=Date.parse('2026-10-15T07:16:00-04:00'),quote={day_volume:1316237.651295,day_volume_ms:clock};
+assert.equal(providerDayVolume(quote,'live',clock*1000),1316237.651295,'observed QQQ counter must not become the 878084.41931 candle sum');
+assert.equal(providerDayVolume({...quote,day_volume:0},'massive',clock*1000),0);
+for(const mode of ['replay','render','demo'])assert.equal(providerDayVolume(quote,mode,clock*1000),null);
+for(const change of [{day_volume:-1},{day_volume:NaN},{day_volume:Infinity},{day_volume:'12'},{day_volume_ms:0},{day_volume_ms:clock-90001},{day_volume_ms:clock+2001}])assert.equal(providerDayVolume({...quote,...change},'live',clock*1000),null);
+assert.equal(providerDayVolume({...quote,day_volume_ms:clock-90000},'live',clock*1000),quote.day_volume);
+const midnight=Date.parse('2026-10-16T00:00:01-04:00');
+assert.equal(providerDayVolume({...quote,day_volume_ms:midnight-2000},'live',midnight*1000),null,'prior-day counter cannot cross midnight');
+console.log('Day volume: fractional provider counter, explicit zero, invalid/stale/future/prior-day guards, and replay isolation passed');

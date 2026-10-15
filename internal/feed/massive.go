@@ -75,6 +75,10 @@ func (f *Massive) Run(ctx context.Context) {
 	}
 	defer client.Close()
 	symbol := f.currentSymbol()
+	if err := client.Subscribe(massivews.StocksSecAggs, symbol); err != nil {
+		f.fail(err)
+		return
+	}
 	if err := client.Subscribe(massivews.StocksTrades, symbol); err != nil {
 		f.fail(err)
 		return
@@ -113,6 +117,11 @@ func (f *Massive) Run(ctx context.Context) {
 				f.fail(err)
 				continue
 			}
+			if err := client.Subscribe(massivews.StocksSecAggs, next); err != nil {
+				f.fail(err)
+				continue
+			}
+			_ = client.Unsubscribe(massivews.StocksSecAggs, old)
 			_ = client.Unsubscribe(massivews.StocksTrades, old)
 			_ = client.Unsubscribe(massivews.StocksQuotes, old)
 			f.mu.Lock()
@@ -140,6 +149,8 @@ func (f *Massive) handleOutput(output any) {
 			return
 		}
 		switch header.Event {
+		case "A", "AM":
+			applyMassiveDayAggregate(f.store, f.currentSymbol(), value, 0)
 		case "T":
 			var trade massiveStreamTrade
 			if json.Unmarshal(value, &trade) == nil {

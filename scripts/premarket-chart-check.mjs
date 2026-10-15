@@ -21,7 +21,7 @@ let historyRequests = 0, app, browser, ws, logs = '', childError;
 const gateway = createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/stream') {
-    assert.equal(url.searchParams.get('channels'), 'T,Q');
+    assert.equal(url.searchParams.get('channels'), 'T,Q,A,AM');
     res.writeHead(200, {'Content-Type': 'text/event-stream'});
     res.write('event: hello\ndata: {"api_version":1,"source":"massive","feed":"realtime"}\n\n');
     peers.add(res);
@@ -111,11 +111,20 @@ try {
     if (value.method === 'Runtime.exceptionThrown') errors.push(value.params.exceptionDetails);
   });
   await command('Runtime.enable'); await command('Page.enable');
+  await command('Page.addScriptToEvaluateOnNewDocument',{source:`window.__volumeLabels=[];const fill=CanvasRenderingContext2D.prototype.fillText;CanvasRenderingContext2D.prototype.fillText=function(text,...args){if(this.canvas.id==='replayChartCanvas'&&/^(DAY|BAR) VOL/.test(text))window.__volumeLabels.push(text);return fill.call(this,text,...args);};`});
   await command('Emulation.setDeviceMetricsOverride', {width: 1440, height: 900, deviceScaleFactor: 1, mobile: false});
   await command('Page.navigate', {url: target});
   await waitFor(async () => (await chart())?.bars.length === 1, 'initial historical candle');
   assert.deepEqual(ohlcv((await chart()).bars[0]), [117, 117.1, 116.9, 117, 1000]);
   assert.ok(historyRequests > 0, 'initial provider history was loaded');
+  await waitFor(async()=>await evaluate(`window.__volumeLabels.some(v=>v.startsWith('BAR VOL'))`),'honest candle-sum fallback label');
+  const counterAt=Date.now();
+  for(const peer of peers)peer.write(`event: market\ndata: ${JSON.stringify({symbol:'AAOI',channel:'A',event_ms:counterAt,data:{sym:'AAOI',e:counterAt,av:1316237,dav:'1316237.651295'}})}\n\n`);
+  await waitFor(async()=>await evaluate(`window.__volumeLabels.includes('DAY VOL · FEED')`),'daily counter paints without any synthetic trade');
+  const counter=await (await fetch(`${target}/api/health`)).json();
+  assert.equal(counter.quote.day_volume,1316237.651295);
+  assert.deepEqual(ohlcv((await chart()).bars[0]),[117,117.1,116.9,117,1000],'day counter must not alter candle volume');
+
 
   trade('09:28:00', 117.21, [12]);
   trade('09:28:01', 900, [12, 37], 1);

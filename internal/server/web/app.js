@@ -1,3 +1,4 @@
+import { providerDayVolume } from './day-volume.js';
 import { dailyExtension, dailyExtensionLabels } from './daily-extension.js';
 import { formatTradeSize, tradeSizeLabel } from './trade-size.js';
 import {
@@ -556,6 +557,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
         state.dirtyTape = true;
       }
       if (message.quote) {
+        if (state.quote.day_volume !== message.quote.day_volume || state.quote.day_volume_ms !== message.quote.day_volume_ms) state.dirtyReplayChart = true;
         state.quote = message.quote;
         state.dirtyDayContext = true;
       }
@@ -1665,7 +1667,8 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
       });
 
       const currentVolume = formatCandleVolume(last.volume);
-      const dayVolume = formatCandleVolume(volumeSinceFourAM(state.minuteBars));
+      const feedDayVolume = providerDayVolume(state.quote, state.status.mode, serverNowUS(performance.now()));
+      const dayVolume = formatCandleVolume(feedDayVolume ?? volumeSinceFourAM(state.minuteBars));
       replayContext.textAlign = 'left';
       replayContext.textBaseline = 'top';
       replayContext.font = '800 24px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
@@ -1689,7 +1692,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
       replayContext.fillText('VOLUME', left + 2, volumeTop + 3);
       replayContext.fillText(formatSize(maxVolume), right + 5, volumeTop + 7);
       if (showDayVolume) {
-        const dayVolumeLabel = ['DAY VOL · 04:00 ET', 'DAY VOL 04:00', 'DAY VOL']
+        const dayVolumeLabel = (feedDayVolume !== null ? ['DAY VOL · FEED', 'DAY VOL'] : ['BAR VOL · 04:00 ET', 'BAR VOL 04:00', 'BAR VOL'])
           .find((text) => dayVolumeLeft + replayContext.measureText(text).width <= right);
         replayContext.fillStyle = '#34c7d9';
         replayContext.fillText(dayVolumeLabel || '', dayVolumeLeft, volumeTop + 3);
@@ -3094,6 +3097,11 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     if (state.dirtyDailyChart && state.marketChartView === 'daily' && state.settings?.showChart) drawDailyChart();
     if (state.dirtyTape && state.settings?.showTape) renderTape();
     if (now - state.lastMetricUpdate > 100) {
+      const dayCounterAvailable = providerDayVolume(state.quote, state.status.mode, serverNowUS(now)) !== null;
+      if (dayCounterAvailable !== state.dayCounterAvailable) {
+        state.dayCounterAvailable = dayCounterAvailable;
+        state.dirtyReplayChart = true;
+      }
       syncCumulativeRVOL(now);
       updateLiveMetrics(now);
       state.lastMetricUpdate = now;

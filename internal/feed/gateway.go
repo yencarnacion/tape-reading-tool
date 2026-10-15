@@ -112,7 +112,7 @@ func (f *Gateway) cycle(ctx context.Context, symbol string) error {
 	defer cancel()
 	var wg sync.WaitGroup
 	defer func() { cancel(); wg.Wait() }()
-	return f.client.Stream(ctx, symbol, "T,Q", func(name string, data json.RawMessage) error {
+	return f.client.Stream(ctx, symbol, "T,Q,A,AM", func(name string, data json.RawMessage) error {
 		switch name {
 		case "hello":
 			var h marketgateway.Hello
@@ -135,6 +135,10 @@ func (f *Gateway) event(symbol string, e marketgateway.Event) {
 		return
 	}
 	received := time.Now()
+	if e.Channel == "A" || e.Channel == "AM" {
+		applyMassiveDayAggregate(f.store, symbol, e.Data, e.EventMS)
+		return
+	}
 	if e.Channel == "Q" {
 		var q struct {
 			Bid float64 `json:"bp"`
@@ -190,6 +194,11 @@ func (f *Gateway) snapshot(ctx context.Context, symbol string) {
 				AS  float64 `json:"S"`
 				T   int64   `json:"t"`
 			} `json:"lastQuote"`
+			Updated int64 `json:"updated"`
+			Min     struct {
+				T int64 `json:"t"`
+				massiveDayAggregate
+			} `json:"min"`
 			Trade massiveStreamTrade `json:"lastTrade"`
 		} `json:"ticker"`
 	}
@@ -211,6 +220,13 @@ func (f *Gateway) snapshot(ctx context.Context, symbol string) {
 	}
 	if ctx.Err() != nil || symbol != f.store.Active() {
 		return
+	}
+	if volume, ok := s.Ticker.Min.volume(); ok {
+		stamp := marketgateway.Millis(s.Ticker.Min.T)
+		if updated := marketgateway.Millis(s.Ticker.Updated); updated >= stamp && stamp > 0 {
+			stamp = min(stamp+59999, updated)
+		}
+		f.store.UpdateDayVolume(symbol, volume, stamp)
 	}
 	f.store.UpdatePreviousClose(symbol, s.Ticker.Prev.C)
 	tr := s.Ticker.Trade

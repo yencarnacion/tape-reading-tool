@@ -47,6 +47,15 @@ calls+/puts− assumption and quality gates as the GEX panel and works independe
 of the lower-panel selection. See [Estimated GEX](docs/ESTIMATED_GEX.md#strike-overlay-on-the-one-minute-chart)
 for units, interpretation and recorded-replay limits.
 
+The minute-chart volume pane distinguishes **DAY VOL · FEED** (Massive's
+accumulated daily volume, including fractional shares) from **BAR VOL · 04:00 ET**
+(the sum of available candle volumes). The feed counter matches the Watchlist
+day total; it is supplied by A/AM aggregates and the premarket snapshot's
+`min.dav`/`min.av`, without inserting a trade into the tape. Daily counters and
+minute-bar sums can differ substantially, so candle sums are never presented as
+that provider counter. Missing, stale, prior-date or future counters use the
+explicit bar-volume fallback; replay/render always use that historical fallback.
+
 ## Analytics panels
 
 The expanded ADR section includes options-volatility context through an optional local options gateway: ATM IV/change, observed IV peak, frozen implied-move usage, RV/IV, skew, classified flow changes, and visible divergence checks. It borrows space from the lower panel while preserving a compact Kronos view. No additional Massive key is used by this feature. See [Options volatility](docs/OPTIONS_VOLATILITY.md) for setup, calculation definitions, data-quality gates, and the local preview.

@@ -32,6 +32,8 @@ type Trade struct {
 }
 
 type Quote struct {
+	DayVolume     float64 `json:"day_volume,omitempty"`
+	DayVolumeMS   int64   `json:"day_volume_ms,omitempty"`
 	Bid           float64 `json:"bid"`
 	Ask           float64 `json:"ask"`
 	BidSize       float64 `json:"bid_size"`
@@ -208,6 +210,24 @@ func (t *symbolTape) updateLastPriceLocked(price float64, marketMS int64) {
 	}
 	t.quote.LastPrice = price
 	t.quote.LastTimeMS = marketMS
+}
+
+// UpdateDayVolume keeps the provider's accumulated counter separate from candle
+// volumes. Price eligibility and minute-bar coverage must not truncate a day total.
+func (s *Store) UpdateDayVolume(symbol string, volume float64, atMS int64) {
+	if volume < 0 || math.IsNaN(volume) || math.IsInf(volume, 0) || atMS <= 0 {
+		return
+	}
+	t := s.getOrCreate(symbol)
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if atMS < t.quote.DayVolumeMS {
+		return
+	}
+	t.quote.DayVolume, t.quote.DayVolumeMS = volume, atMS
 }
 
 // UpdatePreviousClose records the reference close supplied by the market-data feed.
