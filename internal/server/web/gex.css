@@ -53,3 +53,58 @@
 .gex-dialog td { border-bottom:1px solid #29394a; padding:3px 5px; text-align:right; }
 .gex-dialog td:first-child { text-align:left; }
 @media(max-width:520px) { .gex-facts{grid-template-columns:100px minmax(0,1fr);} }
+
+/* Recorded history is a separate review surface; chart and ADR panes keep their space. */
+.gex-history-launch { left:76px; }
+.gex-history-dialog { width:min(900px,calc(100vw - 28px)); max-height:calc(100vh - 32px); overflow:auto; padding:18px; border:1px solid #52677c; border-radius:9px; background:#10171f; color:#e3ecf4; font:13px/1.4 ui-sans-serif,system-ui,sans-serif; font-variant-numeric:tabular-nums; }
+.gex-history-dialog::backdrop { background:#000a; }
+.gex-history-dialog header { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+.gex-history-dialog header small { color:#95aabe; font-size:10px; letter-spacing:.12em; }
+.gex-history-dialog h2 { margin:2px 0 12px; font-size:23px; }
+.gex-history-dialog button,.gex-history-dialog select { min-height:30px; width:auto; padding:4px 9px; border:1px solid #415365; border-radius:4px; color:#dce8f2; background:#1a2734; font:700 11px ui-monospace,monospace; }
+.gex-history-dialog button { cursor:pointer; }
+.gex-history-dialog button:disabled { opacity:.4; cursor:default; }
+.gex-history-dialog button.active { color:#81e0d6; border-color:#59d4c8; }
+.gh-controls,.gh-change-controls { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; }
+.gh-controls label,.gh-change-controls label { display:flex; align-items:center; gap:7px; }
+.gh-status { color:#efc47e; font-weight:750; }
+.gh-scrub { display:flex; align-items:center; gap:8px; margin-top:12px; }
+.gh-slider { flex:1; min-width:0; width:100%; accent-color:#62b5ff; cursor:ew-resize; }
+.gh-time-range { margin:5px 0 12px; color:#a0b4c6; font:11px ui-monospace,monospace; }
+.gh-reading { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+.gh-reading>div { padding:9px 10px; border:1px solid #293b4b; border-radius:5px; background:#15212b; }
+.gh-reading small { display:block; color:#9fb4c7; font-size:11px; }
+.gh-reading strong { display:block; margin-top:3px; font:800 19px ui-monospace,monospace; }
+.gh-trend { margin:12px 0; padding:9px 10px 3px; border:1px solid #293b4b; border-radius:5px; }
+.gh-trend:empty { display:none; }
+.gh-trend figcaption { color:#a7bbc9; font-size:11px; }
+.gh-trend svg { display:block; width:100%; height:80px; }
+.gh-trend-line { stroke:#62b5ff; stroke-width:2; fill:none; }
+.gh-trend-dot { fill:#62b5ff; }
+.gh-selected-dot { fill:#fff; stroke:#10171f; stroke-width:1; }
+.gh-legend { display:flex; flex-wrap:wrap; gap:7px 16px; margin-top:13px; }
+.gh-legend label { display:inline-flex; align-items:center; gap:6px; cursor:pointer; font:700 12px ui-monospace,monospace; }
+.gh-legend label[data-available="false"] { opacity:.5; }
+.gh-legend input { width:auto; margin:0; }
+.gh-legend i { width:7px; height:7px; border-radius:50%; }
+.gh-help,.gh-footnote { margin:8px 0 13px; color:#a3b7c7; font-size:12px; }
+.gh-change-controls { justify-content:space-between; margin-top:10px; }
+.gh-changes { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 14px; color:#a5b9c8; font-size:12px; }
+.gh-change { display:flex; flex-direction:column; flex:1 1 110px; padding:6px 8px; background:#1a2632; border:1px solid #34485b; border-radius:4px; }
+.gh-change strong { color:#e3ecf4; font-size:13px; }
+.gh-profile-heading { margin-bottom:6px; color:#b0c2cf; font-size:11px; }
+.gh-profile { max-height:440px; overflow:auto; padding:0 6px; border:1px solid #293b4b; border-radius:5px; }
+.gh-profile:empty { display:none; }
+.gh-profile-row { display:grid; grid-template-columns:80px minmax(90px,1fr) 100px; align-items:center; gap:12px; min-height:28px; border-bottom:1px solid #202f3d; font:12px ui-monospace,monospace; }
+.gh-profile-row:hover { background:#1c2c3b; }
+.gh-strike { font-size:13px; }
+.gh-amount { text-align:right; }
+.gh-amount[data-sign="positive"] { color:#80e5df; }
+.gh-amount[data-sign="negative"] { color:#ffd08a; }
+.gh-track { position:relative; height:26px; margin:0 4px; background:linear-gradient(to right,transparent calc(50% - .5px),#516272 calc(50% - .5px),#516272 calc(50% + .5px),transparent calc(50% + .5px)); }
+.gh-bar { position:absolute; top:8px; height:10px; background:#59d4c8; opacity:.8; }
+.gh-bar[data-sign="negative"] { background:#efb06a; }
+.gh-dot { position:absolute; top:9px; width:8px; height:8px; margin-left:-4px; border:1px solid #10171f; border-radius:50%; }
+.gh-footnote { margin-top:12px; }
+#gexOverlayHistory { flex-shrink:0; min-height:20px; height:20px; padding:0 5px; font:inherit; border:1px solid #46505d; color:#dce2e7; background:#151c23; }
+@media(max-width:600px) { .gex-history-dialog{padding:12px;} .gh-reading strong{font-size:15px;} .gh-profile-row{grid-template-columns:65px minmax(60px,1fr) 75px;gap:8px;} .gh-reading>div{padding:7px;} }

@@ -1,11 +1,12 @@
 import { gexMoney } from './gex-model.js';
+import { GEX_HISTORY_COLORS, gexTime } from './gex-history-model.js';
 
 export const GEX_COLORS = Object.freeze({ positive: '#59d4c8', negative: '#efb06a', zero: '#8d96a2' });
 const strikePrice = value => value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
 
 // Pixel geometry only. The caller owns the candle price range; options strikes
 // must never expand that range or displace candles, studies, or the price axis.
-export function gexOverlayGeometry(strikes, { priceY, left, right, top, bottom, side = 'right' }) {
+export function gexOverlayGeometry(strikes, { priceY, left, right, top, bottom, side = 'right', comparisons = [] }) {
   const width = Math.min(210, (right - left) * .38);
   const edge = side === 'left' ? left + 8 : right - width - 8;
   const baseline = edge + width / 2;
@@ -13,7 +14,11 @@ export function gexOverlayGeometry(strikes, { priceY, left, right, top, bottom, 
   const visible = strikes.map(bucket => ({ ...bucket, y: priceY(bucket.strike) }))
     .filter(bucket => Number.isFinite(bucket.y) && bucket.y >= top && bucket.y <= bottom)
     .sort((a, b) => a.y - b.y);
-  const scaleMax = visible.reduce((max, bucket) => Math.max(max, Math.abs(bucket.net)), 0);
+  const prior = comparisons.map(c => ({...c, byStrike:new Map(c.snapshot.strikes.map(b=>[b.strike,b]))}));
+  // One signed scale for bars and every historical endpoint makes growth,
+  // shrinkage and sign changes comparable at the same strike.
+  const scaleMax = visible.reduce((max, bucket) => Math.max(max, Math.abs(bucket.net),
+    ...prior.map(c=>Math.abs(c.byStrike.get(bucket.strike)?.net || 0))), 0);
   const rows = visible.map((bucket, index) => {
     const gap = Math.min(index ? bucket.y - visible[index - 1].y : Infinity,
       index + 1 < visible.length ? visible[index + 1].y - bucket.y : Infinity);
@@ -21,6 +26,11 @@ export function gexOverlayGeometry(strikes, { priceY, left, right, top, bottom, 
     const barWidth = scaleMax ? Math.abs(bucket.net) / scaleMax * half : 0;
     return { ...bucket, x: baseline - (bucket.net < 0 ? barWidth : 0), width: barWidth, height, baseline,
       color: GEX_COLORS[bucket.net > 0 ? 'positive' : bucket.net < 0 ? 'negative' : 'zero'],
+      history: prior.filter(c=>c.byStrike.has(bucket.strike)).map(c=>{
+        const net=c.byStrike.get(bucket.strike).net;
+        return {minutes:c.minutes,asOfMS:c.snapshot.asOfMS,net,delta:bucket.net-net,
+          x:baseline+(scaleMax?net/scaleMax*half:0),color:GEX_HISTORY_COLORS[c.minutes]};
+      }),
       label: `${strikePrice(bucket.strike)}  ${gexMoney(bucket.net)}` };
   });
   return { rows, left, right, top, bottom, scaleMax, baseline, profileLeft: edge, profileRight: edge + width };
@@ -57,6 +67,12 @@ export function drawGEXOverlayLabels(ctx, geometry) {
   ctx.save();
   ctx.beginPath(); ctx.rect(left, top, right - left, bottom - top); ctx.clip();
   ctx.globalAlpha = 1;
+  // Paint endpoints after candles so thin price lines cannot erase them.
+  for (const row of rows) for (const point of [...row.history].reverse()) {
+    const size=point.minutes===1?3:point.minutes===5?4:5;
+    ctx.fillStyle='#0c0f13';ctx.fillRect(point.x-size/2-1,row.y-size/2-1,size+2,size+2);
+    ctx.fillStyle=point.color;ctx.fillRect(point.x-size/2,row.y-size/2,size,size);
+  }
   ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
   ctx.textBaseline = 'bottom'; ctx.textAlign = 'left';
   // Show every bar. Resolve text collisions in favor of larger concentrations.
@@ -85,5 +101,6 @@ export function gexOverlayHit(geometry, x, y) {
 
 export function gexOverlayDescription(row, result) {
   const at = new Date(result.asOfMS).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour12: false });
-  return `${result.symbol} strike $${strikePrice(row.strike)} · net ${gexMoney(row.net)} (calls ${gexMoney(row.call)}, puts ${gexMoney(row.put)}) per 1% stock move. 0–${result.maxDTE} days · ${at} ET${result.replay ? ' recorded' : ''}. Calls+/puts− assumed; not actual dealer inventory. Bars scaled to the largest visible net exposure.`;
+  const history=(row.history||[]).map(p=>`${p.minutes}m prior: ${gexMoney(p.net)} at ${gexTime(p.asOfMS)} ET; change ${gexMoney(p.delta)}`).join(' · ');
+  return `${result.symbol} strike $${strikePrice(row.strike)} · net ${gexMoney(row.net)} (calls ${gexMoney(row.call)}, puts ${gexMoney(row.put)}) per 1% stock move. 0–${result.maxDTE} days · ${at} ET${result.replay ? ' recorded' : ''}. Calls+/puts− assumed; not actual dealer inventory. Bars and prior-time dots share one signed scale.${history ? ` ${history}. Changes reflect snapshot estimates, not identified buying or selling.` : ' Prior-time recordings unavailable.'}`;
 }

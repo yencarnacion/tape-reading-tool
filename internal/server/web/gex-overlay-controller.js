@@ -1,4 +1,5 @@
 import { gexView } from './gex-model.js';
+import { gexComparisons } from './gex-history-model.js';
 
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const replayMode = mode => mode === 'replay' || mode === 'render';
@@ -10,7 +11,7 @@ const sameView = (a, b) => a === b || (!!a && !!b && viewFields.every(key => a[k
 export class GEXOverlayController {
   constructor({ changed = () => {}, fetcher = (...args) => fetch(...args), now = () => Date.now() } = {}) {
     Object.assign(this, { changed, fetcher, now });
-    this.active = false; this.result = null; this.view = null;
+    this.active = false; this.result = null; this.view = null; this.comparisons = [];
     this.epoch = 0; this.key = ''; this.controller = null; this.context = null;
     this.reply = null; this.lastClock = null; this.lastRequestClock = null;
     this.nextPoll = 0; this.evaluatedAt = ''; this.requests = 0;
@@ -20,7 +21,7 @@ export class GEXOverlayController {
     const visible = this.active || this.view !== null || this.result !== null;
     this.epoch++; this.controller?.abort(); this.controller = null;
     this.active = false; this.key = ''; this.context = null; this.reply = null;
-    this.result = null; this.view = null; this.lastClock = null;
+    this.result = null; this.view = null; this.comparisons = []; this.lastClock = null;
     this.lastRequestClock = null; this.nextPoll = 0; this.evaluatedAt = '';
     if (visible) this.changed();
   }
@@ -77,6 +78,7 @@ export class GEXOverlayController {
     // Keep the original internally so changing price/clock can re-evaluate it.
     const result = view.usable ? reply : null;
     if (result !== this.result || !sameView(view, this.view)) {
+      if (result !== this.result) this.comparisons = result ? gexComparisons(result) : [];
       this.result = result; this.view = view; this.changed();
     }
   }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -117,6 +118,7 @@ func (a *gexArchiveStore) record(reply gexReply) string {
 	if a.last[key] == reply.AsOfMS {
 		return "recorded"
 	}
+	reply.History = nil // comparisons are derived; never recursively archive history
 	reply.Recording = "recorded"
 	body, err := json.Marshal(reply)
 	if err != nil || len(body) > 8<<20 {
@@ -139,30 +141,21 @@ func (a *gexArchiveStore) record(reply gexReply) string {
 	return "recorded"
 }
 
-func (a *gexArchiveStore) replayAt(seed gexReply, clock time.Time) gexReply {
-	seed.Replay = true
-	seed.Source = "Recorded GEX snapshot"
-	seed.Status = "replay-unavailable"
-	if !gexStockSymbol.MatchString(seed.Symbol) {
-		return seed
-	}
-	date := clock.In(gexLocation()).Format("2006-01-02")
-	path := filepath.Join(a.dir, date, seed.Symbol+".jsonl")
-	a.mu.Lock()
-	defer a.mu.Unlock()
+// Caller holds a.mu. Replay and comparisons share the bounded archive cache.
+func (a *gexArchiveStore) loadLocked(symbol, date string) ([]gexReply, string) {
+	path := filepath.Join(a.dir, date, symbol+".jsonl")
 	info, err := os.Stat(path)
 	if err != nil {
-		return seed
+		return nil, "replay-unavailable"
 	}
 	if info.Size() > 128<<20 {
-		seed.Status = "archive-too-large"
-		return seed
+		return nil, "archive-too-large"
 	}
 	entry, ok := a.cache[path]
 	if !ok || entry.size != info.Size() || !entry.modified.Equal(info.ModTime()) {
 		file, err := os.Open(path)
 		if err != nil {
-			return seed
+			return nil, "replay-unavailable"
 		}
 		scanner := bufio.NewScanner(io.NewSectionReader(file, 0, info.Size()))
 		scanner.Buffer(make([]byte, 64<<10), 8<<20)
@@ -172,25 +165,43 @@ func (a *gexArchiveStore) replayAt(seed gexReply, clock time.Time) gexReply {
 			if json.Unmarshal(scanner.Bytes(), &reply) != nil {
 				continue
 			} // torn final line is recoverable
-			if !validGEXRecord(reply) || reply.Symbol != seed.Symbol || time.UnixMilli(reply.AsOfMS).In(gexLocation()).Format("2006-01-02") != date {
+			if !validGEXRecord(reply) || reply.Symbol != symbol || time.UnixMilli(reply.AsOfMS).In(gexLocation()).Format("2006-01-02") != date {
 				continue
 			}
+			reply.History = nil
 			entry.items = append(entry.items, reply)
 		}
 		file.Close()
 		if scanner.Err() != nil {
-			seed.Status = "archive-invalid"
-			return seed
+			return nil, "archive-invalid"
 		}
 		if len(a.cache) >= 2 {
 			a.cache = map[string]gexArchiveEntry{}
 		}
+		sort.SliceStable(entry.items, func(i, j int) bool { return entry.items[i].AsOfMS < entry.items[j].AsOfMS })
 		a.cache[path] = entry
 	}
+	return entry.items, "ready"
+}
+
+func (a *gexArchiveStore) replayAt(seed gexReply, clock time.Time) gexReply {
+	seed.Replay = true
+	seed.Source = "Recorded GEX snapshot"
+	seed.Status = "replay-unavailable"
+	if !gexStockSymbol.MatchString(seed.Symbol) {
+		return seed
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	items, status := a.loadLocked(seed.Symbol, clock.In(gexLocation()).Format("2006-01-02"))
+	if status != "ready" {
+		seed.Status = status
+		return seed
+	}
 	var selected *gexReply
-	for i := range entry.items {
-		item := &entry.items[i]
-		if item.MaxDTE == seed.MaxDTE && item.AsOfMS <= clock.UnixMilli() && (selected == nil || item.AsOfMS > selected.AsOfMS) {
+	for i := range items {
+		item := &items[i]
+		if item.MaxDTE == seed.MaxDTE && item.AsOfMS <= clock.UnixMilli() && (selected == nil || item.AsOfMS >= selected.AsOfMS) {
 			selected = item
 		}
 	}

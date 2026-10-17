@@ -12,6 +12,7 @@ export function createGEXPanel({root,host,settings}) {
   root.classList.add('gex-root');
   root.innerHTML=`<section class="gex-panel" aria-label="Estimated gamma exposure">
     <button class="gex-details" type="button">DETAILS</button>
+    <button class="gex-details gex-history-launch" type="button">HISTORY</button>
     <strong class="gex-bias" role="status">GEX LOADING</strong>
     <div class="gex-reading"><output class="gex-net">—</output><span>est. $ hedge / 1% move</span></div>
     <div class="gex-levels"><div><div><span>LARGEST +</span><strong class="gex-positive">—</strong></div><small class="gex-positive-distance">—</small></div><div><div><span>LARGEST −</span><strong class="gex-negative">—</strong></div><small class="gex-negative-distance">—</small></div></div>
@@ -39,6 +40,7 @@ export function createGEXPanel({root,host,settings}) {
   function clear(){epoch++;pending?.abort();pending=null;result=null;nextPoll=0;lastPaint='';lastReplayRequest=-1;}
   function abort(){stopped=true;clear();dialog.close();dialog.remove();}
   host.signal.addEventListener('abort',abort,{once:true});
+  get('history-launch').addEventListener('click',()=>host.openGEXHistory?.({maxDTE}),{signal:host.signal});
   get('details').addEventListener('click',()=>{paintDetails();dialog.showModal();},{signal:host.signal});
   dialog.querySelector('.gex-close').addEventListener('click',()=>dialog.close(),{signal:host.signal});
   dialog.querySelector('.gex-dte').addEventListener('change',event=>{

@@ -42,7 +42,9 @@ IBKR/Massive support, history requirements, and verification.
 The one-minute chart also offers a saved **GEX ON/OFF** strike overlay (off by
 default). Teal positive and amber negative bars align with option strikes on the
 existing stock price scale. Choose a 0–30/60/120-day expiry window and hover a
-strike for its estimated exposure and snapshot time. It uses the same
+strike for its estimated exposure and snapshot time. Prior-time dots compare
+1/5/15/30-minute observations; **HISTORY** opens a recorded-snapshot slider, net
+GEX timeline and largest strike changes. It uses the same
 calls+/puts− assumption and quality gates as the GEX panel and works independently
 of the lower-panel selection. See [Estimated GEX](docs/ESTIMATED_GEX.md#strike-overlay-on-the-one-minute-chart)
 for units, interpretation and recorded-replay limits.

@@ -20,6 +20,7 @@ import { CumulativeRVOL, minutePaneLayout, drawCumulativeRVOL } from './cumulati
 import { MomentumContextModel } from './momentum-context-model.js';
 import { MomentumContextView } from './momentum-context-view.js';
 import { GEXOverlayController } from './gex-overlay-controller.js';
+import { GEXHistoryDialog } from './gex-history.js';
 import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescription } from './gex-overlay.js';
 
 (() => {
@@ -112,6 +113,12 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
   window.__tapeReadingAutoTrendlines = () => autoTrendlines.debug();
   const cumulativeRVOL = new CumulativeRVOL({ changed: () => { state.dirtyReplayChart = true; } });
   window.addEventListener('pagehide', () => cumulativeRVOL.reset());
+  const gexHistory = new GEXHistoryDialog({context:()=>({
+    symbol:state.symbol,generation:state.streamGeneration||0,mode:state.status.mode,status:state.status,
+    clockUS:serverNowUS(performance.now()),enabled:!state.pendingReplayReset&&!state.rewind.active,
+    identity:`${state.replay?.generation||0}|${state.status.epoch||0}`
+  })});
+  $('gexOverlayHistory').addEventListener('click',()=>gexHistory.open(state.settings?.gexOverlayMaxDTE||120));
   const gexOverlay = new GEXOverlayController({ changed: () => {
     state.dirtyReplayChart = true;
     if (!gexOverlay.view?.usable || gexOverlay.result !== gexDrawnResult) {
@@ -427,7 +434,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
         panelHost.swap(state.settings.panels.slots.primaryAnalytics.activePanelId, false);
         lowerPanelHost = createLowerPanelHost({
           root: $('lowerPanelRoot'), picker: $('lowerPanelPicker'), settings: state.settings.panels,
-          capabilities: { ...panelHost.capabilities, currentSnapshot: () => ({ symbol: state.symbol, generation: state.streamGeneration || 0, mode: state.status?.mode || '', status: { ...state.status }, clockUS: serverNowUS(performance.now()), spot: selectLastPrice(state.lastPriceTrade, state.quote)?.p }) }, saveSettings,
+          capabilities: { ...panelHost.capabilities, openGEXHistory: ({maxDTE}) => gexHistory.open(maxDTE), currentSnapshot: () => ({ symbol: state.symbol, generation: state.streamGeneration || 0, mode: state.status?.mode || '', status: { ...state.status }, clockUS: serverNowUS(performance.now()), spot: selectLastPrice(state.lastPriceTrade, state.quote)?.p }) }, saveSettings,
           tickVisible: (visible) => { lowerTickVisible = visible; $('lowerPanelSlot').classList.toggle('show-tick-chart', visible); state.dirtyChart = true; }
         });
         window.__tapeReadingPanels = {
@@ -1539,6 +1546,13 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     const right = width - rightAxis;
     const { top, volumeHeight, volumeBottom, volumeTop, priceBottom, rvolTop, rvolBottom } =
       minutePaneLayout(height, state.settings.showMinuteVolume, state.settings.showCumulativeRVOL);
+    // Keep history controls beside the strike profile, including narrow windows.
+    // The status can ellipsize; the history button and expiry selector stay usable.
+    const gexProfileWidth = Math.min(210, (right - left) * .38);
+    const gexControlsLeft = state.dayMapCorner >= 2 ? left + gexProfileWidth + 24 : 8;
+    const gexControlsEnd = state.dayMapCorner >= 2 ? right - 8 : right - gexProfileWidth - 16;
+    elements.gexOverlayControls.style.left = `${gexControlsLeft}px`;
+    elements.gexOverlayControls.style.maxWidth = `${Math.max(154, gexControlsEnd - gexControlsLeft)}px`;
     // The fixed-height inset must not spill out of a short price pane onto
     // either volume study. Normal/default-off layouts retain the existing map.
     elements.replayMarketPanel.classList.toggle('rvol-compact-price',
@@ -1600,7 +1614,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     if (gexOverlay.active && gexOverlay.view?.usable) {
       gexOverlayGeometry = drawGEXOverlay(replayContext, gexOverlay.result.strikes, {
         priceY, left, right, top, bottom: priceBottom,
-        side: state.dayMapCorner >= 2 ? 'left' : 'right'
+        side: state.dayMapCorner >= 2 ? 'left' : 'right', comparisons:gexOverlay.comparisons
       });
     }
 
@@ -3029,7 +3043,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
   function updateGEXStatusText(shown) {
     const view = gexOverlay.view;
     const text = !shown ? '' : view?.usable
-      ? `EST. GEX · C+/P−${gexOverlayGeometry ? ` · ${gexOverlayGeometry.rows.length} visible strikes` : ''}`
+      ? `EST. GEX · C+/P−${gexOverlay.comparisons.length ? ` · DOTS ${gexOverlay.comparisons.map(c=>c.minutes+'m').join('/')}` : ' · HISTORY WARMING'}`
       : state.pendingReplayReset ? 'GEX SWITCHING' : view?.label || 'GEX LOADING';
     if (elements.gexOverlayStatus.textContent !== text) elements.gexOverlayStatus.textContent = text;
   }
@@ -3053,7 +3067,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     const view = gexOverlay.view;
     updateGEXStatusText(shown);
     elements.gexOverlayStatus.title = view?.usable
-      ? `${state.symbol}: 0–${maxDTE} days. Estimated dollar hedge adjustment per 1% stock move. Negative amber bars extend left; positive teal bars extend right. Bars scale to the largest visible net exposure. Hover a strike for values. Snapshot age ${view.age}s${gexOverlay.result?.replay ? ' · recorded' : ''}. Calls+/puts− assumed, not actual dealer inventory or price targets.`
+      ? `${state.symbol}: 0–${maxDTE} days. Estimated dollar hedge adjustment per 1% stock move. Negative amber bars extend left; positive teal bars extend right. Bars and historical dots share one signed scale. Dots: 1m white, 5m blue, 15m purple, 30m yellow. Hover a strike for amounts, changes and exact observation times. Missing lookbacks remain unavailable. Snapshot age ${view.age}s${gexOverlay.result?.replay ? ' · recorded' : ''}. Calls+/puts− assumed, not actual dealer inventory or price targets.`
       : view?.reason || 'Waiting for a complete chain snapshot';
   }
 

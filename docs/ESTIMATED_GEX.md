@@ -65,7 +65,8 @@ Options Flow or another lower panel is selected; the ADR panel keeps its space.
 Each horizontal bar sits at its stock option strike on the existing candle
 price scale. **Teal positive bars extend right; amber negative bars extend left**
 from a common zero line. Length is proportional to the absolute net exposure,
-normalized to the largest visible strike in the chosen expiry window. Changing
+normalized to the largest visible current or historical exposure in the chosen
+expiry window. Changing
 the visible price range or expiry scope can therefore change the length scale.
 All strikes inside the price pane are included; distant strikes never expand the
 candle scale. Zero net exposure gets a small neutral mark. Crowded labels favor
@@ -79,7 +80,7 @@ calculated at snapshot spot. They are not actual dealer inventory or price
 magnets. This profile uses the stock's own strikes; it does not translate index
 strikes to futures prices. The supported windows include expirations from today
 through 30, 60 or 120 calendar days; 120 days is not all expirations. A separate
-0DTE profile and historical open/min/max strike markers are not supplied.
+0DTE profile and session-open/min/max strike markers are not supplied.
 
 The overlay refreshes visible live data on the same bounded schedule as the GEX
 panel. It clears unusable, incomplete or stale data, including when the tape is
@@ -94,6 +95,49 @@ study pane is resized. The profile moves to the opposite side when the Daily Map
 is moved to a right corner. The inset stays above the volume studies and hides
 while GEX is on if the price pane is too short or narrow to fit the profile and
 map without obscuring strikes.
+
+## Changes through time
+
+The chart overlay now adds prior-time dots to each comparable strike: **1m white,
+5m blue, 15m purple, 30m yellow**. A dot is the earlier exposure endpoint, on the
+same signed scale as the current bar. A dot farther from zero than the bar means
+its magnitude has since shrunk; a dot across zero shows a sign change. Hover a
+strike to see each earlier amount, its exact observation time and the signed
+change. Missing comparisons remain unavailable; an absent strike is not zero.
+
+**HISTORY**, available from the overlay or lower GEX panel, opens a larger
+recorded-data view:
+
+- A slider and previous/next buttons step through saved observations. **LATEST
+  RECORDED** returns to the newest observation available to the session clock.
+- The net-GEX timeline uses actual observation times and leaves recording gaps
+  blank. The selected observation is highlighted.
+- The strike profile shows up to 60 concentrations within ±10% of snapshot spot,
+  with individually switchable 1/5/15/30-minute dots on a common signed scale.
+- The five largest absolute strike changes and the net change compare with the
+  selected lookback. Amounts retain their signs; they are not trade directions.
+
+Scrubbing is read-only: it does not seek the tape, switch stocks, or fetch a new
+options chain. The displayed price is **stock at snapshot**, not the latest tape
+price. The date and exact saved time remain visible, including after hours.
+History uses the selected stock, current session date and expiry window. To
+review another recorded date, use that session in normal server replay.
+
+Each lookback selects the nearest saved observation at or before its target,
+with a maximum 90-second gap. It never borrows a later observation or another
+session. Replay exposes no snapshots beyond its clock. A gap, unusable coverage,
+or missing recording is shown as unavailable. There is no invented backfill:
+recordings accumulate while the visible overlay or GEX panel is enabled.
+
+These are changes in the existing **C+/P− open-interest estimate**. Price,
+Greeks, and input coverage can change the reading even when OI is unchanged.
+The feed's prior-trading-day OI convention does not identify intraday option
+buying/selling, opening/closing transactions, or actual dealer inventory.
+
+The read-only `/api/panel-data/gex/history` route accepts the selected `symbol`,
+`dte` (30/60/120) and optional `at` Unix milliseconds. It shares the bounded
+archive cache with replay, caps the timeline at 4,096 observations and derived
+comparison payloads at 4 MiB. Derived history is never written into the archive.
 
 ## Data and quality
 
@@ -132,11 +176,12 @@ dealer inventory are unknown. Quotes and trades alone cannot reconstruct them.
 
 ## Recording and replay
 
-While this panel is selected and the window is visible, completed numeric
+While this panel or the strike overlay is enabled and visible, completed numeric
 snapshots are appended to `data/options-gex/YYYY-MM-DD/SYMBOL.jsonl` (override
 with `TAPE_GEX_REPLAY_DIR`). **REC** means that snapshot was saved, and
 **REC FAILED** indicates a write failure. This is selected-stock recording,
-not background recording of every ticker while another panel is selected.
+not background recording of every ticker. The overlay records its selected
+stock even while a different lower panel is shown.
 Coverage/freshness state, scope, assumed model and breakdowns are preserved.
 
 Replay/render reads only the nearest recorded snapshot **at or before** the
@@ -155,16 +200,27 @@ data must not be presented as past-session GEX.
 
 `node scripts/gex-overlay-check.mjs`
 
+`node scripts/gex-history-check.mjs`
+
 `CHROME=/path/to/chrome node scripts/gex-browser-check.mjs`
 
 `CHROME=/path/to/chrome node scripts/gex-overlay-browser-check.mjs`
+
+`CHROME=/path/to/chrome node scripts/gex-history-browser-check.mjs`
 
 The browser check uses synthetic local fixtures, tests laptop-sized dashboard
 windows, details/settings, quality colors, paused replay, stale asynchronous
 responses and panel cleanup. The overlay check measures actual canvas bar
 coordinates and widths, verifies unchanged candle/volume/ADR geometry, persisted
-controls, request cancellation and replay cutoff safety. Screenshots use
-synthetic test data only.
+controls, request cancellation and replay cutoff safety. History checks cover
+signed deltas and scale, missing strikes, gaps, invalid inputs, actual-time
+scrubbing, symbol/scope races, rewind boundaries, and closed/paused polling.
+
+Browser fixtures are synthetic by default. To preview real recorded GEX, set
+`GEX_REAL_ARCHIVE=data/options-gex/YYYY-MM-DD/SYMBOL.jsonl` when running the
+history browser check; its foreground GEX view uses those archived observations.
+The surrounding tape scaffold remains synthetic. `GEX_SCREENSHOT_DIR` selects
+the screenshot output directory.
 
 References: [Massive option-chain snapshot](https://massive.com/docs/rest/options/snapshots/option-chain-snapshot)
 for Greeks, OI convention, pagination and underlying metadata;

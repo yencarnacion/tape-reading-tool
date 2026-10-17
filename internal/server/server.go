@@ -161,6 +161,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	mux.HandleFunc("/api/panel-data/options", s.handleOptions)
 	mux.HandleFunc("/api/panel-data/options-flow", s.handleOptionsFlow)
 	mux.HandleFunc("/api/panel-data/gex", s.handleGEX)
+	mux.HandleFunc("/api/panel-data/gex/history", s.handleGEXHistory)
 	mux.HandleFunc("/api/ticker", s.handleTicker)
 	mux.HandleFunc("/api/tape/range", s.handleTapeRange)
 	mux.HandleFunc("/api/ui-event", s.handleUIEvent)

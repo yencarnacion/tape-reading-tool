@@ -44,6 +44,7 @@ type gexCoverage struct {
 }
 
 type gexReply struct {
+	History        *gexHistory `json:"history,omitempty"`
 	SchemaVersion  int         `json:"schemaVersion"`
 	Symbol         string      `json:"symbol"`
 	Generation     uint64      `json:"generation"`
@@ -187,6 +188,9 @@ func (s *Server) handleGEX(w http.ResponseWriter, r *http.Request) {
 	} else if !reply.Replay && reply.Complete && reply.Net != nil {
 		// HTTP work, never a stock-feed callback; write only the selected timeline.
 		reply.Recording = s.gex.archive.record(reply)
+	}
+	if reply.AsOfMS > 0 {
+		reply.History = s.gex.archive.historyAt(seed, currentClock, time.UnixMilli(reply.AsOfMS))
 	}
 	writeJSON(w, 200, reply)
 }

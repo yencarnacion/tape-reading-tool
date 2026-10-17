@@ -9,7 +9,7 @@ const CAPABILITY_METHODS = Object.freeze({
   'rth-session-context': ['getRTHSessionContext'],
   'options-snapshot': ['getOptionsSnapshot'],
   'options-flow': ['getOptionsFlow'],
-  'options-gex': ['getGEXSnapshot'],
+  'options-gex': ['getGEXSnapshot','openGEXHistory'],
   forecast: ['requestForecast'],
   'tick-chart': ['setTickChartVisible']
 });
