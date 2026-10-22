@@ -289,7 +289,23 @@ import {
   function drawLabels(mapping) {
     if (pivotState.status !== 'ready' || !pivotState.levels.length || mapping.labelDataKey === pivotState.dataKey) return;
     prepareContext(mapping);
-    drawDailyPivotLabels(mapping.chartContext, overlayOptions(mapping));
+    const options = overlayOptions(mapping);
+    // These controls are DOM layers above the canvas. Painting labels last
+    // cannot put them above the tabs, wrapped legend, or enabled GEX controls.
+    // Reserve their measured height for labels only; guides and priceY keep
+    // the original chart scale. The label renderer adds its own half-height.
+    const canvasTop = mapping.canvas.getBoundingClientRect().top;
+    const controls = mapping.canvas.parentElement?.querySelectorAll(
+      '.market-chart-tabs, .replay-chart-legend, .gex-overlay-controls'
+    ) || [];
+    for (const control of controls) {
+      if (control.hidden) continue;
+      const box = control.getBoundingClientRect();
+      if (box.width > 0 && box.height > 0 && Number.isFinite(box.bottom - canvasTop)) {
+        options.top = Math.max(options.top, box.bottom - canvasTop + 3);
+      }
+    }
+    drawDailyPivotLabels(mapping.chartContext, options);
     mapping.labelDataKey = pivotState.dataKey;
   }
 

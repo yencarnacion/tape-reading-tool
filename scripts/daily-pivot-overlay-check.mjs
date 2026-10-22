@@ -124,6 +124,59 @@ assert.ok(pivotText.some((text) => text.startsWith('↑ R2 120.00')),
 assert.equal(pivotText.some((text) => /^R2|^R3|^S2|^S3/.test(text)), false,
   'non-context pivots should not be labeled');
 
+// The real header is painted above the canvas. Check the full label backing,
+// including a wrapped legend and the optional GEX row, in canvas coordinates.
+const canvasTop = 120;
+const chrome = (top, bottom, hidden = false, width = 450) => ({
+  hidden,
+  getBoundingClientRect: () => ({ top: canvasTop + top, bottom: canvasTop + bottom,
+    width, height: bottom - top })
+});
+async function labelFrame(controls, maximum = 105, blockedY = null) {
+  const canvas = {
+    id: 'replayChartCanvas',
+    getBoundingClientRect: () => ({ width: 800, top: canvasTop }),
+    parentElement: { querySelectorAll: () => controls }
+  };
+  const context = new CanvasRenderingContext2D(canvas);
+  context.fillStyle = '#8d96a2';
+  for (let index = 0; index <= 4; index++) {
+    context.fillText((maximum - (maximum - 95) * index / 4).toFixed(2), 753, 25 + 375 * index / 4);
+  }
+  if (blockedY !== null) context.fillText('AVG 100.00', 14, blockedY);
+  await new Promise((resolve) => setImmediate(resolve));
+  return {
+    context,
+    labels: context.operations.filter((operation) => operation[0] === 'text' &&
+      /^(?:↑|↓|AT |NEAR )/.test(operation[1]))
+  };
+}
+const noChrome = await labelFrame([]);
+const lowerBefore = noChrome.labels.find((label) => label[1].startsWith('↓ S1'))[3];
+for (const [name, controls, bottom] of [
+  ['legend', [chrome(5, 27), chrome(31, 51)], 51],
+  ['GEX', [chrome(5, 27), chrome(31, 51), chrome(55, 79)], 79],
+  ['wrapped legend and compact GEX', [chrome(5, 27), chrome(31, 68), chrome(72, 96)], 96],
+  ['hidden controls', [chrome(5, 27), chrome(31, 51), chrome(55, 200, true)], 51],
+  ['zero-size controls', [chrome(5, 27), chrome(31, 51), chrome(55, 200, false, 0)], 51]
+]) {
+  const { labels } = await labelFrame(controls);
+  assert.equal(labels.length, 4, `${name}: keep both upper and both lower context levels`);
+  const upper = labels.filter((label) => label[1].startsWith('↑'));
+  assert.equal(upper.length, 2);
+  assert.ok(upper.every((label) => label[3] - 8.5 >= bottom + 2), `${name}: upper labels clear DOM chrome`);
+  assert.equal(labels.find((label) => label[1].startsWith('↓ S1'))[3], lowerBefore,
+    `${name}: lower edge placement stays unchanged`);
+}
+const inView = await labelFrame([chrome(5, 27), chrome(31, 68), chrome(72, 96)], 125);
+assert.ok(inView.labels.find((label) => label[1].startsWith('↑ R2'))[3] - 8.5 >= 98,
+  'an in-view upper pivot label also clears the header');
+assert.ok(inView.context.operations.some((operation) => operation[0] === 'move' &&
+  operation[1] === 7 && operation[2] === 87.5), 'the R2 guide keeps its true price coordinate');
+const blocked = await labelFrame([chrome(31, 51)], 105, 63);
+assert.ok(blocked.labels.every((label) => Math.abs(label[3] - 63) >= 16),
+  'position labels still reserve space after adding header clearance');
+
 await window.fetch('/api/replay');
 await until(() => window.__tapeReadingDailyPivots.state().sessionDateET === '2024-06-14', 'replay date was not adopted');
 assert.ok(calls.some((call) => call.path === '/api/panel-data/daily-bars' && call.search.includes('before=2024-06-14')),
