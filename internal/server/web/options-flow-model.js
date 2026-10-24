@@ -4,7 +4,8 @@ export const flowStates = {
  'connecting': ['CONNECTING', 'Opening the selected stock’s options feed'],
  'collecting': ['BUILDING FLOW', 'Waiting for a complete, liquid 15s sample'],
  'not-configured': ['CONNECT OPTIONS', 'Configure the local options gateway to receive trades + quotes'],
- 'not-entitled': ['OPTIONS ACCESS', 'Real-time options trades and quotes are not authorized'],
+ 'subscription-disabled': ['OPTIONS FLOW OFF', 'Options data is disabled; stock tape remains available'],
+ 'not-entitled': ['OPTIONS ACCESS', 'Restore options trades and quotes access, then restart the backend to retry'],
  'gateway-upgrade': ['UPDATE GATEWAY', 'The connected gateway does not yet serve options flow'],
  'gateway-offline': ['OPTIONS OFFLINE', 'Waiting for the options gateway to reconnect'],
  'delayed': ['DELAYED FEED', 'Delayed options data cannot confirm a scalp'],
@@ -30,6 +31,7 @@ export function direction(w) {
 }
 export function flowView(reply, nowMS, tape) {
  if (!reply || reply.schemaVersion!==1) return {status:'connecting'};
+ if (['subscription-disabled','not-entitled','not-configured'].includes(reply.status)) return {status:reply.status};
  if (nowMS-reply.asOfMS>5000 || reply.asOfMS>nowMS+2000) return {status:'stale'};
  if (!['ready','collecting'].includes(reply.status)) return {status:reply.status};
  const windows=reply.windows;

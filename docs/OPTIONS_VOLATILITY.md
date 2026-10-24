@@ -11,8 +11,9 @@ keep their own lifecycle. A smaller screen limits growth to preserve Kronos.
 ## Run
 
 The normal tape, ADR, audio, demo, and recorded stock replay work without an
-options subscription or any companion application. Options are optional: an
-unset gateway leaves the panel neutral and makes no options network requests.
+options subscription or any companion application. Live options default to
+disabled; the panel shows OPTIONS OFF and makes no options network requests.
+A configured stock gateway alone does not opt in to options.
 To see the production panel with synthetic data and no credentials, run
 `node scripts/options-dashboard-preview.mjs` and open
 `http://127.0.0.1:18098/preview/ready` or `/preview/wide`. This full-page preview
@@ -24,6 +25,8 @@ usual. The selected stock drives the panel; QQQ/SPY are not required.
 
 Backend-only settings, stored in an ignored `.env` or process environment:
 
+- `TAPE_OPTIONS_ENABLED`: live options opt-in; defaults to false. If unset,
+  `MASSIVE_OPTIONS_ENABLED` is used. Explicit false overrides a shared true.
 - `TAPE_OPTIONS_GATEWAY_URL`: optional loopback HTTP(S) API base, for example
   `http://127.0.0.1:8080/options`. No default companion service is assumed.
 - `TAPE_OPTIONS_GATEWAY_TOKEN`: optional local gateway bearer token, **not** a

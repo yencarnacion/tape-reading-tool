@@ -71,3 +71,16 @@ assert.equal(flowRoot.querySelector('.vol-flow-row').dataset.side,'neutral','new
 assert.equal(flowRoot.querySelector('.vol-flow-side').textContent,'TAPE FLOW');
 flowView.unmount();
 console.log('Options lifecycle: symbol races, reconnect, placeholder clearing, unmount, buy/sell pace, and neutral quality gates passed');
+
+
+// Disabled is an account/configuration state, including before RTH and while
+// the independent stock feed is disconnected. It must not look like a quote.
+for(const status of ['subscription-disabled','access-denied']) {
+ const disabledRoot=node();let calls=0;
+ snapshot={symbol:'AAPL',generation:1,mode:'live',clockUS:Date.parse('2026-07-24T12:00:00Z')*1000,status:{connected:false},trades:[]};
+ const disabledView=createOptionsView({root:disabledRoot,host:{signal:new AbortController().signal,isCurrent:()=>true,getOptionsSnapshot:async()=>{calls++;return {schemaVersion:1,symbol:'AAPL',generation:1,status};}},getSnapshot:()=>snapshot,getADRExtension:()=>null});
+ disabledView.event({type:'snapshot'});mono+=1000;disabledView.render(snapshot.clockUS);await settle();mono+=1000;disabledView.render(snapshot.clockUS);
+ assert.equal(disabledRoot.querySelector('.vol-state').textContent,status==='subscription-disabled'?'OPTIONS OFF':'OPTIONS ACCESS DENIED');
+ assert.equal(disabledRoot.querySelector('.vol-iv').textContent,'--');
+ mono+=60000;disabledView.render(snapshot.clockUS);assert.equal(calls,1);disabledView.unmount();
+}

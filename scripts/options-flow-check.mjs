@@ -14,3 +14,8 @@ assert.equal(flowView({...reply,windows:reply.windows.map(w=>({...w,ready:false}
 assert.equal(direction({...windowFixture(15),net:1000}),0);assert.equal(direction({...windowFixture(15),net:-60000}),-1);
 assert.equal(premium(-184000,true),'−$184K');assert.equal(premium(1200000,true),'+$1.20M');
 console.log('Options flow model: divergence, alignment, sample gates, freshness, pace and premium formatting passed');
+
+
+for(const status of ['subscription-disabled','not-entitled','not-configured']) {
+ assert.equal(flowView({schemaVersion:1,status,asOfMS:0},now).status,status,'policy status must not become stale data');
+}

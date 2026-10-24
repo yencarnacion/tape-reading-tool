@@ -21,6 +21,11 @@ export function negativeGEX(r){
 export function runGEXChecks(){
   const context={mode:'live',symbol:'AAPL',generation:1,maxDTE:120,spot:100,status:{connected:true}};
   const r=gexFixture(),view=(r,now=GEX_TIME,c=context)=>gexView(r,now,c);
+  for(const status of ['subscription-disabled','access-denied']) {
+    const disabled={symbol:'AAPL',generation:1,maxDTE:120,status};
+    assert.equal(view(disabled,Date.parse('2026-07-24T12:00:00Z'),{...context,status:{connected:false}}).status,status);
+    assert.equal(view({...disabled,symbol:'MSFT'}).status,'context-changed');
+  }
   assert.ok(validGEXPayload(r));assert.equal(view(r).tone,'dampen');assert.equal(view(r).label,'↔ RANGE / FADE BIAS');
   const negative=negativeGEX(gexFixture());assert.ok(validGEXPayload(negative));assert.equal(view(negative).tone,'amplify');assert.equal(view(negative).label,'⇅ EXPANSION BIAS');
   assert.equal(view(r).positive.strike,100);assert.equal(view(r).negative.strike,95);

@@ -13,6 +13,13 @@ import (
 	"time"
 )
 
+func optionsTestServer(t *testing.T, mode string) *Server {
+	t.Helper()
+	s := panelServer(t, mode)
+	s.options.enabled = true // These fixtures exercise an explicitly subscribed options feed.
+	return s
+}
+
 const optionsGatewayPath = "/custom/options-api"
 
 func optionsContractJSON(expiry string, stamp int64) string {
@@ -29,7 +36,7 @@ func requestOptions(t *testing.T, s *Server) optionsReply {
 	return reply
 }
 func TestOptionsUsesOnlyLocalGatewayAndCoalesces(t *testing.T) {
-	s := panelServer(t, "live")
+	s := optionsTestServer(t, "live")
 	now := s.now()
 	s.store.AddTrade("AAPL", now, now, 100, 100)
 	var calls atomic.Int32
@@ -65,7 +72,7 @@ func TestOptionsUsesOnlyLocalGatewayAndCoalesces(t *testing.T) {
 }
 func TestOptionsNoNetworkForReplayDemoClosedOrStaleTape(t *testing.T) {
 	for _, mode := range []string{"replay", "render", "demo", "live", "massive"} {
-		s := panelServer(t, mode)
+		s := optionsTestServer(t, mode)
 		var calls atomic.Int32
 		gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
 		s.options.base = gateway.URL + optionsGatewayPath
@@ -82,7 +89,7 @@ func TestOptionsNoNetworkForReplayDemoClosedOrStaleTape(t *testing.T) {
 		}
 		gateway.Close()
 	}
-	s := panelServer(t, "live")
+	s := optionsTestServer(t, "live")
 	s.options.base = "http://127.0.0.1:18080/options"
 	now := s.now()
 	s.store.AddTrade("AAPL", now.Add(-time.Minute), now, 100, 10)
@@ -96,7 +103,7 @@ func TestOptionsNoNetworkForReplayDemoClosedOrStaleTape(t *testing.T) {
 }
 func TestOptionsRejectsForeignPaginationAndRedirects(t *testing.T) {
 	for _, target := range []string{"https://api.massive.com/v3/snapshot/options/AAPL?apiKey=secret", "//evil.example/api", "/api/marketdata/v1/rest/v3/trades/AAPL", optionsGatewayPath + "/rest/v3/snapshot/options/AAPL?apiKey=secret"} {
-		s := panelServer(t, "live")
+		s := optionsTestServer(t, "live")
 		now := s.now()
 		s.store.AddTrade("AAPL", now, now, 100, 100)
 		gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +115,7 @@ func TestOptionsRejectsForeignPaginationAndRedirects(t *testing.T) {
 		}
 		gateway.Close()
 	}
-	s := panelServer(t, "live")
+	s := optionsTestServer(t, "live")
 	now := s.now()
 	s.store.AddTrade("AAPL", now, now, 100, 100)
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "https://api.massive.com", 302) }))
@@ -120,7 +127,7 @@ func TestOptionsRejectsForeignPaginationAndRedirects(t *testing.T) {
 }
 func TestOptionsBoundedPaginationAndAuthorizationFailures(t *testing.T) {
 	for _, status := range []int{403, 429, 400, 503} {
-		s := panelServer(t, "live")
+		s := optionsTestServer(t, "live")
 		now := s.now()
 		s.store.AddTrade("AAPL", now, now, 100, 100)
 		gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -135,7 +142,7 @@ func TestOptionsBoundedPaginationAndAuthorizationFailures(t *testing.T) {
 		}
 		gateway.Close()
 	}
-	s := panelServer(t, "live")
+	s := optionsTestServer(t, "live")
 	now := s.now()
 	s.store.AddTrade("AAPL", now, now, 100, 100)
 	calls := 0
@@ -150,7 +157,7 @@ func TestOptionsBoundedPaginationAndAuthorizationFailures(t *testing.T) {
 	}
 }
 func TestOptionsMonthlyAndCompletedExpiryBoundaries(t *testing.T) {
-	s := panelServer(t, "live")
+	s := optionsTestServer(t, "live")
 	now := s.now()
 	s.store.AddTrade("AAPL", now, now, 100, 100)
 	calls := 0
@@ -173,7 +180,7 @@ func TestOptionsConfigurationAndRequestBoundaries(t *testing.T) {
 			t.Fatalf("accepted external/keyed config %s", raw)
 		}
 	}
-	s := panelServer(t, "live")
+	s := optionsTestServer(t, "live")
 	for _, query := range []string{"symbol=OTHER", "symbol=AAPL&url=https://api.massive.com", "symbol=AAPL&symbol=AAPL"} {
 		w := httptest.NewRecorder()
 		s.handleOptions(w, httptest.NewRequest("GET", "/api/panel-data/options?"+query, nil))
@@ -192,12 +199,13 @@ func TestOptionsConfigurationAndRequestBoundaries(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	service := newOptionsService()
+	service.enabled = true
 	service.base = "invalid"
 	_ = service.get(ctx, optionsReply{Symbol: "AAPL"}, s.now())
 }
 
 func TestOptionsDelayedResponseNeverBecomesLive(t *testing.T) {
-	s := panelServer(t, "live")
+	s := optionsTestServer(t, "live")
 	now := s.now()
 	s.store.AddTrade("AAPL", now, now, 100, 100)
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -219,6 +227,7 @@ func TestOptionsCanceledWaiterDoesNotCancelSharedFetch(t *testing.T) {
 	}))
 	defer gateway.Close()
 	service := newOptionsService()
+	service.enabled = true
 	service.base = gateway.URL + optionsGatewayPath
 	seed := optionsReply{SchemaVersion: 1, Symbol: "AAPL", Spot: 100}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -241,12 +250,13 @@ func TestOptionsUnconfiguredNeverContactsAService(t *testing.T) {
 	t.Setenv("TAPE_OPTIONS_GATEWAY_URL", "")
 	t.Setenv("TAPE_OPTIONS_GATEWAY_TOKEN", "")
 	service := newOptionsService()
+	service.enabled = true
 	service.client = &http.Client{Transport: rejectOptionsNetwork{t}}
 	got := service.get(context.Background(), optionsReply{Symbol: "TEST"}, time.Now())
 	if got.Status != "not-configured" || service.token != "" {
 		t.Fatalf("unexpected unconfigured state: %+v", got)
 	}
-	if got := requestOptions(t, panelServer(t, "live")); got.Status != "not-configured" {
+	if got := requestOptions(t, optionsTestServer(t, "live")); got.Status != "not-configured" {
 		t.Fatal("unconfigured API should explain that options are optional")
 	}
 }

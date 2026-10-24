@@ -32,11 +32,12 @@ const STATUS = {
   delayed:['OPTIONS DELAYED','Real-time option quotes are required · use ADR + tape'],
   stale:['OPTIONS STALE','Readings paused until fresh quotes arrive'],
   'not-configured':['OPTIONS OPTIONAL','Connect a local options gateway · ADR + tape are ready'],
+  'subscription-disabled':['OPTIONS OFF','Options data is disabled · stock ADR + tape remain available'],
   'gateway-offline':['OPTIONS OFFLINE','Start the configured local options gateway'],
   'gateway-unavailable':['OPTIONS UNAVAILABLE','The gateway could not obtain an options snapshot'],
   'gateway-config':['OPTIONS CONFIG','Check TAPE_OPTIONS_GATEWAY_URL in backend settings'],
   'gateway-update':['UPDATE GATEWAY','The options snapshot gateway route is unavailable'],
-  'access-denied':['OPTIONS ACCESS DENIED','Check the gateway token and provider options entitlement'],
+  'access-denied':['OPTIONS ACCESS DENIED','Restore options access, then restart the backend to retry'],
   'rate-limited':['OPTIONS RATE LIMITED','Pausing before the next refresh'],
   'chain-too-large':['OPTIONS INCOMPLETE','Bounded chain limit reached · no signal calculated'],
   'context-changed':['OPTIONS RESETTING','Stock or timeline changed'],
@@ -67,7 +68,7 @@ export function createOptionsView({root,host,getSnapshot,getADRExtension}) {
     $('.vol-state').title=ready?v.reason:status[1];
     $('.vol-reason').textContent=range?`Spreads up to ${number(range.maxSpread*100,0)}% · IV signals withheld`:ready?v.reason:status[1];
     $('.vol-reason').title=$('.vol-reason').textContent;
-    $('.vol-quality').textContent=replayMeta?'REPLAY · EST.':ready?`${Math.floor(v.quoteAge)}s · ${v.contracts} ATM`:v.status==='not-configured'?'OPTIONAL':'LIVE';
+    $('.vol-quality').textContent=replayMeta?'REPLAY · EST.':ready?`${Math.floor(v.quoteAge)}s · ${v.contracts} ATM`:v.status==='subscription-disabled'?'OFF':v.status==='not-configured'?'OPTIONAL':'LIVE';
     $('.vol-quality').title=replayMeta?.method || 'Local options snapshots';
     $('.vol-iv').textContent=range?`${number(range.ivBid*100,0)}–${number(range.ivAsk*100,0)}%`:ready?`${replayMeta?'≈':''}${number(v.iv*100)}%`:'--';
     $('.vol-change').textContent=range?'bid–ask IV estimate':ready?`expiry ${v.expiry.slice(5)}`:'no reliable quote';
@@ -146,7 +147,7 @@ export function createOptionsView({root,host,getSnapshot,getADRExtension}) {
     event(event) {
       if(event.type==='snapshot') reset();
       else if(event.type==='tradeBatch' && event.symbol===model?.symbol) model.trades(event.trades,event.clockUS/1000);
-      else if(event.type==='modeChanged') {snapshot=getSnapshot(); if(!['live','massive','replay','render'].includes(snapshot.mode) || snapshot.status?.connected===false) {pending?.abort();pending=null;epoch++;model?.unavailable('waiting-tape');}nextPoll=0;}
+      else if(event.type==='modeChanged') {snapshot=getSnapshot(); if(!['live','massive','replay','render'].includes(snapshot.mode) || snapshot.status?.connected===false) {pending?.abort();pending=null;epoch++;if(!['subscription-disabled','access-denied'].includes(model?.status))model?.unavailable('waiting-tape');}nextPoll=0;}
     },
     render(nowUS) {
       if(!mounted || !host.isCurrent())return;
@@ -155,6 +156,10 @@ export function createOptionsView({root,host,getSnapshot,getADRExtension}) {
       if(model.symbol!==snapshot.symbol || model.session!==session)reset();
       const mono=performance.now(); if(mono-lastRender<250)return;lastRender=mono;
       if(!['live','massive','replay','render'].includes(snapshot.mode)) {paint({status:'live-only'});return;}
+      // A first local status request can explain disabled options even before
+      // the market opens or stock data connects. The server gates provider I/O.
+      if(['live','massive'].includes(snapshot.mode) && model.status==='loading' && !pending && mono>=nextPoll) void poll(nowMS);
+      if(['live','massive'].includes(snapshot.mode) && ['subscription-disabled','access-denied'].includes(model.status)) {paint(model.reading(nowMS,getADRExtension()));return;}
       const parts=marketParts(nowUS); const weekday=new Date(`${parts.sessionDateET}T12:00:00Z`).getUTCDay();
       if(weekday===0 || weekday===6 || parts.seconds<34200 || parts.seconds>=57600) {paint({status:'market-closed'});return;}
       if(snapshot.status?.connected===false) {paint({status:'waiting-tape'});return;}

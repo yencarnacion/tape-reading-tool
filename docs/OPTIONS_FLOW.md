@@ -5,7 +5,10 @@
 defaults upgrade to Options Flow; later manual choices remain remembered.
 The saved lower-panel choice is independent of the
 ADR panel. This panel requires a live stock tape and a configured local options
-gateway; the normal demo and historical stock replay do not query live options.
+gateway plus explicit `TAPE_OPTIONS_ENABLED=true` (or shared
+`MASSIVE_OPTIONS_ENABLED=true`). Live options default to disabled and show
+OPTIONS FLOW OFF. Stock tape remains available. The normal demo and historical
+stock replay do not query live options.
 
 Read the panel from top to bottom:
 

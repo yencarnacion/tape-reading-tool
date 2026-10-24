@@ -67,13 +67,17 @@ type optionsPending struct {
 	expires time.Time
 }
 type optionsService struct {
-	base, token string
-	client      *http.Client
-	mu          sync.Mutex
-	cache       map[string]*optionsPending
-	archiveMu   sync.Mutex
-	archiveDir  string
-	archives    map[string]*optionsArchive
+	base, token      string
+	enabled          bool
+	upstreamDisabled bool
+	snapshotDenied   bool
+	flowDenied       bool
+	client           *http.Client
+	mu               sync.Mutex
+	cache            map[string]*optionsPending
+	archiveMu        sync.Mutex
+	archiveDir       string
+	archives         map[string]*optionsArchive
 }
 
 func newOptionsService() *optionsService {
@@ -89,7 +93,66 @@ func newOptionsService() *optionsService {
 	if dir == "" {
 		dir = "data/options-replay"
 	}
-	return &optionsService{base: base, token: token, archiveDir: dir, archives: make(map[string]*optionsArchive), cache: make(map[string]*optionsPending), client: &http.Client{Timeout: 6 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	setting := strings.TrimSpace(os.Getenv("TAPE_OPTIONS_ENABLED"))
+	if setting == "" {
+		setting = strings.TrimSpace(os.Getenv("MASSIVE_OPTIONS_ENABLED"))
+	}
+	enabled, _ := strconv.ParseBool(setting)
+	return &optionsService{base: base, token: token, enabled: enabled, archiveDir: dir, archives: make(map[string]*optionsArchive), cache: make(map[string]*optionsPending), client: &http.Client{Timeout: 6 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+}
+
+// Stock gateway configuration does not imply a paid options entitlement.
+// Denials remain latched until restart; snapshots and flow have separate rights.
+func (s *optionsService) liveStatus(flow bool) string {
+	if !s.enabled {
+		return "subscription-disabled"
+	}
+	if s.base == "" {
+		return "not-configured"
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.upstreamDisabled {
+		return "subscription-disabled"
+	}
+	if flow && s.flowDenied {
+		return "not-entitled"
+	}
+	if !flow && s.snapshotDenied {
+		return "access-denied"
+	}
+	return ""
+}
+
+func (s *optionsService) deny(flow bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if flow {
+		s.flowDenied = true
+	} else {
+		s.snapshotDenied = true
+	}
+}
+
+func (s *optionsService) disable() {
+	s.mu.Lock()
+	s.upstreamDisabled = true
+	s.mu.Unlock()
+}
+
+func optionsDisabledResponse(body []byte) bool {
+	var envelope struct {
+		Status string `json:"status"`
+	}
+	return json.Unmarshal(body, &envelope) == nil && envelope.Status == "OPTIONS_DISABLED"
+}
+
+func optionsAccessDenied(status string) bool {
+	switch strings.ToUpper(status) {
+	case "NOT_AUTHORIZED", "NOT_ENTITLED", "NOT_AUTHENTICATED":
+		return true
+	}
+	return false
 }
 
 func optionsLocalURL(raw string) (*url.URL, bool) {
@@ -158,8 +221,8 @@ func (s *Server) handleOptions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, reply)
 		return
 	}
-	if s.options.base == "" {
-		reply.Status = "not-configured"
+	if status := s.options.liveStatus(false); status != "" {
+		reply.Status = status
 		writeJSON(w, 200, reply)
 		return
 	}
@@ -196,6 +259,10 @@ func (s *Server) handleOptions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *optionsService) get(ctx context.Context, seed optionsReply, now time.Time) optionsReply {
+	if status := s.liveStatus(false); status != "" {
+		seed.Status = status
+		return seed
+	}
 	key := fmt.Sprintf("%s/%d", seed.Symbol, seed.Generation)
 	s.mu.Lock()
 	pending := s.cache[key]
@@ -238,13 +305,17 @@ func (s *optionsService) get(ctx context.Context, seed optionsReply, now time.Ti
 		seed.Status = "unavailable"
 		return seed
 	case <-pending.done:
+		if status := s.liveStatus(false); status != "" {
+			seed.Status = status
+			return seed
+		}
 		return pending.reply
 	}
 }
 
 func (s *optionsService) fetch(ctx context.Context, reply optionsReply, now time.Time) optionsReply {
-	if s.base == "" {
-		reply.Status = "not-configured"
+	if status := s.liveStatus(false); status != "" {
+		reply.Status = status
 		return reply
 	}
 	base, valid := optionsLocalURL(s.base)
@@ -259,6 +330,10 @@ func (s *optionsService) fetch(ctx context.Context, reply optionsReply, now time
 	target.RawQuery = q.Encode()
 	contracts := []optionContract{}
 	for page := 0; page < 8; page++ {
+		if status := s.liveStatus(false); status != "" {
+			reply.Status = status
+			return reply
+		}
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 		req.Header.Set("X-DaiDai-Priority", "interactive")
 		if s.token != "" {
@@ -275,10 +350,16 @@ func (s *optionsService) fetch(ctx context.Context, reply optionsReply, now time
 			reply.Status = "invalid-data"
 			return reply
 		}
+		if optionsDisabledResponse(body) {
+			s.disable()
+			reply.Status = "subscription-disabled"
+			return reply
+		}
 		if res.StatusCode != 200 {
 			reply.Status = "gateway-unavailable"
 			switch res.StatusCode {
 			case 401, 403:
+				s.deny(false)
 				reply.Status = "access-denied"
 			case 400, 404:
 				reply.Status = "gateway-update"
@@ -314,7 +395,16 @@ func (s *optionsService) fetch(ctx context.Context, reply optionsReply, now time
 				OI float64 `json:"open_interest"`
 			} `json:"results"`
 		}
-		if json.Unmarshal(body, &payload) != nil || (payload.Status != "OK" && payload.Status != "DELAYED") {
+		if json.Unmarshal(body, &payload) != nil {
+			reply.Status = "invalid-data"
+			return reply
+		}
+		if optionsAccessDenied(payload.Status) {
+			s.deny(false)
+			reply.Status = "access-denied"
+			return reply
+		}
+		if payload.Status != "OK" && payload.Status != "DELAYED" {
 			reply.Status = "invalid-data"
 			return reply
 		}

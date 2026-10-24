@@ -41,7 +41,7 @@ func gexFixtureReply(at time.Time) gexReply {
 }
 func gexTestServer(t *testing.T, mode string) *Server {
 	t.Helper()
-	s := panelServer(t, mode)
+	s := optionsTestServer(t, mode)
 	s.gex.archive.dir = t.TempDir()
 	t.Cleanup(s.gex.close)
 	now := s.now()
@@ -60,7 +60,7 @@ func requestGEX(t *testing.T, s *Server) gexReply {
 }
 
 func TestGEXCalculationUsesDollarPerOnePercentUnits(t *testing.T) {
-	at := panelServer(t, "live").now()
+	at := optionsTestServer(t, "live").now()
 	r := gexFixtureReply(at)
 	// .02 * 100 OI * 100 shares * $100^2 * .01 = $20,000 calls.
 	// .01 * 50 OI * 100 shares * $100^2 * .01 = -$5,000 puts.
@@ -82,7 +82,7 @@ func TestGEXCalculationUsesDollarPerOnePercentUnits(t *testing.T) {
 }
 
 func TestGEXQualityNeverTreatsMissingAsZero(t *testing.T) {
-	at := panelServer(t, "live").now()
+	at := optionsTestServer(t, "live").now()
 	base := gexFixtureContract(at, "C100", "call", 100, .02, 100)
 	for _, test := range []struct {
 		name, want string
@@ -181,7 +181,7 @@ func TestGEXFullChainPaginationCacheAndRecording(t *testing.T) {
 }
 
 func TestGEXPaginationNeverPublishesPartialOrFollowsForeignURL(t *testing.T) {
-	at := panelServer(t, "live").now()
+	at := optionsTestServer(t, "live").now()
 	for _, scenario := range []string{"absolute", "wrong-path", "credentials", "duplicate", "loop", "cap", "delayed", "error"} {
 		t.Run(scenario, func(t *testing.T) {
 			var calls atomic.Int32
@@ -339,7 +339,7 @@ func TestGEXSymbolChangeDuringFetchCannotRecordOrColorOldStock(t *testing.T) {
 }
 
 func TestGEXArchiveFloorNoFutureSeekScopeAndCorruptLines(t *testing.T) {
-	at := panelServer(t, "live").now()
+	at := optionsTestServer(t, "live").now()
 	archive := newGEXArchiveStore()
 	archive.dir = t.TempDir()
 	r := gexFixtureReply(at)
@@ -392,7 +392,7 @@ func TestGEXArchiveFloorNoFutureSeekScopeAndCorruptLines(t *testing.T) {
 }
 
 func TestGEXArchiveRejectsUnreconciledTotals(t *testing.T) {
-	r := gexFixtureReply(panelServer(t, "live").now())
+	r := gexFixtureReply(optionsTestServer(t, "live").now())
 	for _, mutate := range []func(*gexReply){
 		func(r *gexReply) { r.Net = gexFloat(2) }, func(r *gexReply) { r.Net = gexFloat(math.NaN()) },
 		func(r *gexReply) { r.Coverage.IncludedOI = 900 }, func(r *gexReply) { r.Coverage.MissingGamma = -1 },

@@ -18,14 +18,13 @@ function harness(input = base) {
     }, async reject(index) { requests[index].reject(new Error('offline')); await tick(); } };
 }
 
-// Default-off and unsupported/closed contexts never request chains. Activation
+// Default-off and unsupported modes never request chains. Activation
 // is independent of which lower analytics panel happens to be mounted.
 {
   const h = harness(); h.sync({ enabled: false });
   assert.equal(h.requests.length, 0); assert.equal(h.study.view, null);
   for (const change of [
-    { mode: 'demo' }, { status: { connected: false } },
-    { clockUS: Date.parse('2026-07-24T13:00:00Z') * 1000 }
+    { mode: 'demo' }
   ]) { h.sync(change); assert.equal(h.requests.length, 0); assert.equal(h.study.result, null); }
   h.sync(); assert.equal(h.requests.length, 1); assert.equal(h.study.view.status, 'loading');
   assert.equal(h.requests[0].url, '/api/panel-data/gex?symbol=AAPL&dte=120');
@@ -223,3 +222,13 @@ function canvasRecorder() {
 }
 
 console.log('GEX overlay checks passed: bounded lifecycle, races, quality, idle expiry, clock safety, strike scaling, clipping, dense labels, and hit testing');
+
+
+// A local policy lookup is allowed before stock connectivity/RTH, and a
+// terminal disabled reply stays neutral without further polling.
+for (const extra of [{status:{connected:false}}, {clockUS:Date.parse('2026-07-24T12:00:00Z')*1000}]) {
+ const h=harness({...base,...extra});h.sync();assert.equal(h.requests.length,1);
+ await h.finish(0,{symbol:'AAPL',generation:1,maxDTE:120,status:'subscription-disabled'});
+ assert.equal(h.study.view.status,'subscription-disabled');assert.equal(h.study.result,null);
+ h.time(60000);h.sync();assert.equal(h.requests.length,1);h.study.reset();
+}
