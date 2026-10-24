@@ -75,8 +75,8 @@ func (s *Server) handleOptionsFlow(w http.ResponseWriter, r *http.Request) {
 		fail("live-only")
 		return
 	}
-	if s.options.base == "" {
-		fail("not-configured")
+	if status := s.options.liveStatus(true); status != "" {
+		fail(status)
 		return
 	}
 	base, valid := optionsLocalURL(s.options.base)
@@ -115,6 +115,11 @@ func (s *Server) handleOptionsFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer res.Body.Close()
+	if res.StatusCode == 401 || res.StatusCode == 403 {
+		s.options.deny(true)
+		fail("not-entitled")
+		return
+	}
 	if res.StatusCode == 404 {
 		fail("gateway-upgrade")
 		return
@@ -132,7 +137,19 @@ func (s *Server) handleOptionsFlow(w http.ResponseWriter, r *http.Request) {
 		fail("context-changed")
 		return
 	}
+	if upstream.Status == "not-entitled" {
+		s.options.deny(true)
+	}
+	if upstream.Status == "disabled" || upstream.Status == "subscription-disabled" {
+		s.options.disable()
+		fail("subscription-disabled")
+		return
+	}
 	upstream.Generation = reply.Generation
+	if status := s.options.liveStatus(true); status != "" {
+		fail(status)
+		return
+	}
 	writeJSON(w, 200, upstream)
 }
 func validFlowReply(r flowReply, symbol string, now int64) bool {
@@ -140,7 +157,7 @@ func validFlowReply(r flowReply, symbol string, now int64) bool {
 		return false
 	}
 	switch r.Status {
-	case "connecting", "streaming", "collecting", "ready", "stale", "gateway-offline", "not-entitled", "delayed", "invalid-data", "no-options", "market-closed", "refreshing":
+	case "connecting", "streaming", "collecting", "ready", "stale", "gateway-offline", "not-entitled", "disabled", "subscription-disabled", "delayed", "invalid-data", "no-options", "market-closed", "refreshing":
 	default:
 		return false
 	}

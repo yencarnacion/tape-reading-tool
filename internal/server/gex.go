@@ -164,6 +164,9 @@ func (s *Server) handleGEX(w http.ResponseWriter, r *http.Request) {
 	} else if mode != "live" && mode != "massive" || s.store.Status().Mode == "replay" {
 		reply = seed
 		reply.Status = "live-only"
+	} else if status := s.options.liveStatus(false); status != "" {
+		reply = seed
+		reply.Status = status
 	} else if !gexRTH(clock) {
 		reply = seed
 		reply.Status = "market-closed"
@@ -179,10 +182,16 @@ func (s *Server) handleGEX(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	currentClock, currentMode, _, _ := s.panelClock()
+	if mode != "replay" && mode != "render" && (mode == "live" || mode == "massive") {
+		if status := s.options.liveStatus(false); status != "" {
+			reply = seed
+			reply.Status = status
+		}
+	}
 	if s.store.Active() != symbol || s.store.Generation(symbol) != seed.Generation || currentMode != mode || (mode != "replay" && mode != "render" && s.store.Status().Mode == "replay") {
 		reply = seed
 		reply.Status = "context-changed"
-	} else if !reply.Replay && (!gexRTH(currentClock) || currentClock.In(gexLocation()).Format("2006-01-02") != clock.In(gexLocation()).Format("2006-01-02")) {
+	} else if !reply.Replay && reply.Status != "subscription-disabled" && reply.Status != "access-denied" && (!gexRTH(currentClock) || currentClock.In(gexLocation()).Format("2006-01-02") != clock.In(gexLocation()).Format("2006-01-02")) {
 		reply = seed
 		reply.Status = "market-closed"
 	} else if !reply.Replay && reply.Complete && reply.Net != nil {
@@ -196,6 +205,10 @@ func (s *Server) handleGEX(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *gexService) get(ctx context.Context, seed gexReply, now time.Time) gexReply {
+	if status := s.gateway.liveStatus(false); status != "" {
+		seed.Status = status
+		return seed
+	}
 	key := fmt.Sprintf("%s/%d/%s/%d", seed.Symbol, seed.Generation, now.In(gexLocation()).Format("2006-01-02"), seed.MaxDTE)
 	s.mu.Lock()
 	if s.ctx.Err() != nil {
@@ -246,13 +259,17 @@ func (s *gexService) get(ctx context.Context, seed gexReply, now time.Time) gexR
 		seed.Status = "unavailable"
 		return seed
 	case <-pending.done:
+		if status := s.gateway.liveStatus(false); status != "" {
+			seed.Status = status
+			return seed
+		}
 		return pending.reply
 	}
 }
 
 func (s *gexService) fetch(ctx context.Context, seed gexReply, began time.Time) gexReply {
-	if s.gateway.base == "" {
-		seed.Status = "not-configured"
+	if status := s.gateway.liveStatus(false); status != "" {
+		seed.Status = status
 		return seed
 	}
 	base, valid := optionsLocalURL(s.gateway.base)
@@ -269,6 +286,10 @@ func (s *gexService) fetch(ctx context.Context, seed gexReply, began time.Time) 
 	seenPages, seenContracts := map[string]bool{}, map[string]bool{}
 	contracts := make([]gexContract, 0)
 	for page := 0; page < gexMaxPages; page++ {
+		if status := s.gateway.liveStatus(false); status != "" {
+			seed.Status = status
+			return seed
+		}
 		if seenPages[target.String()] {
 			seed.Status = "invalid-data"
 			return seed
@@ -294,9 +315,15 @@ func (s *gexService) fetch(ctx context.Context, seed gexReply, began time.Time) 
 			seed.Status = "invalid-data"
 			return seed
 		}
+		if optionsDisabledResponse(body) {
+			s.gateway.disable()
+			seed.Status = "subscription-disabled"
+			return seed
+		}
 		if response.StatusCode != 200 {
 			seed.Status = "gateway-unavailable"
 			if response.StatusCode == 401 || response.StatusCode == 403 {
+				s.gateway.deny(false)
 				seed.Status = "access-denied"
 			}
 			if response.StatusCode == 429 {
@@ -309,7 +336,16 @@ func (s *gexService) fetch(ctx context.Context, seed gexReply, began time.Time) 
 			Next    string        `json:"next_url"`
 			Results []gexContract `json:"results"`
 		}
-		if json.Unmarshal(body, &payload) != nil || (payload.Status != "OK" && payload.Status != "DELAYED") {
+		if json.Unmarshal(body, &payload) != nil {
+			seed.Status = "invalid-data"
+			return seed
+		}
+		if optionsAccessDenied(payload.Status) {
+			s.gateway.deny(false)
+			seed.Status = "access-denied"
+			return seed
+		}
+		if payload.Status != "OK" && payload.Status != "DELAYED" {
 			seed.Status = "invalid-data"
 			return seed
 		}

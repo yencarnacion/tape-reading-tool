@@ -5,7 +5,16 @@ adapter using your own licensed provider, or prepare an offline archive. The
 built-in live consumer understands Massive-compatible response fields; another
 provider can map its data to these fields. Never fabricate unavailable fields.
 
-Set `TAPE_OPTIONS_GATEWAY_URL` to the adapter's API base (any path prefix works).
+Live options are disabled by default, independently of stock data. Set
+`MASSIVE_OPTIONS_ENABLED=true` on the gateway and `TAPE_OPTIONS_ENABLED=true`
+on the tape backend only with a suitable options subscription. If the tape
+flag is unset, this backend falls back to `MASSIVE_OPTIONS_ENABLED`; an explicit
+false or invalid tape flag disables options even when the shared flag is true.
+The copied `.env.example` explicitly sets the tape flag to false. Restart the tape backend after changes.
+Prepared IV/GEX replay archives do not require this live opt-in.
+
+Set `TAPE_OPTIONS_GATEWAY_URL` to the adapter's API base (any path prefix works),
+or use `MARKET_DATA_GATEWAY_URL` as the shared gateway fallback.
 Only loopback HTTP(S) is accepted. URL credentials, queries, fragments,
 redirects, external pagination, and API keys in pagination are rejected. The
 optional `TAPE_OPTIONS_GATEWAY_TOKEN` is sent as `Authorization: Bearer …` only
@@ -22,6 +31,11 @@ optional `next_url` **relative to the same gateway origin, with the full same
 route path** (for example `/options/rest/v3/snapshot/options/AAPL?cursor=next`).
 Use `status: "DELAYED"` for delayed data. HTTP 401/403, 404, 429, and 5xx are
 handled as unavailable states; upstream error text is never sent to the browser.
+HTTP 401/403 and `NOT_AUTHORIZED`/`NOT_ENTITLED` responses stop further snapshot
+requests until restart. A denied flow feed is latched separately from snapshots.
+`OPTIONS_DISABLED` or a flow `disabled` response disables all live options
+requests until restart. Restore access/configuration before restarting.
+Stocks, ADR, RVOL, and already prepared replay data remain independent.
 
 Each result contains:
 

@@ -5,10 +5,11 @@ export const GEX_STATES = Object.freeze({
   loading: ['GEX LOADING', 'Waiting for a complete chain snapshot'],
   unavailable: ['GEX UNAVAILABLE', 'No usable chain snapshot'],
   'not-configured': ['GEX NOT SET UP', 'Uses the configured local options gateway'],
+  'subscription-disabled': ['GEX OFF', 'Options data is disabled; stock charts and tape remain available'],
   'gateway-config': ['GATEWAY CONFIG', 'The options gateway must be local'],
   'gateway-offline': ['GEX OFFLINE', 'Local options gateway unavailable'],
   'gateway-unavailable': ['GEX UNAVAILABLE', 'The gateway could not supply this chain'],
-  'access-denied': ['OPTIONS ACCESS', 'Options snapshots are not available on this connection'],
+  'access-denied': ['OPTIONS ACCESS', 'Restore options snapshot access, then restart the backend to retry'],
   'rate-limited': ['GEX RETRYING', 'Provider pacing; waiting before another request'],
   busy: ['GEX RETRYING', 'Snapshot capacity is busy'],
   'waiting-tape': ['WAITING FOR STOCK', 'A fresh selected-stock price is required'],
@@ -67,6 +68,7 @@ export function gexView(reply, nowMS, context) {
   const blocked = status => ({status, tone:'neutral', usable:false, label:(GEX_STATES[status]||GEX_STATES['invalid-data'])[0], reason:(GEX_STATES[status]||GEX_STATES['invalid-data'])[1]});
   const replay = ['replay','render'].includes(context.mode);
   if (!['live','massive','replay','render'].includes(context.mode)) return blocked('live-only');
+  if (!replay && reply?.symbol===context.symbol && reply.generation===context.generation && reply.maxDTE===context.maxDTE && !reply.replay && ['subscription-disabled','access-denied'].includes(reply.status)) return blocked(reply.status);
   if (!replay && !context.status?.connected) return blocked('waiting-tape');
   if (!replay && classifyRTH(nowMS*1000).phase !== 'open') return blocked('market-closed');
   if (!reply) return blocked('loading');

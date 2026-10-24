@@ -130,7 +130,7 @@ export function createGEXPanel({root,host,settings}) {
     if(identity!==key || nowMS<lastClock-50){clear();identity=key;}lastClock=nowMS;
     const replay=['replay','render'].includes(snapshot.mode);
     const visible=!document.hidden&&root.getClientRects().length>0;
-    const allowed=['live','massive','replay','render'].includes(snapshot.mode) && (replay||snapshot.status?.connected);
+    const allowed=['live','massive','replay','render'].includes(snapshot.mode) && (replay||snapshot.status?.connected||!result) && (replay||!['subscription-disabled','access-denied'].includes(result?.status));
     const paused=replay&&snapshot.status?.state==='paused';
     if(visible&&allowed&&!pending&&performance.now()>=nextPoll && (!paused||lastReplayRequest!==nowMS)) {
       const controller=new AbortController(),token=epoch,requested={symbol:snapshot.symbol,generation:snapshot.generation,dte:maxDTE};pending=controller;

@@ -46,7 +46,7 @@ export class GEXOverlayController {
     this.evaluate();
 
     const replay = replayMode(mode);
-    const allowed = replay || (['live', 'massive'].includes(mode) && status?.connected && this.view?.status !== 'market-closed');
+    const allowed = replay || (['live', 'massive'].includes(mode) && (!this.reply || (status?.connected && this.view?.status !== 'market-closed')) && !['subscription-disabled','access-denied'].includes(this.reply?.status));
     const paused = replay && status?.state === 'paused';
     if (!allowed || this.controller || this.now() < this.nextPoll || (paused && this.lastRequestClock === nowMS)) return;
     this.lastRequestClock = nowMS;

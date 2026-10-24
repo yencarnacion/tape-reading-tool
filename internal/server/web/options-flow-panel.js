@@ -41,7 +41,8 @@ export function createOptionsFlowPanel({root,host}) {
  }
  function paint(nowMS){
   if(!current())return;
-  const blocked=modeStatus();const view=blocked?{status:blocked}:flowView(result,nowMS,tapeReading(nowMS));
+  const terminal=['live','massive'].includes(snapshot.mode)&&['subscription-disabled','not-entitled'].includes(result?.status);
+  const blocked=modeStatus();const view=terminal?{status:result.status}:blocked?{status:blocked}:flowView(result,nowMS,tapeReading(nowMS));
   ui.panel.dataset.side='neutral';ui.panel.dataset.divergence='false';ui.verdict.hidden=true;ui.verdict.dataset.relation='waiting';
   const usable=['ready','collecting'].includes(view.status)&&view.windows;
   ui.values.hidden=!usable||details;ui.detail.hidden=!usable||!details;ui.empty.hidden=!!usable;
@@ -83,7 +84,8 @@ export function createOptionsFlowPanel({root,host}) {
   if(key!==identity){clear();identity=key;}
   const nowMS=nowUS/1000,mono=performance.now();
   const visible=!document.hidden&&root.getClientRects().length>0;
-  if(!modeStatus()&&visible&&!pending&&mono>=nextPoll){
+  const canReadStatus=['live','massive'].includes(snapshot.mode)&&(!modeStatus()||!result)&&!['subscription-disabled','not-entitled'].includes(result?.status);
+  if(canReadStatus&&visible&&!pending&&mono>=nextPoll){
    const controller=new AbortController(),token=epoch,symbol=snapshot.symbol,generation=snapshot.generation;pending=controller;
    nextPoll=mono+1000;
    host.getOptionsFlow({symbol,signal:controller.signal}).then(reply=>{

@@ -20,7 +20,7 @@ func flowRequest(t *testing.T, s *Server) flowReply {
 	return reply
 }
 func TestOptionsFlowLocalAdapterAndValidation(t *testing.T) {
-	s := panelServer(t, "live")
+	s := optionsTestServer(t, "live")
 	now := s.now()
 	s.store.AddTrade("AAPL", now, now, 100, 100)
 	bad := false
@@ -49,7 +49,7 @@ func TestOptionsFlowLocalAdapterAndValidation(t *testing.T) {
 func TestOptionsFlowUnavailableNeverCallsNetwork(t *testing.T) {
 	for _, mode := range []string{"replay", "render", "demo", "live", "massive"} {
 		t.Run(mode, func(t *testing.T) {
-			s := panelServer(t, mode)
+			s := optionsTestServer(t, mode)
 			calls := 0
 			g := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++ }))
 			defer g.Close()
@@ -60,21 +60,21 @@ func TestOptionsFlowUnavailableNeverCallsNetwork(t *testing.T) {
 			}
 		})
 	}
-	s := panelServer(t, "live")
+	s := optionsTestServer(t, "live")
 	s.options.base = "https://example.com"
 	if r := flowRequest(t, s); r.Status != "not-configured" {
 		t.Fatal(r)
 	}
 }
 func TestOptionsFlowBoundariesAndNoUpstreamErrors(t *testing.T) {
-	s := panelServer(t, "live")
+	s := optionsTestServer(t, "live")
 	now := s.now()
 	s.store.AddTrade("AAPL", now, now, 100, 100)
 	g := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "provider-secret", 403) }))
 	defer g.Close()
 	s.options.base = g.URL
 	r := flowRequest(t, s)
-	if r.Status != "gateway-offline" {
+	if r.Status != "not-entitled" {
 		t.Fatal(r)
 	}
 	for _, target := range []string{"?symbol=OTHER", "?symbol=AAPL&symbol=AAPL", "?symbol=AAPL&url=bad", "?symbol=AAPL&spot=100"} {
