@@ -29,6 +29,12 @@ _Deterministic IREN replay for July 22, 2026, from 09:30–09:32 ET with the opt
 
 The program is read-only. It does not place or manage orders.
 
+Hover a minute, daily, or tick price chart to show crosshairs. The vertical guide
+snaps to a candle; the right label shows the price at the pointer and the bottom
+label shows that candle's Eastern time (or date for daily bars). Crosshairs also
+work in replay and Live Rewind. Moving through volume panes keeps the time guide
+without displaying a price for the volume scale. Leaving the chart clears them.
+
 The one-minute chart also has an optional **5D RVOL** experiment. It starts off;
 click **5D RVOL OFF** to show a compact cumulative-volume histogram below the
 existing volume pane, with a **1×** reference and the latest multiple on the

@@ -248,6 +248,14 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 
 .chart-panel { container-type: inline-size; position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #0c0f13; }
 #chartCanvas { display: block; width: 100%; height: 100%; }
+.has-crosshair { cursor: crosshair; }
+.chart-crosshair { position: absolute; inset: 0; z-index: 3; pointer-events: none; overflow: hidden; }
+.chart-crosshair[hidden], .chart-crosshair [hidden] { display: none; }
+.crosshair-vertical, .crosshair-horizontal { position: absolute; }
+.crosshair-vertical { border-left: 1px dashed #afbdcc; }
+.crosshair-horizontal { border-top: 1px dashed #afbdcc; }
+.crosshair-price, .crosshair-time { position: absolute; height: 18px; padding: 2px 4px; color: #f5f8fc; background: #42576d; font: 700 10px/14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; overflow: hidden; max-width: calc(100% - 4px); }
+.crosshair-time { transform: translateX(-50%); border-radius: 2px; }
 .day-context {
   --day-direction: var(--muted);
   --day-map-bottom: 120px;

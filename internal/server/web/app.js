@@ -1,4 +1,5 @@
 import { providerDayVolume } from './day-volume.js';
+import { createChartCrosshair } from './chart-crosshair.js';
 import { dailyExtension, dailyExtensionLabels } from './daily-extension.js';
 import { formatTradeSize, tradeSizeLabel } from './trade-size.js';
 import {
@@ -259,6 +260,9 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
   const replayContext = elements.replayChart.getContext('2d', { alpha: false, desynchronized: true });
   const dayContext = elements.dayContextCanvas.getContext('2d', { alpha: false, desynchronized: true });
   const dailyContext = elements.dailyChart.getContext('2d', { alpha: false, desynchronized: true });
+  const chartCrosshairs = new Map([elements.chart, elements.replayChart, elements.dailyChart, elements.rewindCanvas]
+    .map(canvas => [canvas, createChartCrosshair(canvas, formatPrice)]));
+  const clearCrosshairs = () => { for (const crosshair of chartCrosshairs.values()) crosshair.clear(); };
 
   function serverDefaults(display, audioConfig) {
     return {
@@ -452,6 +456,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
       state.streamGeneration = snapshot.generation || 0;
       const nextSymbol = snapshot.symbol || message.symbol;
       const symbolChanged = nextSymbol !== state.symbol;
+      if (symbolChanged || generationChanged) clearCrosshairs();
       state.symbol = nextSymbol;
       state.alertContext = message.alert_context || null;
       // A scale from the previous ticker makes the new chart appear to ease or
@@ -884,6 +889,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
   }
 
   function selectMarketChart(view) {
+    clearCrosshairs();
     state.marketChartView = view === 'daily' ? 'daily' : 'minute';
     const daily = state.marketChartView === 'daily';
     $('trendlinesButton').hidden = daily;
@@ -1042,6 +1048,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     target.layoutRolling(rollingTop, rollingBottom);
     target.layoutLower?.(priceTop, plotBottom - 2);
     if (width < 80 || height < 120 || !bars.length) {
+      chartCrosshairs.get(target.canvas).update(null);
       target.empty?.classList.toggle('hidden', bars.length > 0);
       target.setDirty(false);
       return;
@@ -1085,6 +1092,12 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     minimum = scale.minimum; maximum = scale.maximum;
     const priceY = (value) => priceBottom - (value - minimum) / (maximum - minimum) * (priceBottom - priceTop);
     const xAt = (index) => left + (index + 0.5) * step;
+
+    chartCrosshairs.get(target.canvas).update(showPrices ? {
+      width, height, left, right, top: priceTop, bottom: plotBottom - 20,
+      priceBottom, minimum, maximum, step, count: visible.length,
+      timeAt: index => visible[index].time, period: 'tick'
+    } : null);
 
     context.font = '11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     context.textBaseline = 'middle';
@@ -1533,6 +1546,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     replayContext.fillStyle = '#0c0f13';
     replayContext.fillRect(0, 0, width, height);
     if (width < 160 || height < 150 || !state.minuteBars.length) {
+      chartCrosshairs.get(elements.replayChart).update(null);
       elements.replayChartEmpty.classList.toggle('hidden', state.minuteBars.length > 0);
       state.dirtyReplayChart = false;
       return;
@@ -1593,6 +1607,11 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     state.minuteScale = updatePriceScale(state.minuteScale, minimum, maximum, visualNowMS());
     minimum = state.minuteScale.minimum; maximum = state.minuteScale.maximum;
     const priceY = (value) => priceBottom - (value - minimum) / (maximum - minimum) * (priceBottom - top);
+    chartCrosshairs.get(elements.replayChart).update({
+      width, height, left, right, top, bottom: height - 20, priceBottom,
+      minimum, maximum, step, count: visible.length,
+      timeAt: index => visible[index].timeUS / 1000, period: 'minute'
+    });
 
     replayContext.font = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     replayContext.lineWidth = 1;
@@ -1910,6 +1929,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     dailyContext.fillRect(0, 0, width, height);
     const bars = state.dailyBars.slice(-90);
     if (width < 160 || height < 150 || !bars.length) {
+      chartCrosshairs.get(elements.dailyChart).update(null);
       state.dirtyDailyChart = false;
       return;
     }
@@ -1936,6 +1956,11 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     const padding = Math.max((maximum - minimum) * .06, maximum * .0001, .01);
     minimum -= padding; maximum += padding;
     const yAt = (value) => bottom - (value - minimum) / (maximum - minimum) * (bottom - top);
+    chartCrosshairs.get(elements.dailyChart).update({
+      width, height, left, right, top, bottom: height - 22, priceBottom: bottom,
+      minimum, maximum, step, count: bars.length,
+      timeAt: index => bars[index].timeUS / 1000, period: 'daily'
+    });
     dailyContext.font = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     dailyContext.textBaseline = 'middle';
     for (let index = 0; index <= 4; index++) {
@@ -2808,6 +2833,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     if (!rewindEnabled()) return;
     const buffer = ensureRewindBuffer();
     if (!buffer || buffer.count === 0) return;
+    clearCrosshairs();
     const rewind = state.rewind;
     // Capture a fixed segment endpoint. At 0.25x a player chasing the moving
     // live head can never catch it; a five-second segment must instead replay
@@ -2903,6 +2929,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
   function returnToLive(reason = '') {
     const rewind = state.rewind;
     if (!rewind.active) return;
+    clearCrosshairs();
     rewind.active = false;
     rewind.playing = false;
     rewind.targetSeq = 0;
