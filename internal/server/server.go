@@ -19,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 	"tape-reading-tool/internal/config"
 	"tape-reading-tool/internal/feed"
+	"tape-reading-tool/internal/gexbot"
 	"tape-reading-tool/internal/storage"
 	"tape-reading-tool/internal/tape"
 )
@@ -36,6 +37,7 @@ type Server struct {
 	forecast             *forecastService
 	options              *optionsService
 	gex                  *gexService
+	gexbot               *gexbot.Service
 	cfg                  config.Config
 	store                *tape.Store
 	feed                 feed.Feed
@@ -91,25 +93,26 @@ func (n *jsonNumber) UnmarshalJSON(data []byte) error {
 }
 
 type streamMessage struct {
-	Absorption   *tape.AbsorptionSnapshot `json:"absorption,omitempty"`
-	Generation   uint64                   `json:"generation,omitempty"`
-	AlertContext *AlertContext            `json:"alert_context"`
-	Type         string                   `json:"type"`
-	Symbol       string                   `json:"symbol,omitempty"`
-	Snapshot     *tape.Snapshot           `json:"snapshot,omitempty"`
-	Trades       []tape.Trade             `json:"trades,omitempty"`
-	Quote        *tape.Quote              `json:"quote,omitempty"`
-	History      []string                 `json:"history,omitempty"`
-	Status       *tape.FeedStatus         `json:"status,omitempty"`
-	Display      *config.DisplayConfig    `json:"display,omitempty"`
-	Audio        *config.AudioConfig      `json:"audio,omitempty"`
-	ReplayConfig *config.ReplayConfig     `json:"replay_config,omitempty"`
-	Dropped      uint64                   `json:"dropped,omitempty"`
-	ServerTimeMS int64                    `json:"server_time_ms,omitempty"`
-	MarketChart  bool                     `json:"market_chart,omitempty"`
-	Xtra         bool                     `json:"xtra,omitempty"`
-	Rewind       *config.RewindConfig     `json:"rewind,omitempty"`
-	RewindPane   bool                     `json:"rewind_pane,omitempty"`
+	OptionsEnabled *bool                    `json:"options_enabled,omitempty"`
+	Absorption     *tape.AbsorptionSnapshot `json:"absorption,omitempty"`
+	Generation     uint64                   `json:"generation,omitempty"`
+	AlertContext   *AlertContext            `json:"alert_context"`
+	Type           string                   `json:"type"`
+	Symbol         string                   `json:"symbol,omitempty"`
+	Snapshot       *tape.Snapshot           `json:"snapshot,omitempty"`
+	Trades         []tape.Trade             `json:"trades,omitempty"`
+	Quote          *tape.Quote              `json:"quote,omitempty"`
+	History        []string                 `json:"history,omitempty"`
+	Status         *tape.FeedStatus         `json:"status,omitempty"`
+	Display        *config.DisplayConfig    `json:"display,omitempty"`
+	Audio          *config.AudioConfig      `json:"audio,omitempty"`
+	ReplayConfig   *config.ReplayConfig     `json:"replay_config,omitempty"`
+	Dropped        uint64                   `json:"dropped,omitempty"`
+	ServerTimeMS   int64                    `json:"server_time_ms,omitempty"`
+	MarketChart    bool                     `json:"market_chart,omitempty"`
+	Xtra           bool                     `json:"xtra,omitempty"`
+	Rewind         *config.RewindConfig     `json:"rewind,omitempty"`
+	RewindPane     bool                     `json:"rewind_pane,omitempty"`
 }
 
 func New(cfg config.Config, store *tape.Store, source feed.Feed, liveChart ...bool) *Server {
@@ -137,6 +140,7 @@ func New(cfg config.Config, store *tape.Store, source feed.Feed, liveChart ...bo
 	}); ok {
 		server.dailyBars = source.DailyBars
 	}
+	server.gexbot = gexbot.New()
 	server.gex = newGEXService(server.options, func() time.Time { return server.now() })
 	return server
 }
@@ -162,6 +166,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	mux.HandleFunc("/api/forecast", s.handleForecast)
 	mux.HandleFunc("/api/panel-data/options", s.handleOptions)
 	mux.HandleFunc("/api/panel-data/options-flow", s.handleOptionsFlow)
+	mux.HandleFunc("/api/panel-data/gexbot", s.handleGexbot)
 	mux.HandleFunc("/api/panel-data/gex", s.handleGEX)
 	mux.HandleFunc("/api/panel-data/gex/history", s.handleGEXHistory)
 	mux.HandleFunc("/api/ticker", s.handleTicker)
@@ -954,7 +959,7 @@ func (s *Server) writeSnapshot(conn *websocket.Conn, symbol string) (uint64, err
 	snapshot := s.store.Snapshot(symbol, s.cfg.Tape.SnapshotTrades)
 	message := streamMessage{
 		Type: "snapshot", Symbol: symbol, AlertContext: s.currentAlertContext(symbol), Snapshot: &snapshot,
-		Display: &s.cfg.Display, Audio: &s.cfg.Audio, ReplayConfig: &s.cfg.Replay,
+		Display: &s.cfg.Display, Audio: &s.cfg.Audio, ReplayConfig: &s.cfg.Replay, OptionsEnabled: &s.options.enabled,
 		ServerTimeMS: s.streamTimeMS(), MarketChart: s.liveChart, Xtra: s.liveXtra,
 		Rewind: &s.cfg.Rewind, RewindPane: s.rewindPane,
 	}

@@ -55,6 +55,12 @@ calls+/puts− assumption and quality gates as the GEX panel and works independe
 of the lower-panel selection. See [Estimated GEX](docs/ESTIMATED_GEX.md#strike-overlay-on-the-one-minute-chart)
 for units, interpretation and recorded-replay limits.
 
+**Gexbot Quant context** is a separate, default-on **GB ON** control on the
+one-minute chart. It shows nearest/next expiry concentrations and recent classified
+transaction delta flow, including dated replay history when available. It uses
+its own subscription and works with Massive options disabled. See
+[Gexbot setup, interpretation, recording and replay](docs/GEXBOT.md).
+
 The minute-chart volume pane distinguishes **DAY VOL · FEED** (Massive's
 accumulated daily volume, including fractional shares) from **BAR VOL · 04:00 ET**
 (the sum of available candle volumes). The feed counter matches the Watchlist
@@ -66,7 +72,7 @@ explicit bar-volume fallback; replay/render always use that historical fallback.
 
 ## Analytics panels
 
-Live options are **disabled by default**. Stocks Advanced continues to support the stock tape, charts, ADR, RVOL, and stock/ETF replay; it does not replace an options subscription. The IV, options-flow, and GEX panels show **OFF** without making options requests. Existing offline IV/GEX archives remain playable. To deliberately restore live options with a licensed gateway, set `MASSIVE_OPTIONS_ENABLED=true` on the gateway and `TAPE_OPTIONS_ENABLED=true` on the tape backend, then restart both. The tape backend accepts `MASSIVE_OPTIONS_ENABLED` as a fallback only when `TAPE_OPTIONS_ENABLED` is unset; the copied `.env.example` explicitly sets the tape flag to false. A configured gateway URL alone does not enable options. See [options gateway setup](docs/OPTIONS_GATEWAY.md).
+Live options are **disabled by default**. Stocks Advanced continues to support the stock tape, charts, ADR, RVOL, and stock/ETF replay; it does not replace an options subscription. Startup and reset hide Massive IV, switch saved options-flow or estimated-GEX panels to **TICK CHART**, and turn the Massive **GEX** overlay off without making options requests. **ADR + TAPE** retains stock ADR and classified tape flow; the separately subscribed **Gexbot** overlay stays enabled. Existing offline IV/GEX archives remain playable: enable the **IV** checkbox during replay or explicitly select an archived options panel. To deliberately restore live options with a licensed gateway, set `MASSIVE_OPTIONS_ENABLED=true` on the gateway and `TAPE_OPTIONS_ENABLED=true` on the tape backend, then restart both. The tape backend accepts `MASSIVE_OPTIONS_ENABLED` as a fallback only when `TAPE_OPTIONS_ENABLED` is unset; the copied `.env.example` explicitly sets the tape flag to false. A configured gateway URL alone does not enable options. See [options gateway setup](docs/OPTIONS_GATEWAY.md).
 
 The expanded ADR section includes options-volatility context through an optional local options gateway: ATM IV/change, observed IV peak, frozen implied-move usage, RV/IV, skew, classified flow changes, and visible divergence checks. It borrows space from the lower panel while preserving a compact Kronos view. No additional Massive key is used by this feature. See [Options volatility](docs/OPTIONS_VOLATILITY.md) for setup, calculation definitions, data-quality gates, and the local preview.
 

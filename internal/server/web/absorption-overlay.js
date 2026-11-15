@@ -42,7 +42,8 @@ export function drawAbsorptionZones(ctx, snapshot, g) {
     const text = `${z.side === 'buy' ? 'BUY' : 'SELL'} ABS ${z.relative_volume.toFixed(1)}× · ${z.state}`;
     const w = ctx.measureText(text).width+10;
     if (right-left<w+10) continue;
-    const labelX = Math.max(left+2, right-w-5);
+    // Keep the label away from the latest candles; the band still starts at detection time.
+    const labelX = left+2;
     ctx.fillStyle = '#0c0f13'; ctx.globalAlpha = .92; ctx.fillRect(labelX,y-8,w,16); ctx.globalAlpha = 1;
     ctx.fillStyle = color; ctx.fillText(text,labelX+5,y);
     hits.push({zone:z,left:labelX,right:labelX+w,top:y-8,bottom:y+8}); occupied.push(y);

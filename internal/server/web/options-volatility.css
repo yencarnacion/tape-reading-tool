@@ -88,3 +88,12 @@
  .vol-footer { font-size:9px; }
  .vol-details summary { font-size:9px; padding:2px; }
 }
+
+/* Preserve stock ADR and classified stock flow when paid options are off. */
+.options-vol.stock-only {display:block;padding:3px 9px;}
+.options-vol.stock-only > :not(.vol-flow-row) {display:none;}
+.options-vol.stock-only .vol-flow-row {min-height:28px;}
+.range-vol-body:has(.stock-only) {grid-template-rows:minmax(67px,1fr) 36px;}
+.range-vol-panel .adr-options {width:12px;height:12px;min-height:12px;padding:0;margin:0;}
+
+.range-vol-panel .adr-heading .adr-options-label {font-size:9px;}

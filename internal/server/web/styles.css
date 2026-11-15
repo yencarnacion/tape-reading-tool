@@ -743,3 +743,17 @@ input[type="range"] { width: 100%; height: 5px; padding: 0; accent-color: var(--
 
 .gex-overlay-visible .day-context { max-height: var(--gex-map-max-height, 198px); }
 .gex-overlay-visible.gex-compact-price .day-context { display: none; }
+
+/* One compact row for Gexbot flow; the chart toolbar keeps its horizontal scroll. */
+#gexbotStrip {position:absolute;left:8px;right:72px;top:30px;z-index:5;text-align:left;}
+#gexbotStrip[hidden] {display:none;}
+#gexbotScope {min-height:22px;max-width:110px;background:#17202c;color:#cfb8ed;border:1px solid #3d4355;font-size:10px;}
+
+.gexbot-visible .replay-chart-legend {top:49px;}
+.gexbot-visible .day-context:not(.day-map-lower-left):not(.day-map-lower-right) {top:80px;}
+.gexbot-visible .gex-overlay-controls {top:73px;}
+.gexbot-visible.gex-overlay-visible .day-context:not(.day-map-lower-left):not(.day-map-lower-right) {top:105px;}
+@container (max-width:460px) {
+  .gexbot-visible .gex-overlay-controls {top:90px;}
+  .gexbot-visible.gex-overlay-visible .day-context:not(.day-map-lower-left):not(.day-map-lower-right) {top:122px;}
+}

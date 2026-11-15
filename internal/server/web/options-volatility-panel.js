@@ -49,10 +49,11 @@ const time = ms => new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',
 const number = (n,d=1) => displayNumber(n,d);
 const signed = n => n===null || n===undefined ? '--' : `${n>=0?'+':''}${number(n)}`;
 
-export function createOptionsView({root,host,getSnapshot,getADRExtension}) {
+export function createOptionsView({root,host,getSnapshot,getADRExtension,enabled=()=>true}) {
   if(typeof host.getOptionsSnapshot!=='function') return {event(){},render(){},unmount(){}};
   const $=s=>root.querySelector(s), box=$('.options-vol');
-  let model=null, snapshot=null, pending=null, epoch=0, nextPoll=0, lastRender=0, mounted=true, displayed='', replayMeta=null, archiveCursor=0;
+  box.classList.toggle('stock-only',!enabled());
+  let wasDisplayDisabled=false, model=null, snapshot=null, pending=null, epoch=0, nextPoll=0, lastRender=0, mounted=true, displayed='', replayMeta=null, archiveCursor=0;
   function reset() {
     pending?.abort(); pending=null; epoch++; nextPoll=0;
     snapshot=getSnapshot(); model=new VolatilityModel(snapshot.symbol,snapshot.clockUS/1000);
@@ -155,6 +156,16 @@ export function createOptionsView({root,host,getSnapshot,getADRExtension}) {
       const nowMS=nowUS/1000, session=marketParts(nowUS)?.sessionDateET;
       if(model.symbol!==snapshot.symbol || model.session!==session)reset();
       const mono=performance.now(); if(mono-lastRender<250)return;lastRender=mono;
+      const stockOnly=!enabled();box.classList.toggle('stock-only',stockOnly);
+      box.setAttribute('aria-label',stockOnly?'Stock tape flow':'Options volatility context');
+      if(stockOnly){
+        wasDisplayDisabled=true;
+        if(pending){pending.abort();pending=null;epoch++;}
+        if(model.status!=='subscription-disabled')model.unavailable('subscription-disabled');
+        paint(model.reading(nowMS,getADRExtension()));return;
+      }
+      if(wasDisplayDisabled){wasDisplayDisabled=false;model.unavailable('loading');nextPoll=0;}
+
       if(!['live','massive','replay','render'].includes(snapshot.mode)) {paint({status:'live-only'});return;}
       // A first local status request can explain disabled options even before
       // the market opens or stock data connects. The server gates provider I/O.

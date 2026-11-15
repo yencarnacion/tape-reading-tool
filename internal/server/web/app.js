@@ -10,6 +10,7 @@ import {
 import { createStreamSource, prefixFromTrade } from './tape-source.js';
 import { RewindBuffer, createRewindSource } from './tape-rewind.js';
 import { PanelHost } from './panel-host.js';
+import { applyOptionsDefaults } from './options-defaults.js';
 import { mergePanelSettings } from './panel-api.js';
 import { tapePressureManifest, createTapePressureInstance } from './tape-pressure-panel.js';
 import { blankPanelManifest } from './blank-panel.js';
@@ -128,6 +129,12 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
       gexOverlayGeometry = null;
     }
   } });
+  const gexbot = new GexbotContext.Controller('/api/panel-data/gexbot',()=>{state.dirtyReplayChart=true;});
+  let gexbotView=GexbotContext.model(null),gexbotGeometry=[];
+  $('gexbotButton').onclick=()=>{state.settings.showGexbotContext=!state.settings.showGexbotContext;saveSettings();state.dirtyReplayChart=true;};
+  $('gexbotScope').onchange=()=>{state.settings.gexbotScope=$('gexbotScope').value;saveSettings();state.dirtyReplayChart=true;};
+  window.__tapeReadingGexbot=()=>({view:gexbotView,geometry:gexbotGeometry,reply:gexbot.reply});
+  window.addEventListener('pagehide',()=>gexbot.reset());
   let gexOverlayGeometry = null, gexHoverPoint = null, gexDrawnResult = null;
   window.addEventListener('pagehide', () => { gexOverlay.reset(); gexOverlayGeometry = null; });
   window.__tapeReadingGEXOverlay = () => ({ ...gexOverlay.debug(),
@@ -278,6 +285,8 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
       showMinuteVolume: true,
       showCumulativeRVOL: false,
       showGEXOverlay: false,
+      showGexbotContext: true,
+      gexbotScope: "both",
       gexOverlayMaxDTE: 120,
       showDailyExtension: true,
       audio: {
@@ -318,6 +327,8 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     result.showMinuteVolume = result.showMinuteVolume !== false;
     result.showCumulativeRVOL = result.showCumulativeRVOL === true;
     result.showGEXOverlay = result.showGEXOverlay === true;
+    result.showGexbotContext = result.showGexbotContext !== false;
+    result.gexbotScope = Object.hasOwn(GexbotContext.scopes,result.gexbotScope) ? result.gexbotScope : "both";
     result.gexOverlayMaxDTE = [30, 60, 120].includes(result.gexOverlayMaxDTE) ? result.gexOverlayMaxDTE : 120;
     result.showDailyExtension = result.showDailyExtension !== false;
     result.tickSize = clampInt(result.tickSize, 1, 100000, defaults.tickSize);
@@ -338,7 +349,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     const adrMode = String(result.panels.settings['adr-rth-extension']?.directionMode || 'low').toLowerCase();
     // AUTO was the former default. Migrate that inherited value to the new,
     // deterministic FROM LOW default on the next settings load.
-    result.panels.settings['adr-rth-extension'] = { lookbackSessions: clampInt(result.panels.settings['adr-rth-extension']?.lookbackSessions, 5, 60, 20), directionMode: adrMode === 'high' ? 'high' : 'low' };
+    result.panels.settings['adr-rth-extension'] = { lookbackSessions: clampInt(result.panels.settings['adr-rth-extension']?.lookbackSessions, 5, 60, 20), directionMode: adrMode === 'high' ? 'high' : 'low', showOptionsContext: result.panels.settings['adr-rth-extension']?.showOptionsContext !== false };
     return result;
   }
 
@@ -390,18 +401,19 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     if (message.type === 'snapshot' && message.snapshot) {
       syncServerClock(message.server_time_ms);
       if (!state.defaults) {
-        state.defaults = serverDefaults(message.display || {}, message.audio || {});
-        state.settings = mergeSettings(state.defaults, readSavedSettings());
+        state.massiveOptionsEnabled = message.options_enabled === true;
+        state.defaults = applyOptionsDefaults(serverDefaults(message.display || {}, message.audio || {}), state.massiveOptionsEnabled);
+        state.settings = applyOptionsDefaults(mergeSettings(state.defaults, readSavedSettings()), state.massiveOptionsEnabled);
         audio.enabled = state.settings.audio.enabled;
         syncControlValues();
         applyLayout();
         panelHost = new PanelHost({
           root: elements.analyticsPanelRoot, picker: elements.analyticsPanelPicker,
-          registry: [tapePressureManifest, adrRTHManifest, blankPanelManifest], settings: state.settings.panels, saveSettings,
+          registry: [tapePressureManifest, {...adrRTHManifest, name:state.massiveOptionsEnabled?'ADR + OPTIONS VOL':'ADR + TAPE'}, blankPanelManifest], settings: state.settings.panels, saveSettings,
           capabilities: {
             streamSource: () => liveSource,
             formatters: () => ({ size: formatSize, signedPercent: formatSignedPercent, signed: formatSigned, rate: formatRate, tickChange: formatTickChange, relativePace: formatRelativePace, price: formatPrice }),
-            currentSnapshot: () => ({ generation: state.streamGeneration || 0, symbol: state.symbol, mode: state.status?.mode || '', status: { ...state.status }, clockUS: serverNowUS(performance.now()), quote: { ...state.quote }, trades: state.trades.slice() }),
+            currentSnapshot: () => ({ massiveOptionsEnabled:state.massiveOptionsEnabled, generation: state.streamGeneration || 0, symbol: state.symbol, mode: state.status?.mode || '', status: { ...state.status }, clockUS: serverNowUS(performance.now()), quote: { ...state.quote }, trades: state.trades.slice() }),
             getOptionsSnapshot: async ({ symbol, signal, afterMS }) => {
               const query = new URLSearchParams({symbol});
               if (Number.isSafeInteger(afterMS) && afterMS >= 0) query.set('afterMS', String(afterMS));
@@ -430,6 +442,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
               if (panelId === 'estimated-gex') merged.maxDTE = [30,60,120].includes(merged.maxDTE) ? merged.maxDTE : 120;
               if (panelId === 'kronos-forecast') merged.horizon = [1, 3, 5, 10].includes(merged.horizon) ? merged.horizon : 5;
               if (panelId === 'adr-rth-extension') {
+                merged.showOptionsContext = merged.showOptionsContext === true;
                 merged.lookbackSessions = clampInt(merged.lookbackSessions, 5, 60, 20);
                 merged.directionMode = ['auto', 'low', 'high'].includes(String(merged.directionMode || '').toLowerCase()) ? String(merged.directionMode).toLowerCase() : 'low';
               }
@@ -1032,7 +1045,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     const paneGap = 8;
     const minimumRollingHeight = width <= 430 ? 224 : 184;
     const originalRollingHeight = Math.min(Math.max(minimumRollingHeight, usable * 0.25), usable * 0.5);
-    const expanded = target.layoutLower && panelHost?.active?.id === 'adr-rth-extension';
+    const expanded = target.layoutLower && panelHost?.active?.id === 'adr-rth-extension' && state.settings.panels.settings['adr-rth-extension']?.showOptionsContext !== false;
     let rollingPaneHeight = originalRollingHeight;
     let deltaPaneHeight;
     if (expanded) {
@@ -1576,8 +1589,9 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     const rightAxis = state.xtraEnabled ? (width < 500 ? 142 : 154) : standardRightAxis;
     const left = 7;
     const right = width - rightAxis;
-    const { top, volumeHeight, volumeBottom, volumeTop, priceBottom, rvolTop, rvolBottom } =
+    const { top:baseTop, volumeHeight, volumeBottom, volumeTop, priceBottom, rvolTop, rvolBottom } =
       minutePaneLayout(height, state.settings.showMinuteVolume, state.settings.showCumulativeRVOL);
+    const top=baseTop+(state.settings.showGexbotContext?18:0);
     // Keep history controls beside the strike profile, including narrow windows.
     // The status can ellipsize; the history button and expiry selector stay usable.
     const gexProfileWidth = Math.min(210, (right - left) * .38);
@@ -1709,6 +1723,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
 
     drawTradingPositionLevels(replayContext, priceY, minimum, maximum, left, right, top, priceBottom, '#0c0f13');
     drawGEXOverlayLabels(replayContext, gexOverlayGeometry);
+    gexbotGeometry=GexbotContext.draw(replayContext,gexbotView,{left,right,top,bottom:priceBottom,priceY});
     gexDrawnResult = gexOverlay.result;
     updateGEXHover();
     if (gexOverlay.active) updateGEXStatusText(true);
@@ -2415,7 +2430,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
         panelHost.settings = state.settings.panels;
         panelHost.swap('tape-pressure');
       lowerPanelHost.settings = state.settings.panels;
-      lowerPanelHost.swap(DEFAULT_LOWER_PANEL);
+      lowerPanelHost.swap(state.settings.panels.slots.lowerAnalytics.activePanelId);
       }
     });
 
@@ -3102,7 +3117,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     const row = gexHoverPoint && gexOverlayHit(gexOverlayGeometry, gexHoverPoint.x, gexHoverPoint.y);
     elements.replayChart.title = row && gexOverlay.view?.usable
       ? gexOverlayDescription(row, gexOverlay.result)
-      : (() => { const zone = gexHoverPoint && absorptionHit(state.absorptionGeometry, gexHoverPoint.x, gexHoverPoint.y); return zone ? absorptionDescription(zone) : ''; })();
+      : (() => { const gb = gexHoverPoint && gexbotGeometry.find(l=>gexHoverPoint.x>=l.x && gexHoverPoint.x<=l.x+l.width && Math.abs(gexHoverPoint.y-l.y)<14);if(gb)return gb.description; const zone = gexHoverPoint && absorptionHit(state.absorptionGeometry, gexHoverPoint.x, gexHoverPoint.y); return zone ? absorptionDescription(zone) : ''; })();
   }
 
   function updateGEXStatusText(shown) {
@@ -3113,6 +3128,21 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     if (elements.gexOverlayStatus.textContent !== text) elements.gexOverlayStatus.textContent = text;
   }
 
+  let lastGexbotSync=-Infinity;
+  function syncGexbot(now) {
+    if(now-lastGexbotSync<200)return;lastGexbotSync=now;
+    const shown=Boolean(state.settings?.showChart && state.marketChartEnabled && state.marketChartView==='minute' && !state.rewind.active);
+    const enabled=shown && state.settings.showGexbotContext && !state.pendingReplayReset && !document.hidden;
+    const at=serverNowUS(now)/1000,scope=state.settings?.gexbotScope||'both';
+    elements.replayMarketPanel.classList.toggle('gexbot-visible',shown);
+    $('gexbotButton').hidden=!shown;$('gexbotScope').hidden=!shown;$('gexbotStrip').hidden=!shown;
+    $('gexbotButton').textContent=state.settings?.showGexbotContext?'GB ON':'GB OFF';
+    $('gexbotButton').setAttribute('aria-pressed',String(!!state.settings?.showGexbotContext));$('gexbotScope').value=scope;
+    gexbot.sync({enabled,symbol:state.symbol,mode:state.status.mode,identity:`${state.streamGeneration}|${state.replay?.generation}|${state.status.epoch}`,replay:['replay','render'].includes(state.status.mode),at});
+    const next=enabled?gexbot.view(at,selectLastPrice(state.lastPriceTrade,state.quote)?.p,scope):GexbotContext.model({status:state.settings?.showGexbotContext?'loading':'off'});
+    if(JSON.stringify(next)!==JSON.stringify(gexbotView)){gexbotView=next;state.dirtyReplayChart=true;}
+    GexbotContext.paintStrip($('gexbotStrip'),gexbotView);
+  }
   function syncGEXOverlay(now) {
     const shown = Boolean(state.settings?.showGEXOverlay && state.settings.showChart &&
       state.marketChartEnabled && state.marketChartView === 'minute' && !state.rewind.active);
@@ -3168,6 +3198,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
       else if (state.rewind.dirty) drawRewindPane();
     }
     syncTrendlineVisibility();
+    syncGexbot(now);
     syncGEXOverlay(now);
     if (state.dirtyReplayChart && (state.status?.mode === 'replay' || state.marketChartEnabled) && state.settings?.showChart) drawReplayChart();
     if (state.dirtyChart && state.settings?.showChart) drawChart();
@@ -3377,6 +3408,11 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
         await document.fonts.ready;
         await refreshReplayRange(false);
         state.renderInitialized = true;
+      }
+      if(state.settings.showGexbotContext && state.marketChartView==='minute') {
+        await gexbot.fetchAt({symbol:state.symbol,mode:'replay',identity:`${state.streamGeneration}|${state.replay?.generation}|${state.status.epoch}`,replay:true,at:target/1000});
+        gexbotView=gexbot.view(target/1000,selectLastPrice(state.lastPriceTrade,state.quote)?.p,state.settings.gexbotScope);
+        GexbotContext.paintStrip($('gexbotStrip'),gexbotView);
       }
       state.dirtyChart = true;
       state.dirtyReplayChart = true;
