@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="/auto-trendlines.css">
   <link rel="stylesheet" href="/options-volatility.css">
   <link rel="stylesheet" href="/gex.css">
+  <link rel="stylesheet" href="/gexbot-context.css">
 </head>
 <body>
   <main class="app" id="app">
@@ -79,12 +80,15 @@
           <nav class="market-chart-tabs" aria-label="Market chart controls">
             <button id="minuteChartTab" class="active" type="button" aria-pressed="true">1 MIN</button>
             <button id="dailyChartTab" type="button" aria-pressed="false">90 DAY</button>
+            <button id="gexbotButton" type="button" aria-pressed="true" title="Gexbot expiry levels and classified delta flow">GB ON</button>
+            <select id="gexbotScope" aria-label="Gexbot expiry scope"><option value="both">Near + next</option><option value="gex_zero">Nearest</option><option value="gex_one">Next</option><option value="gex_full">0–90D</option></select>
             <button id="gexOverlayButton" type="button" aria-pressed="false" title="Estimated gamma exposure per strike. Amber − left / teal + right; calls+/puts− assumed. Hover a strike for details.">GEX OFF</button>
             <button id="absorptionButton" class="active" type="button" aria-label="Volume and volatility adjusted absorption zones" aria-pressed="true">ABS ON</button>
             <button id="trendlinesButton" class="active" type="button" aria-label="Automatic trendlines" aria-pressed="true">TRENDLINES ON</button>
             <button id="volumeButton" class="active" type="button" aria-label="One-minute volume pane" aria-pressed="true" title="Show the existing volume bars, candle volume, and day volume">VOL ON</button>
             <button id="cumulativeRVOLButton" type="button" aria-label="Experimental 5-day cumulative RVOL pane" aria-pressed="false">5D RVOL OFF</button>
           </nav>
+          <output id="gexbotStrip" class="gexbot-strip"></output>
           <div id="gexOverlayControls" class="gex-overlay-controls" hidden>
             <button id="gexOverlayHistory" type="button" title="Review saved GEX profiles, prior-time dots and largest strike changes">HISTORY</button>
             <output id="gexOverlayStatus" aria-live="polite" role="status"></output>
@@ -280,6 +284,7 @@
     </form>
   </dialog>
 
+  <script src="/gexbot-context.js"></script>
   <script src="/bootstrap.js" type="module"></script>
 </body>
 </html>

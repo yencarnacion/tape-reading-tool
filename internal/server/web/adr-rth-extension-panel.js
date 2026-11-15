@@ -4,7 +4,7 @@ import { applyEligibleTrades, calculateADR, calculateExtension, classifyRTH, dis
 
 function markup(lookback, directionMode) {
   return `<div class="adr-panel range-vol-panel" aria-live="polite">
-    <div class="adr-heading"><strong>RANGE / VOL</strong><div class="adr-controls"><label>MODE <select class="adr-mode" aria-label="ADR direction mode"><option value="auto">AUTO</option><option value="low">FROM LOW</option><option value="high">FROM HIGH</option></select></label><label>LOOKBACK <input class="adr-lookback" type="number" min="5" max="60" value="${lookback}" aria-label="ADR lookback sessions"></label></div></div>
+    <div class="adr-heading"><strong>RANGE / VOL</strong><div class="adr-controls"><label>MODE <select class="adr-mode" aria-label="ADR direction mode"><option value="auto">AUTO</option><option value="low">FROM LOW</option><option value="high">FROM HIGH</option></select></label><label>LOOKBACK <input class="adr-lookback" type="number" min="5" max="60" value="${lookback}" aria-label="ADR lookback sessions"></label><label class="adr-options-label" title="Massive options IV; archived data can be enabled during replay"><input class="adr-options" type="checkbox" aria-label="Show Massive options volatility">IV</label></div></div>
     <div class="range-vol-body"><section class="adr-section" aria-label="ADR RTH extension"><div class="adr-state"><strong>LOADING ADR HISTORY</strong><small></small><div class="adr-state-baseline"><b>ADR${lookback}</b><output>--</output></div></div>
     <div class="adr-ready" hidden>
       <div class="adr-primary"><strong class="adr-value">--</strong><span class="adr-percent">--</span></div>
@@ -23,6 +23,7 @@ function timeET(timeUS) {
 function createADRPanel({ root, host, settings }) {
   let lookback = Math.max(5, Math.min(60, Math.round(Number(settings.lookbackSessions) || 20)));
   let directionMode = ['auto', 'high'].includes(String(settings.directionMode || '').toLowerCase()) ? String(settings.directionMode).toLowerCase() : 'low';
+  let showOptionsContext = settings.showOptionsContext !== false;
   let snapshot = host.currentSnapshot(); let adr = null; let context = null; let loadGeneration = 0; let mounted = true; let loadedSessionDateET = '';
   let loadedPhase = ''; let lastLoadClockUS = 0; let loading = false;
   let loadedSymbol = ''; let nextRetryUS = 0; let wasConnected = false;
@@ -30,7 +31,11 @@ function createADRPanel({ root, host, settings }) {
   root.innerHTML = markup(lookback, directionMode); const $ = (selector) => root.querySelector(selector);
   const stateNode = $('.adr-state'), readyNode = $('.adr-ready'), input = $('.adr-lookback'), modeInput = $('.adr-mode');
   modeInput.value = directionMode;
-  const options = createOptionsView({ root, host, getSnapshot: () => snapshot, getADRExtension: () => calculateExtension(adr, context, directionMode).extension ?? null });
+  const optionsInput=$('.adr-options');
+  const optionsAllowed=()=>snapshot.massiveOptionsEnabled!==false || ['replay','render'].includes(snapshot.mode);
+  optionsInput.checked=showOptionsContext;
+  optionsInput.addEventListener('change',()=>{showOptionsContext=optionsInput.checked && optionsAllowed();host.savePanelSettings({lookbackSessions:lookback,directionMode,showOptionsContext});render();});
+  const options = createOptionsView({ root, host, enabled:()=>showOptionsContext && optionsAllowed(), getSnapshot: () => snapshot, getADRExtension: () => calculateExtension(adr, context, directionMode).extension ?? null });
 
   // A paused replay is stopped in time. Nothing delivered afterwards may advance
   // the panel clock, or the display would drift past the instant being examined.
@@ -44,6 +49,8 @@ function createADRPanel({ root, host, settings }) {
   }
   function render() {
     if (!mounted) return;
+    optionsInput.disabled=!optionsAllowed();
+    optionsInput.checked=showOptionsContext && optionsAllowed();
     renderBasis();
     root.dataset.adrTone = 'neutral';
     $('.adr-primary').className = 'adr-primary adr-tone-neutral';
@@ -102,8 +109,8 @@ function createADRPanel({ root, host, settings }) {
     } catch (error) { if (mounted && token === loadGeneration && host.isCurrent()) { loading = false; console.error('ADR panel data load failed', error); adr = { status: 'unavailable' }; context = { status: 'unavailable' }; nextRetryUS = snapshot.clockUS + 5e6; render(); } }
   }
 
-  input.addEventListener('change', () => { lookback = Math.max(5, Math.min(60, Math.round(Number(input.value) || 20))); input.value = String(lookback); host.savePanelSettings({ lookbackSessions: lookback, directionMode }); void load(); });
-  modeInput.addEventListener('change', () => { directionMode = ['low', 'high'].includes(modeInput.value) ? modeInput.value : 'auto'; modeInput.value = directionMode; host.savePanelSettings({ lookbackSessions: lookback, directionMode }); render(); });
+  input.addEventListener('change', () => { lookback = Math.max(5, Math.min(60, Math.round(Number(input.value) || 20))); input.value = String(lookback); host.savePanelSettings({ lookbackSessions: lookback, directionMode, showOptionsContext }); void load(); });
+  modeInput.addEventListener('change', () => { directionMode = ['low', 'high'].includes(modeInput.value) ? modeInput.value : 'auto'; modeInput.value = directionMode; host.savePanelSettings({ lookbackSessions: lookback, directionMode, showOptionsContext }); render(); });
   return {
     onEvent(event) {
       if (event.type === 'snapshot') { snapshot = { ...snapshot, ...event.snapshot, status: { ...host.currentSnapshot().status, ...event.snapshot.status } }; void load(); }
@@ -127,5 +134,5 @@ export const adrRTHManifest = {
   id: 'adr-rth-extension', name: 'ADR + OPTIONS VOL', version: '1.3.0', panelApiVersion: PANEL_API_VERSION, dataSchemaVersion: PANEL_DATA_SCHEMA_VERSION,
   description: 'Current chart-eligible extension from the running regular-session low or high, normalized by completed-session ADR.',
   supportedModes: ['live', 'massive', 'demo', 'replay', 'render'], requestedCapabilities: ['clock', 'trades', 'formatters', 'completed-daily-rth-bars', 'rth-session-context', 'options-snapshot', 'settings'],
-  defaultSettings: { lookbackSessions: 20, directionMode: 'low' }, minimumWidth: 280, factory: createADRPanel
+  defaultSettings: { lookbackSessions: 20, directionMode: 'low', showOptionsContext:true }, minimumWidth: 280, factory: createADRPanel
 };
