@@ -176,7 +176,7 @@ func (f *Gateway) quote(symbol string, at int64, bid, ask, bs, as float64, recei
 		return
 	}
 	f.quoteMS = at
-	f.store.UpdateQuote(symbol, bid, ask, bs, as)
+	f.store.UpdateQuoteAt(symbol, bid, ask, bs, as, received.UnixMicro())
 	if f.recorder != nil {
 		f.recorder.RecordQuote(storage.QuoteRecord{Symbol: symbol, EventUS: received.UnixMicro(), ReceivedUS: received.UnixMicro(), Bid: bid, Ask: ask, BidSize: bs, AskSize: as, Source: "live", Provider: "massive"})
 	}

@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {absorptionZonesAt, absorptionTimeX, drawAbsorptionZones} from '../internal/server/web/absorption-overlay.js';
+const zone={id:10,side:'buy',low:99.99,high:100.01,detected_us:100,held_us:200,broken_us:300,expires_us:400,relative_volume:4};
+const s={zones:[zone]};
+assert.equal(absorptionZonesAt(s,99).length,0);
+assert.equal(absorptionZonesAt(s,100)[0].state,'TESTING');
+assert.equal(absorptionZonesAt(s,200)[0].state,'HELD');
+assert.equal(absorptionZonesAt(s,300)[0].state,'BROKEN');
+assert.equal(absorptionZonesAt(s,400).length,0);
+assert.equal(absorptionZonesAt(s,150)[0].state,'TESTING','backward seek must hide later hold/break');
+const x=absorptionTimeX([{t:100},{t:200}],i=>i*10,b=>b.t,100);
+assert.equal(x(150),5);assert.equal(x(250),15);
+let rectangles=[];const ctx=new Proxy({measureText:()=>({width:80}),fillRect:(...a)=>rectangles.push(a)}, {get:(o,p)=>p in o?o[p]:()=>{}});
+const g={nowUS:150,left:0,right:200,top:0,bottom:100,priceY:p=>50-(p-100)*100,timeX:t=>t/2};
+const hits=drawAbsorptionZones(ctx,s,g);
+assert.ok(hits.length);assert.equal(hits[0].left,50,'zone starts at detection, never beginning of candle');
+assert.ok(rectangles.every(r=>r.every(Number.isFinite)));
+console.log('absorption overlay: causality, hold/break rewind, expiry, price geometry passed');

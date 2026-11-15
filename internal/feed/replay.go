@@ -77,6 +77,12 @@ func (r *Replay) Cue(ctx context.Context, request ReplayRequest, warmupUS, targe
 		return CueReport{}, fmt.Errorf("invalid cue symbol")
 	}
 
+	prior, err := r.absorptionWarmup(ctx, request, warmupUS)
+	if err != nil {
+		r.abortCue(generation, "absorption warmup failed")
+		return CueReport{}, err
+	}
+	stage.SeedAbsorption(prior)
 	rows, err := r.database.Events(ctx, request.Symbol, request.Source, request.Provider, warmupUS, targetUS)
 	if err != nil {
 		r.abortCue(generation, "cue read failed: "+err.Error())
@@ -309,6 +315,7 @@ func (r *Replay) Start(request ReplayRequest) error {
 	if dataRange.Trades == 0 || request.StartUS > dataRange.EndUS || request.EndUS < dataRange.StartUS {
 		return fmt.Errorf("no %s/%s trades for %s in that range", request.Provider, request.Source, request.Symbol)
 	}
+	r.stop(false)
 	r.store.Activate(request.Symbol)
 	r.store.Clear(request.Symbol)
 	r.launch(request, request.StartUS, replayCursor{}, "replaying")
@@ -373,6 +380,11 @@ func (r *Replay) PrepareRender(request ReplayRequest, warmupUS int64) error {
 
 	r.store.Activate(request.Symbol)
 	r.store.Clear(request.Symbol)
+	prior, err := r.absorptionWarmup(context.Background(), request, warmupUS)
+	if err != nil {
+		return err
+	}
+	r.store.SeedAbsorption(request.Symbol, prior)
 	_, err = r.StepRender(request.StartUS)
 	return err
 }
@@ -417,7 +429,13 @@ func (r *Replay) applyEventTo(sink tape.Sink, event storage.Event) {
 	}
 	received := time.UnixMicro(receivedUS)
 	if event.Kind == "quote" {
-		sink.UpdateQuote(event.Bid, event.Ask, event.BidSize, event.AskSize)
+		if timed, ok := sink.(interface {
+			UpdateQuoteAt(float64, float64, float64, float64, int64)
+		}); ok {
+			timed.UpdateQuoteAt(event.Bid, event.Ask, event.BidSize, event.AskSize, receivedUS)
+		} else {
+			sink.UpdateQuote(event.Bid, event.Ask, event.BidSize, event.AskSize)
+		}
 		return
 	}
 	if !event.ChartEligible && (event.Provider != "massive" || event.Flags == tape.RulesPresent || event.Size <= 0) {
@@ -492,6 +510,7 @@ func (r *Replay) SeekTo(targetUS int64) error {
 	if targetUS < request.StartUS || targetUS > request.EndUS {
 		return fmt.Errorf("seek minute is outside the selected replay range")
 	}
+	r.stop(false)
 	r.store.Clear(request.Symbol)
 	r.launch(request, targetUS, replayCursor{}, "replaying")
 	return nil
@@ -544,6 +563,21 @@ func (r *Replay) launch(request ReplayRequest, fromUS int64, cursor replayCursor
 }
 
 func (r *Replay) play(ctx context.Context, generation uint64, request ReplayRequest, fromUS int64, cursor replayCursor) {
+	if !cursor.valid {
+		stage, err := r.absorptionWarmup(ctx, request, fromUS)
+		if err != nil {
+			r.finish(generation, "error", err.Error())
+			return
+		}
+		r.mu.Lock()
+		if generation != r.generation {
+			r.mu.Unlock()
+			return
+		}
+		r.store.SeedAbsorption(request.Symbol, stage)
+		r.mu.Unlock()
+	}
+
 	rows, err := r.database.Events(ctx, request.Symbol, request.Source, request.Provider, fromUS, request.EndUS)
 	if err != nil {
 		r.finish(generation, "error", err.Error())
@@ -661,4 +695,33 @@ func waitUntil(ctx context.Context, due time.Time) error {
 
 func errorsIsCancellation(err error) bool {
 	return err == context.Canceled || err == io.EOF
+}
+
+// A seek/restart warms the detector from recorded ticks, never completed bars.
+// Five minutes of baseline plus fifteen minutes of visible zones is bounded.
+func (r *Replay) absorptionWarmup(ctx context.Context, request ReplayRequest, beforeUS int64) (*tape.RebuildStage, error) {
+	stage := r.store.PrepareRebuild(request.Symbol)
+	if stage == nil {
+		return nil, fmt.Errorf("invalid absorption symbol")
+	}
+	start := beforeUS - tape.AbsorptionLookbackUS
+	if start < 1 {
+		start = 1
+	}
+	if beforeUS <= start {
+		return stage, nil
+	}
+	rows, err := r.database.Events(ctx, request.Symbol, request.Source, request.Provider, start, beforeUS-1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		event, err := storage.ScanEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		r.applyEventTo(stage, event)
+	}
+	return stage, rows.Err()
 }

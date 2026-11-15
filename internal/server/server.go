@@ -91,23 +91,25 @@ func (n *jsonNumber) UnmarshalJSON(data []byte) error {
 }
 
 type streamMessage struct {
-	AlertContext *AlertContext         `json:"alert_context"`
-	Type         string                `json:"type"`
-	Symbol       string                `json:"symbol,omitempty"`
-	Snapshot     *tape.Snapshot        `json:"snapshot,omitempty"`
-	Trades       []tape.Trade          `json:"trades,omitempty"`
-	Quote        *tape.Quote           `json:"quote,omitempty"`
-	History      []string              `json:"history,omitempty"`
-	Status       *tape.FeedStatus      `json:"status,omitempty"`
-	Display      *config.DisplayConfig `json:"display,omitempty"`
-	Audio        *config.AudioConfig   `json:"audio,omitempty"`
-	ReplayConfig *config.ReplayConfig  `json:"replay_config,omitempty"`
-	Dropped      uint64                `json:"dropped,omitempty"`
-	ServerTimeMS int64                 `json:"server_time_ms,omitempty"`
-	MarketChart  bool                  `json:"market_chart,omitempty"`
-	Xtra         bool                  `json:"xtra,omitempty"`
-	Rewind       *config.RewindConfig  `json:"rewind,omitempty"`
-	RewindPane   bool                  `json:"rewind_pane,omitempty"`
+	Absorption   *tape.AbsorptionSnapshot `json:"absorption,omitempty"`
+	Generation   uint64                   `json:"generation,omitempty"`
+	AlertContext *AlertContext            `json:"alert_context"`
+	Type         string                   `json:"type"`
+	Symbol       string                   `json:"symbol,omitempty"`
+	Snapshot     *tape.Snapshot           `json:"snapshot,omitempty"`
+	Trades       []tape.Trade             `json:"trades,omitempty"`
+	Quote        *tape.Quote              `json:"quote,omitempty"`
+	History      []string                 `json:"history,omitempty"`
+	Status       *tape.FeedStatus         `json:"status,omitempty"`
+	Display      *config.DisplayConfig    `json:"display,omitempty"`
+	Audio        *config.AudioConfig      `json:"audio,omitempty"`
+	ReplayConfig *config.ReplayConfig     `json:"replay_config,omitempty"`
+	Dropped      uint64                   `json:"dropped,omitempty"`
+	ServerTimeMS int64                    `json:"server_time_ms,omitempty"`
+	MarketChart  bool                     `json:"market_chart,omitempty"`
+	Xtra         bool                     `json:"xtra,omitempty"`
+	Rewind       *config.RewindConfig     `json:"rewind,omitempty"`
+	RewindPane   bool                     `json:"rewind_pane,omitempty"`
 }
 
 func New(cfg config.Config, store *tape.Store, source feed.Feed, liveChart ...bool) *Server {
@@ -371,7 +373,7 @@ func (s *Server) handleRender(w http.ResponseWriter, r *http.Request) {
 	}
 	snapshot := s.store.Snapshot(s.store.Active(), 1)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"last_seq": lastSeq, "replay": replay.Status(), "quote": snapshot.Quote,
+		"last_seq": lastSeq, "replay": replay.Status(), "quote": snapshot.Quote, "absorption": snapshot.Absorption,
 	})
 }
 
@@ -868,6 +870,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	lastQuote := s.store.Snapshot(symbol, 0).Quote
 	generation := s.store.Generation(symbol)
+	lastAbsorptionRevision := int64(-1)
 	for {
 		select {
 		case <-done:
@@ -903,15 +906,24 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				if current != generation {
 					break
 				}
+				var absorptionUpdate *tape.AbsorptionSnapshot
+				absSnapshot := s.store.Snapshot(symbol, 1)
+				if absSnapshot.Generation != generation {
+					break
+				}
+				if absSnapshot.Absorption.Revision != lastAbsorptionRevision {
+					absorptionUpdate = &absSnapshot.Absorption
+					lastAbsorptionRevision = absSnapshot.Absorption.Revision
+				}
 				quoteChanged := quote != lastQuote
-				if len(trades) == 0 && dropped == 0 && !quoteChanged {
+				if len(trades) == 0 && dropped == 0 && !quoteChanged && absorptionUpdate == nil {
 					break
 				}
 				if len(trades) > 0 {
 					seq = trades[len(trades)-1].Seq
 				}
 				if err := writeWebSocketJSON(conn, streamMessage{
-					Type: "trades", Symbol: symbol, Trades: trades, Quote: &quote, Dropped: dropped,
+					Type: "trades", Symbol: symbol, Trades: trades, Quote: &quote, Dropped: dropped, Absorption: absorptionUpdate, Generation: generation,
 				}); err != nil {
 					return
 				}
@@ -922,8 +934,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 		case <-statusTicker.C:
 			status := s.store.Status()
+			absSnapshot := s.store.Snapshot(symbol, 1)
+			absorption := absSnapshot.Absorption
 			if err := writeWebSocketJSON(conn, streamMessage{
-				Type: "status", Symbol: symbol, AlertContext: s.currentAlertContext(symbol), Status: &status, History: s.store.Symbols(), ServerTimeMS: s.streamTimeMS(),
+				Type: "status", Symbol: symbol, Absorption: &absorption, Generation: absSnapshot.Generation, AlertContext: s.currentAlertContext(symbol), Status: &status, History: s.store.Symbols(), ServerTimeMS: s.streamTimeMS(),
 			}); err != nil {
 				return
 			}

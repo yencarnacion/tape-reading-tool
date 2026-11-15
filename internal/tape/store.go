@@ -54,12 +54,13 @@ type FeedStatus struct {
 }
 
 type Snapshot struct {
-	Symbol     string     `json:"symbol"`
-	Quote      Quote      `json:"quote"`
-	Trades     []Trade    `json:"trades"`
-	History    []string   `json:"history"`
-	Status     FeedStatus `json:"status"`
-	Generation uint64     `json:"generation"`
+	Absorption AbsorptionSnapshot `json:"absorption"`
+	Symbol     string             `json:"symbol"`
+	Quote      Quote              `json:"quote"`
+	Trades     []Trade            `json:"trades"`
+	History    []string           `json:"history"`
+	Status     FeedStatus         `json:"status"`
+	Generation uint64             `json:"generation"`
 }
 
 type Store struct {
@@ -73,6 +74,8 @@ type Store struct {
 }
 
 type symbolTape struct {
+	absorption   AbsorptionDetector
+	quoteUS      int64
 	mu           sync.RWMutex
 	symbol       string
 	items        []Trade
@@ -189,6 +192,8 @@ func (s *Store) ClearTopOfBook(symbol string) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.absorption = AbsorptionDetector{}
+	t.quoteUS = 0
 	t.quote = Quote{PreviousClose: t.quote.PreviousClose, LastPrice: t.quote.LastPrice, LastTimeMS: t.quote.LastTimeMS}
 }
 
@@ -284,8 +289,8 @@ func (s *Store) Snapshot(symbol string, limit int) Snapshot {
 	if tape == nil {
 		return Snapshot{Symbol: symbol, History: history, Status: status}
 	}
-	trades, quote := tape.snapshot(limit)
-	return Snapshot{Symbol: symbol, Quote: quote, Trades: trades, History: history, Status: status, Generation: tape.Generation()}
+	trades, quote, generation, absorption := tape.snapshot(limit)
+	return Snapshot{Symbol: symbol, Quote: quote, Trades: trades, History: history, Status: status, Generation: generation, Absorption: absorption}
 }
 
 func (s *Store) Generation(symbol string) uint64 {
@@ -436,6 +441,8 @@ func (s *Store) Clear(symbol string) {
 	tape.lastMarketMS = 0
 	tape.lastPrice = 0
 	tape.lastSide = 0
+	tape.absorption = AbsorptionDetector{}
+	tape.quoteUS = 0
 	tape.generation++
 	tape.mu.Unlock()
 }
@@ -560,6 +567,7 @@ func (t *symbolTape) appendLocked(exchangeTime, received time.Time, price, size 
 		Seq: t.nextSeq, ExchangeTimeMS: exchangeTime.UnixMilli(), ReceivedUS: received.UnixMicro(),
 		Price: price, Size: size, Class: class, Side: side, Bid: bid, Ask: ask, Flags: flags, Conditions: conditions,
 	}
+	t.absorption.Add(trade, t.quoteUS)
 	t.nextSeq++
 	if UpdatesLastPrice(flags) && size > 0 {
 		t.updateLastPriceLocked(price, exchangeTime.UnixMilli())
@@ -582,7 +590,7 @@ func (t *symbolTape) appendLocked(exchangeTime, received time.Time, price, size 
 	return trade
 }
 
-func (t *symbolTape) snapshot(limit int) ([]Trade, Quote) {
+func (t *symbolTape) snapshot(limit int) ([]Trade, Quote, uint64, AbsorptionSnapshot) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if limit <= 0 || limit > t.count {
@@ -593,7 +601,7 @@ func (t *symbolTape) snapshot(limit int) ([]Trade, Quote) {
 	for i := range result {
 		result[i] = t.items[(t.start+first+i)%len(t.items)]
 	}
-	return result, t.quote
+	return result, t.quote, t.generation, t.absorption.Snapshot()
 }
 
 func (t *symbolTape) since(seq uint64, limit int) ([]Trade, Quote, uint64, bool, uint64) {

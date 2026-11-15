@@ -1,3 +1,4 @@
+import { absorptionZonesAt, drawAbsorptionZones, absorptionTimeX, absorptionHit, absorptionDescription } from './absorption-overlay.js';
 import { providerDayVolume } from './day-volume.js';
 import { createChartCrosshair } from './chart-crosshair.js';
 import { dailyExtension, dailyExtensionLabels } from './daily-extension.js';
@@ -44,7 +45,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     dayContextTitle: $('dayContextTitle'), dayContextDaily: $('dayContextDaily'), dayContextIntraday: $('dayContextIntraday'),
     replayMarketPanel: $('replayMarketPanel'), replayChart: $('replayChartCanvas'), replayChartEmpty: $('replayChartEmpty'),
     dailyChart: $('dailyChartCanvas'), dailyChartEmpty: $('dailyChartEmpty'), minuteChartTab: $('minuteChartTab'), dailyChartTab: $('dailyChartTab'),
-    volumeButton: $('volumeButton'), cumulativeRVOLButton: $('cumulativeRVOLButton'),
+    absorptionButton: $('absorptionButton'), showAbsorption: $('showAbsorption'), volumeButton: $('volumeButton'), cumulativeRVOLButton: $('cumulativeRVOLButton'),
     gexOverlayButton: $('gexOverlayButton'), gexOverlayScope: $('gexOverlayScope'),
     gexOverlayControls: $('gexOverlayControls'), gexOverlayStatus: $('gexOverlayStatus'),
     showMinuteVolume: $('showMinuteVolume'), showCumulativeRVOL: $('showCumulativeRVOL'), cumulativeRVOLStatus: $('cumulativeRVOLStatus'),
@@ -81,7 +82,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
   };
 
   const state = {
-    symbol: 'AAPL', trades: [], bars: [], lastPriceTrade: null, quote: {}, history: [], status: {},
+    absorption: null, absorptionGeometry: [], symbol: 'AAPL', trades: [], bars: [], lastPriceTrade: null, quote: {}, history: [], status: {},
     defaults: null, settings: null, ws: null, reconnectTimer: null, reconnectDelay: 500,
     tapePool: [], dropped: 0, dirtyChart: true, dirtyDayContext: true, dirtyTape: true, dayMapCorner: 0,
     dayMapView: 'daily', dailyMap: { status: 'loading', bars: [], message: '' },
@@ -273,6 +274,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
       showSize: display.show_size !== false,
       showChart: display.show_chart !== false,
       showTape: display.show_tape !== false,
+      showAbsorption: true,
       showMinuteVolume: true,
       showCumulativeRVOL: false,
       showGEXOverlay: false,
@@ -312,6 +314,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
       }
     }
     result.audio.profileVersion = SOUND_PROFILE_VERSION;
+    result.showAbsorption = result.showAbsorption !== false;
     result.showMinuteVolume = result.showMinuteVolume !== false;
     result.showCumulativeRVOL = result.showCumulativeRVOL === true;
     result.showGEXOverlay = result.showGEXOverlay === true;
@@ -452,6 +455,8 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
         };
       }
       const snapshot = message.snapshot;
+      state.absorption = snapshot.absorption || null;
+      state.absorptionGeometry = [];
       const generationChanged = state.streamGeneration !== (snapshot.generation || 0);
       state.streamGeneration = snapshot.generation || 0;
       const nextSymbol = snapshot.symbol || message.symbol;
@@ -558,6 +563,9 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
       return;
     }
     if (message.type === 'trades' && message.symbol === state.symbol) {
+      if (message.absorption && message.generation === state.streamGeneration) {
+        state.absorption = message.absorption; state.dirtyReplayChart = true; state.dirtyChart = true;
+      }
       const trades = Array.isArray(message.trades) ? message.trades : [];
       if (state.pendingReplayReset && trades.length) {
         state.pendingReplayReset = false;
@@ -583,6 +591,9 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
       return;
     }
     if (message.type === 'status') {
+      if (message.symbol === state.symbol && message.generation === state.streamGeneration && message.absorption) {
+        state.absorption = message.absorption; state.dirtyReplayChart = true; state.dirtyChart = true;
+      }
       if (message.symbol === state.symbol) state.alertContext = message.alert_context || null;
       if (message.status) {
         const previousMode = state.status?.mode;
@@ -1113,6 +1124,13 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
       context.fillText(formatAxisPrice(price), right + 5, y);
     }
 
+    if (state.settings.showAbsorption && !state.pendingReplayReset) {
+      drawAbsorptionZones(context, state.absorption, {
+        nowUS: target === rewindChartTarget ? state.rewind.targetUS : serverNowUS(performance.now()),
+        left, right, top: priceTop, bottom: priceBottom, priceY,
+        timeX: absorptionTimeX(visible, xAt, b => b.time*1000)
+      });
+    }
     context.strokeStyle = '#66717e';
     context.globalAlpha = 0.45;
     context.beginPath();
@@ -1625,6 +1643,13 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
       replayContext.textAlign = 'left';
       replayContext.fillText(formatAxisPrice(price), right + 5, y);
     }
+
+    state.absorptionGeometry = state.settings.showAbsorption && !state.pendingReplayReset
+      ? drawAbsorptionZones(replayContext, state.absorption, {
+        nowUS: serverNowUS(performance.now()), left, right, top, bottom: priceBottom, priceY,
+        timeX: absorptionTimeX(visible, xAt, b => b.timeUS, 6e7)
+      }) : [];
+    updateAbsorptionStatus();
 
     autoTrendlines.draw(replayContext, {
       bars: state.minuteBars, start, xAt, priceY, left, right, top, bottom: priceBottom
@@ -2215,6 +2240,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     elements.showChart.checked = settings.showChart;
     elements.showTape.checked = settings.showTape;
     elements.showSize.checked = settings.showSize;
+    elements.showAbsorption.checked = settings.showAbsorption;
     elements.showMinuteVolume.checked = settings.showMinuteVolume;
     elements.showCumulativeRVOL.checked = settings.showCumulativeRVOL;
     elements.showDailyExtension.checked = settings.showDailyExtension;
@@ -2264,7 +2290,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
   }
 
   function bindControls() {
-    for (const [button, key] of [[elements.volumeButton, 'showMinuteVolume'], [elements.cumulativeRVOLButton, 'showCumulativeRVOL'], [elements.gexOverlayButton, 'showGEXOverlay']]) {
+    for (const [button, key] of [[elements.absorptionButton, 'showAbsorption'], [elements.volumeButton, 'showMinuteVolume'], [elements.cumulativeRVOLButton, 'showCumulativeRVOL'], [elements.gexOverlayButton, 'showGEXOverlay']]) {
       button.addEventListener('click', () => {
         if (!state.settings) return;
         state.settings[key] = !state.settings[key];
@@ -2408,7 +2434,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
       state.settings.tapeRows = clampInt(elements.tapeRowCount.value, 10, 300, 90);
       commitSettings(false);
     });
-    for (const [element, key] of [[elements.showChart, 'showChart'], [elements.showTape, 'showTape'], [elements.showSize, 'showSize'], [elements.showMinuteVolume, 'showMinuteVolume'], [elements.showCumulativeRVOL, 'showCumulativeRVOL'], [elements.showDailyExtension, 'showDailyExtension']]) {
+    for (const [element, key] of [[elements.showAbsorption, 'showAbsorption'], [elements.showChart, 'showChart'], [elements.showTape, 'showTape'], [elements.showSize, 'showSize'], [elements.showMinuteVolume, 'showMinuteVolume'], [elements.showCumulativeRVOL, 'showCumulativeRVOL'], [elements.showDailyExtension, 'showDailyExtension']]) {
       element.addEventListener('change', () => { state.settings[key] = element.checked; commitSettings(false); });
     }
     elements.tapeRateEnabled.addEventListener('change', async () => {
@@ -3052,7 +3078,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
   let lastPaintMS = 0;
   function syncStudyControls() {
     if (!state.settings) return;
-    for (const [button, key, label] of [[elements.volumeButton, 'showMinuteVolume', 'VOL'], [elements.cumulativeRVOLButton, 'showCumulativeRVOL', '5D RVOL'], [elements.gexOverlayButton, 'showGEXOverlay', 'GEX']]) {
+    for (const [button, key, label] of [[elements.absorptionButton, 'showAbsorption', 'ABS'], [elements.volumeButton, 'showMinuteVolume', 'VOL'], [elements.cumulativeRVOLButton, 'showCumulativeRVOL', '5D RVOL'], [elements.gexOverlayButton, 'showGEXOverlay', 'GEX']]) {
       const enabled = state.settings[key];
       button.classList.toggle('active', enabled);
       button.setAttribute('aria-pressed', String(enabled));
@@ -3061,10 +3087,22 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     }
   }
 
+  function updateAbsorptionStatus() {
+    const button = elements.absorptionButton;
+    if (!state.settings?.showAbsorption) return;
+    const warming = !state.absorption?.ready;
+    button.textContent = warming ? (state.absorption?.warmup_seconds >= 60 ? 'ABS WAIT' : `ABS ${state.absorption?.warmup_seconds || 0}/60s`) : 'ABS ON';
+    button.title = warming ? 'Absorption warming: requires 60 seconds and 100 eligible prints with fresh bid/ask quotes.'
+      : 'Volume/volatility adjusted absorption. Green: buyers absorb selling. Red: sellers absorb buying. Hover zones for details. Level 1 inference, not confirmed icebergs. Click to hide.';
+  }
+  window.__tapeReadingAbsorption = () => ({ enabled: state.settings?.showAbsorption, snapshot: state.absorption,
+    zones: absorptionZonesAt(state.absorption, serverNowUS(performance.now())), geometry: state.absorptionGeometry });
+
   function updateGEXHover() {
     const row = gexHoverPoint && gexOverlayHit(gexOverlayGeometry, gexHoverPoint.x, gexHoverPoint.y);
     elements.replayChart.title = row && gexOverlay.view?.usable
-      ? gexOverlayDescription(row, gexOverlay.result) : '';
+      ? gexOverlayDescription(row, gexOverlay.result)
+      : (() => { const zone = gexHoverPoint && absorptionHit(state.absorptionGeometry, gexHoverPoint.x, gexHoverPoint.y); return zone ? absorptionDescription(zone) : ''; })();
   }
 
   function updateGEXStatusText(shown) {
@@ -3328,6 +3366,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
         await new Promise((resolve) => setTimeout(resolve, 4));
       }
       if (payload.quote) state.quote = payload.quote;
+      state.absorption = payload.absorption || null;
       state.replay = payload.replay;
       state.status = { ...state.status, mode: 'replay', state: 'replaying', connected: true, message: 'deterministic render' };
       setConnection(state.status);

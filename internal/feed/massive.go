@@ -208,7 +208,7 @@ func (f *Massive) handleQuote(value models.EquityQuote, received time.Time) {
 	if value.Symbol != f.currentSymbol() {
 		return
 	}
-	quote := f.store.UpdateQuote(value.Symbol, value.BidPrice, value.AskPrice, float64(value.BidSize), float64(value.AskSize))
+	quote := f.store.UpdateQuoteAt(value.Symbol, value.BidPrice, value.AskPrice, float64(value.BidSize), float64(value.AskSize), received.UnixMicro())
 	if f.recorder != nil {
 		f.recorder.RecordQuote(storage.QuoteRecord{
 			Symbol: value.Symbol, EventUS: received.UnixMicro(), ReceivedUS: received.UnixMicro(),

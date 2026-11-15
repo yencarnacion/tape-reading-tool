@@ -477,3 +477,14 @@ A compact readout above time and sales shows **C/AVG**, explicit **BUY / SELL** 
 These are descriptive, uncalibrated heuristics, not probabilities or entry instructions. News, sentiment, catalyst quality, float rotation, and forced liquidation are unchecked. Replay calculations exclude later sessions and developing candles from completed-turn evidence. Live Rewind keeps the strip on the main live tape; it does not present these readings as rewound data.
 
 Validation: `node scripts/momentum-context-check.mjs` and `CHROME=/path/to/chrome node scripts/momentum-context-browser-check.mjs`. The browser check uses synthetic local data and verifies the full dashboard at laptop sizes, text fit, available tape rows, dialog controls, ticker changes and replay cutoffs.
+
+### Absorption zones
+
+The chart's **ABS ON** button enables volume- and volatility-adjusted absorption
+areas in live, replay and Live Rewind. Green **BUY ABS** means suspected buyer
+absorption of selling; red **SELL ABS** means suspected seller absorption of
+buying. Labels show relative volume and `TESTING` / `HELD`; broken areas fade.
+Hover for details, or hide the overlay with **ABS ON** or its Controls checkbox.
+These are Level 1 estimates, not confirmed icebergs or buy/sell instructions.
+The detector warms from recorded ticks on replay seeks and never uses future
+candles. See [the method, controls and validation](docs/ABSORPTION.md).

@@ -360,6 +360,7 @@ func (w *ibWrapper) TickSize(reqID ibapi.TickerID, tickType ibapi.TickType, size
 }
 
 func (f *IBKR) recordQuoteSnapshot(symbol string, at time.Time, quote tape.Quote) {
+	f.store.UpdateQuoteAt(symbol, quote.Bid, quote.Ask, quote.BidSize, quote.AskSize, at.UnixMicro())
 	if f.recorder == nil {
 		return
 	}
