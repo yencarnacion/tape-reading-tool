@@ -79,7 +79,7 @@ GEXBOT_API_KEY=your_private_key
 # Optional; default is data/gexbot within each app:
 # GEXBOT_ARCHIVE_DIR=/absolute/archive/path
 # Optional shared historical archive; live captures stay in the app's own dir:
-# GEXBOT_HISTORY_DIR=/Users/you/daidai/data/gexbot
+# GEXBOT_HISTORY_DIR=/path/to/daidai/data/gexbot
 ```
 
 The key stays server-side. It goes only to the official API, never to the browser
