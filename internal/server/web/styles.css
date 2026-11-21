@@ -81,6 +81,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .ticker-form input { width: 86px; height: 32px; padding: 0 7px; color: var(--yellow); font-size: 17px; font-weight: 850; text-transform: uppercase; }
 .go-button { min-width: 34px; padding: 0 7px; color: #07110e; background: var(--green); border-color: var(--green); }
 .history-select { width: 34px; min-width: 34px; height: 32px; padding: 0 3px; color: var(--muted); }
+.ticker-company { min-width:0; max-width: min(30vw, 360px); color:var(--text); font-size:13px; line-height:1.25; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; overflow-wrap:anywhere; }
+.ticker-company:empty { display:none; }
 .external-replay-badge { color: #07110e; background: var(--yellow); border-color: var(--yellow); white-space: nowrap; }
 .external-replay-badge.fast { color: #fff; background: var(--red); border-color: var(--red); }
 .external-replay-badge.locked { color: var(--yellow); background: #2b2616; }

@@ -34,6 +34,8 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
   const LEGACY_SOUND_DEFAULTS = { buyPitchHz: 920, sellPitchHz: 330, durationMS: 42 };
   const MAX_LOCAL_TRADES = 120000;
   const LOCAL_TRADE_PRUNE_CHUNK = 8192;
+  const companyNames = new Map();
+  let companyLookup;
   const ET_MINUTE_PARTS = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
@@ -51,7 +53,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
     gexOverlayControls: $('gexOverlayControls'), gexOverlayStatus: $('gexOverlayStatus'),
     showMinuteVolume: $('showMinuteVolume'), showCumulativeRVOL: $('showCumulativeRVOL'), cumulativeRVOLStatus: $('cumulativeRVOLStatus'),
     tapePanel: $('tapePanel'), tapeRows: $('tapeRows'), sizeHeading: $('sizeHeading'),
-    tickerForm: $('tickerForm'), tickerInput: $('tickerInput'), historySelect: $('historySelect'), externalReplayBadge: $('externalReplayBadge'),
+    tickerForm: $('tickerForm'), tickerInput: $('tickerInput'), historySelect: $('historySelect'), companyName: $('companyName'), externalReplayBadge: $('externalReplayBadge'),
     historyBack: $('historyBack'), historyForward: $('historyForward'), tickSelect: $('tickSelect'),
     soundButton: $('soundButton'), replayButton: $('replayButton'), replayPlayButton: $('replayPlayButton'), replayPauseButton: $('replayPauseButton'), controlsButton: $('controlsButton'), connectionState: $('connectionState'),
     nbbo: $('nbbo'), bestBid: $('bestBid'), bestBidSize: $('bestBidSize'), nbboSpread: $('nbboSpread'), nbboSpreadDollars: $('nbboSpreadDollars'), bestAsk: $('bestAsk'), bestAskSize: $('bestAskSize'),
@@ -476,6 +478,7 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
       const symbolChanged = nextSymbol !== state.symbol;
       if (symbolChanged || generationChanged) clearCrosshairs();
       state.symbol = nextSymbol;
+      void updateCompanyName(nextSymbol);
       state.alertContext = message.alert_context || null;
       // A scale from the previous ticker makes the new chart appear to ease or
       // animate into place. Start the new ticker from its own range so its
@@ -2169,6 +2172,32 @@ import { drawGEXOverlay, drawGEXOverlayLabels, gexOverlayHit, gexOverlayDescript
       elements.historySelect.append(option);
     }
     elements.historySelect.value = history.includes(current) ? current : state.symbol;
+  }
+
+  async function updateCompanyName(symbol) {
+    const label = elements.companyName;
+    if (!label || !symbol || companyLookup?.symbol === symbol) return;
+    companyLookup?.controller.abort();
+    companyLookup = null;
+    const cached = companyNames.get(symbol) || '';
+    label.textContent = label.title = cached;
+    if (companyNames.has(symbol)) return;
+
+    const lookup = {symbol, controller: new AbortController()};
+    companyLookup = lookup;
+    try {
+      const response = await fetch('/api/company-name?symbol=' + encodeURIComponent(symbol), {signal: lookup.controller.signal});
+      if (!response.ok) return;
+      const {name} = await response.json();
+      if (companyLookup !== lookup) return;
+      const text = String(name || '').trim();
+      companyNames.set(symbol, text);
+      label.textContent = label.title = text;
+    } catch {
+      // Ticker changes and reference-data failures should leave the tape usable.
+    } finally {
+      if (companyLookup === lookup) companyLookup = null;
+    }
   }
 
   async function switchSymbol(rawSymbol, record = true) {

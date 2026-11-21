@@ -20,6 +20,7 @@ import (
 	"tape-reading-tool/internal/config"
 	"tape-reading-tool/internal/feed"
 	"tape-reading-tool/internal/gexbot"
+	"tape-reading-tool/internal/marketgateway"
 	"tape-reading-tool/internal/storage"
 	"tape-reading-tool/internal/tape"
 )
@@ -41,6 +42,7 @@ type Server struct {
 	cfg                  config.Config
 	store                *tape.Store
 	feed                 feed.Feed
+	companyReference     *marketgateway.Client
 	upgrader             websocket.Upgrader
 	rvolMu               sync.Mutex
 	rvolCache            map[string]rvolHistoryCache
@@ -130,6 +132,9 @@ func New(cfg config.Config, store *tape.Store, source feed.Feed, liveChart ...bo
 	}
 	server.liveChart = len(liveChart) > 0 && liveChart[0]
 	server.liveXtra = len(liveChart) > 1 && liveChart[1]
+	if cfg.Massive.GatewayURL != "" {
+		server.companyReference, _ = marketgateway.New(cfg.Massive.GatewayURL, cfg.Massive.GatewayToken)
+	}
 	if source, ok := source.(interface {
 		RVOLMinuteBars(context.Context, string, time.Time, int) ([]storage.MinuteBar, error)
 	}); ok {
@@ -161,6 +166,9 @@ func (s *Server) ReserveRewindPane(reserve bool) {
 func (s *Server) Serve(ctx context.Context) error {
 	defer s.forecast.cancel()
 	defer s.gex.close()
+	if s.companyReference != nil {
+		defer s.companyReference.Close()
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/forecast", s.handleForecast)
@@ -170,6 +178,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	mux.HandleFunc("/api/panel-data/gex", s.handleGEX)
 	mux.HandleFunc("/api/panel-data/gex/history", s.handleGEXHistory)
 	mux.HandleFunc("/api/ticker", s.handleTicker)
+	mux.HandleFunc("/api/company-name", s.handleCompanyName)
 	mux.HandleFunc("/api/tape/range", s.handleTapeRange)
 	mux.HandleFunc("/api/ui-event", s.handleUIEvent)
 	mux.HandleFunc("/api/replay", s.handleReplay)
